@@ -240,11 +240,13 @@ the reference deployment that shipped once with every other gate green and faile
 ### Data-processing scripts (offline, not part of the app build)
 
 Onboarding order for a new site (see DOMAIN.md's "Adapting to a new site" for the full walkthrough):
-process-smhi-data.ts → build-load-model.mjs → process-inverter-data.ts → build-solar-calibration.ts
+process-smhi-data.ts (or build-irradiance-openmeteo.mjs) → build-load-model.mjs → process-inverter-data.ts → build-solar-calibration.ts
 (each depends on the previous one's output; run in this order, not standalone).
 
 ```
 scripts/tools/process-smhi-data.ts        station GHI CSV → lib/irradiance-data.ts's avgGhiByMonthHour
+scripts/tools/build-irradiance-openmeteo.mjs  alt to ↑ (step 1): Open-Meteo ERA5 GHI at exact coords →
+                                    same file, no CSV — use when no measured station is close enough
 scripts/tools/process-inverter-data.ts   monthly production/consumption averages from a combined CSV
 scripts/tools/build-load-model.mjs        reads solar-data/*.csv + Open-Meteo Archive temps → HDD load-model
                                     constants (parses CSV directly; needs network)

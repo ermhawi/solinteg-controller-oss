@@ -91,6 +91,16 @@ of order produces numbers that don't mean anything:
    `lib/irradiance-data.ts`'s `avgGhiByMonthHour`. Source doesn't have to be SMHI specifically;
    any station-level or reanalysis GHI archive with enough history works, as long as you can get
    it into the same CSV shape this script expects (see its own header comment).
+   **If the nearest measured GHI station is too far to represent your local climate**, use
+   **`scripts/tools/build-irradiance-openmeteo.mjs [lat] [lon] [startYear] [endYear]`** instead —
+   SMHI's global-irradiance network is sparse (a Bottenhavskust site near Sundsvall, say, has no
+   station closer than ~170 km, all further north or inland). This script fetches Open-Meteo's
+   ERA5 reanalysis GHI at your *exact* coordinates (year-by-year, needs network; defaults to
+   `SITE_LATITUDE`/`SITE_LONGITUDE` and a 20-year window) and writes the same
+   `lib/irradiance-data.ts` directly — no CSV step. Trade-off: ERA5 is modelled, not measured,
+   but has zero station-distance or latitude mismatch. It buckets by the same hour-ending
+   convention as the SMHI script (no forecast-style one-hour shift), so the two outputs are
+   interchangeable downstream (`lib/solar.ts`, step 4's calibration).
 2. **`scripts/tools/build-load-model.mjs`** — reads `solar-data/*.csv` (your own household's daily
    consumption export) + Open-Meteo Archive temperatures for your coordinates → `HDD_T_BASE_C`,
    `LOAD_SLOPE_KWH_PER_HDD`, `hddNormalByMonth` in `lib/consumption-data.ts`. Needs network

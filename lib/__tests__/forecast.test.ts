@@ -19,6 +19,15 @@ import { solarCalibrationByMonth } from '../consumption-data';
 // use the normal static import.
 vi.mock('next/cache', () => ({ cacheLife: vi.fn() }));
 
+// solarCalibrationByMonth ships as uniform 1.0s for this site (no production history yet), which
+// would make the month-discrimination assertion below trivially true. Override it here with
+// DISTINCT per-month values so forecast.ts's "use the slot's own month" calibration indexing
+// stays under test regardless of the shipped constants.
+vi.mock('../consumption-data', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../consumption-data')>()),
+  solarCalibrationByMonth: Array.from({ length: 12 }, (_, i) => 1 + (i + 1) / 100),
+}));
+
 import { fetchSolarForecast, fetchDailyMeanTemp } from '../forecast';
 
 function openMeteoHourlyResponse(hourlyTimes: string[], ghi: number[]) {
@@ -91,7 +100,7 @@ describe('fetchSolarForecast — hourly model (default SOLAR_FORECAST_MODEL=metn
 
     const result = await fetchSolarForecast();
     expect(result['2026-06-01'][slotIndex(12, 0)]).toBe(expectedKwhPerSlot(300, 6));
-    expect(expectedKwhPerSlot(300, 6)).not.toBe(expectedKwhPerSlot(300, 1)); // sanity: months differ
+    expect(expectedKwhPerSlot(300, 6)).not.toBe(expectedKwhPerSlot(300, 1)); // sanity: months differ (calibration mocked distinct at top; shipped values are uniform 1.0)
   });
 
   it('throws when Open-Meteo responds with a non-ok status', async () => {

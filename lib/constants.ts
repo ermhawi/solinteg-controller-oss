@@ -287,8 +287,20 @@ export interface SolarArray {
   performanceRatio: number;
 }
 
+// This site: a single plane, taken from the owner's forecast.solar config / Home Assistant
+// home zone (62.44°N, 17.36°E — see SITE_LATITUDE/LONGITUDE): 5.4 kWp, 45° tilt, azimuth 153°
+// (SSE; forecast.solar's -27 in the 0°=N/180°=S convention used here).
+// performanceRatio is an UNCALIBRATED estimate — an unshaded, near-south array, mid of the
+// documented 0.7–0.8 band; refine it against real production once a season of data exists.
+// NOTE — the two data sources paired with this array now reflect THIS site, with one caveat:
+//   • lib/irradiance-data.ts avgGhiByMonthHour — regenerated from Open-Meteo ERA5 at these
+//     coordinates (scripts/tools/build-irradiance-openmeteo.mjs, 20-yr climatology); modelled
+//     reanalysis rather than a measured station, since the nearest SMHI irradiance station is
+//     170+ km away.
+//   • lib/consumption-data.ts solarCalibrationByMonth — reset to uniform 1.0 (no production
+//     history yet), so the raw GHI×kWp×PR level is still uncorrected. Regenerate it with
+//     build-solar-calibration.ts once you have a season of your own production.
+// See DOMAIN.md "Adapting to a new site".
 export const SOLAR_ARRAYS: SolarArray[] = [
-  { label: 'A: SE, morning peak', kWp: 7.40, tiltDeg: 27, azimuthDeg: 123, performanceRatio: 0.77 },
-  { label: 'B: NW, afternoon/evening (heavy azimuth penalty)', kWp: 5.55, tiltDeg: 18, azimuthDeg: 303, performanceRatio: 0.58 },
-  { label: 'C: SW, afternoon contributor', kWp: 1.11, tiltDeg: 18, azimuthDeg: 214, performanceRatio: 0.72 },
+  { label: 'Single plane: SSE (153°), 45° tilt', kWp: 5.4, tiltDeg: 45, azimuthDeg: 153, performanceRatio: 0.78 },
 ];

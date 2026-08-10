@@ -13,10 +13,10 @@ describe('ghiToKwh', () => {
   });
 
   it('produces a plausible kWh/h for 500 W/m² (typical summer midday)', () => {
-    // 14.06 kWp system, combined PR ≈ 0.68 → expect ~4–6 kWh at 500 W/m²
+    // 5.4 kWp single plane, PR 0.78 → ~2.1 kWh at 500 W/m²
     const kwh = ghiToKwh(500);
-    expect(kwh).toBeGreaterThan(3);
-    expect(kwh).toBeLessThan(8);
+    expect(kwh).toBeGreaterThan(1);
+    expect(kwh).toBeLessThan(4);
   });
 
   it('is never negative', () => {
