@@ -6,6 +6,7 @@ import type { DispatchCardData } from '@/lib/dispatch-card';
 import PowerFlowCard from '@/app/components/PowerFlowCard';
 import DispatchCard from '@/app/components/DispatchCard';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
+import { apiPath } from '@/lib/base-path';
 
 // Keeps Systemstatus live between page loads by polling the existing /api/inverter route
 // (same readLiveInverterData() the server render used for the first paint). DispatchCard
@@ -33,7 +34,7 @@ export default function LiveInverterPanel({
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch('/api/inverter', { cache: 'no-store' });
+        const res = await fetch(apiPath('/api/inverter'), { cache: 'no-store' });
         const next = res.ok ? ((await res.json()) as InverterLiveData) : null;
         if (!cancelled) setData(next);
       } catch {

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { DispatchCardData, DispatchTone, GaugeTone, DecisionOutcome } from '@/lib/dispatch-card';
 import { gaugeFillPct, gaugeTone } from '@/lib/dispatch-card';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
+import { apiPath } from '@/lib/base-path';
 
 const BADGE_TONE_STYLE: Record<DispatchTone, { bg: string; color: string }> = {
   AKTIV: { bg: 'color-mix(in srgb, var(--color-buy) 16%, transparent)', color: 'var(--color-buy)' },
@@ -86,7 +87,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch('/api/dispatch', { cache: 'no-store' });
+        const res = await fetch(apiPath('/api/dispatch'), { cache: 'no-store' });
         const next = res.ok ? ((await res.json()) as DispatchCardData) : null;
         if (!cancelled && next) setData(next);
       } catch {
