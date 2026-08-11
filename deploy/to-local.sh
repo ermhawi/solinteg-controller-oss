@@ -16,6 +16,9 @@ set -euo pipefail
 APP_DIR="${SOLINTEG_APP_DIR:-/opt/solinteg/app}"
 ENV_FILE="${SOLINTEG_ENV_FILE:-/opt/solinteg/solinteg.env}"
 STAGING_DIR="${APP_DIR}-staging"
+# Node lives in a standalone install (the solinteg user has no nvm), so it must be on PATH for
+# the build — npm's launcher resolves `node` via `env node`. See deploy/README / systemd drop-in.
+NODE_BIN="${SOLINTEG_NODE_BIN:-/opt/solinteg/node/bin}"
 PORT="${SOLINTEG_WEB_PORT:-3007}"
 BASE_PATH="${NEXT_BASE_PATH:-/solinteg}"
 
@@ -35,7 +38,7 @@ sudo rsync -a --delete \
 sudo chown -R solinteg:solinteg "$STAGING_DIR"
 
 echo "==> Building in staging as solinteg (solinteg.env sourced — bakes basePath/site constants)..."
-sudo -u solinteg env HOME=/opt/solinteg bash -lc \
+sudo -u solinteg env HOME=/opt/solinteg PATH="${NODE_BIN}:/usr/bin:/bin" bash -lc \
   "cd '${STAGING_DIR}' && set -a && source '${ENV_FILE}' && set +a && npm ci && npm run build"
 
 echo "==> Build OK — swapping staged tree into ${APP_DIR} (.venv is live-only, preserved)..."
