@@ -1,7 +1,9 @@
+import { connection } from 'next/server';
 import { fetchPrices } from '@/lib/prices';
 
 export async function GET() {
   try {
+    await connection();
     const data = await fetchPrices();
     return Response.json(data, {
       headers: { 'Cache-Control': `private, max-age=${data.maxAge}` },

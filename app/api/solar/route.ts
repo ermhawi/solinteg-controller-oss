@@ -1,3 +1,4 @@
+import { connection } from 'next/server';
 import { fetchSolarForecast } from '@/lib/forecast';
 import { getSolarProfileByMonth } from '@/lib/solar';
 
@@ -5,6 +6,7 @@ import { getSolarProfileByMonth } from '@/lib/solar';
 // Falls back to static monthly averages (24 hourly values) if forecast is unavailable.
 export async function GET() {
   try {
+    await connection();
     const forecast = await fetchSolarForecast();
     return Response.json({ source: 'forecast', forecast });
   } catch {
