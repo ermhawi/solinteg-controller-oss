@@ -1,3 +1,4 @@
+import { connection } from 'next/server';
 import PriceChart from '@/app/components/PriceChart';
 import { producePlan } from '@/lib/plan';
 import {
@@ -29,6 +30,14 @@ import type { ActualSlotFlows } from '@/lib/actual-flows';
 import type { WeatherCardData } from '@/lib/weather-card';
 
 export default async function Home() {
+  // Same fix as app/api/prices and app/api/solar (545db56): without a request-time signal of
+  // its own, Next bakes this whole page as a STATIC PPR shell at build time — confirmed via
+  // prerender-manifest.json showing "/" as PARTIALLY_STATIC with a build-time hasTomorrow:false
+  // baked in, hours stale, unreachable by any client-side cache-bust. readLiveInverterData()'s
+  // own internal connection() (nested inside producePlan()'s Promise.all) does NOT propagate
+  // that signal out to the rest of this component's output — this direct, top-level call does.
+  await connection();
+
   const { data, solarProfiles, solarForecast, dispatchSchedule, startSoc, socIsLive, inverterData } =
     await producePlan();
 
