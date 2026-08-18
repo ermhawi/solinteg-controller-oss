@@ -305,6 +305,12 @@ LIVE_LOAD_ROUND_W = int(os.environ.get("DISPATCH_LIVE_LOAD_ROUND_W", "100"))
 # (thousands of W) clears this immediately, so reaction latency to the events this
 # tracking exists for is unaffected. Must be > LIVE_LOAD_ROUND_W to do anything.
 LIVE_LOAD_DEADBAND_W = int(os.environ.get("DISPATCH_LIVE_LOAD_DEADBAND_W", "250"))
+# Optional battery-save emulation for planned idle/hold slots. A positive value keeps the
+# inverter in EMS BattCtrl with a small fixed discharge target instead of returning to Auto,
+# whose self-use logic would discharge as much as the house can consume. Zero leaves the
+# existing idle -> Auto behaviour unchanged. Use a multiple of 10 W because register 50207
+# has 10 W resolution (see MODBUS.md).
+BATTERY_SAVE_W = max(0, int(os.environ.get("DISPATCH_BATTERY_SAVE_W", "0"))) // 10 * 10
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
 # Same env var lib/constants.ts's BATTERY_RT_EFF reads (kept in sync by the cross-language test).
@@ -670,9 +676,11 @@ def decide(con: sqlite3.Connection, now: datetime):
 
 
     slot_time = dispatch[idx]["startTime"]  # the plan's own label, for logging only
-    action = dispatch[idx]["action"]
+    planned_action = dispatch[idx]["action"]
     prev_soc = expected_prev_soc_kwh(dispatch, idx, start_soc_kwh)
-    power_w = slot_power_w(dispatch, idx, prev_soc) if action != "idle" else 0
+    planned_power_w = slot_power_w(dispatch, idx, prev_soc) if planned_action != "idle" else 0
+    action, power_w = battery_save_target(planned_action, planned_power_w)
+    save_mode = planned_action == "idle" and action == "discharge"
 
     numbers: dict = {}
     if inputs and idx < len(inputs):
@@ -682,7 +690,7 @@ def decide(con: sqlite3.Connection, now: datetime):
         if slot_inputs.get("sellPrice") is not None:
             numbers["sell_ore"] = round(float(slot_inputs["sellPrice"]), 2)
 
-    if action == "idle":
+    if planned_action == "idle":
         # For the dashboard's "next action" framing on an idle slot — cheap to compute
         # since dispatch[] is already loaded; first non-idle slot at or after this one.
         for future in dispatch[idx + 1:]:
@@ -701,12 +709,16 @@ def decide(con: sqlite3.Connection, now: datetime):
             numbers["grid_kwh"] = round(float(grid_kwh), 3)
         # A bug here must degrade to the plan-only figure (the old behaviour), not throw —
         # same reasoning as the charge-side guard below.
-        try:
-            power_w, detail, live_numbers = live_discharge_power_w(dispatch, idx, now, power_w)
-            numbers.update(live_numbers)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("live-load discharge tracking failed (%s) — using plan-only power", exc)
-            detail = f"live-load tracking failed: {exc}"
+        if save_mode:
+            detail = f"battery-save mode: fixed {power_w} W discharge target instead of Auto"
+            numbers["battery_save_w"] = power_w
+        else:
+            try:
+                power_w, detail, live_numbers = live_discharge_power_w(dispatch, idx, now, power_w)
+                numbers.update(live_numbers)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("live-load discharge tracking failed (%s) — using plan-only power", exc)
+                detail = f"live-load tracking failed: {exc}"
         if power_w == 0:
             # Live pv/load says no battery discharge is needed right now (e.g. the sun broke
             # through mid-slot and the surplus covers the house). force_discharge(0) would
@@ -729,8 +741,19 @@ def decide(con: sqlite3.Connection, now: datetime):
         except Exception as exc:  # noqa: BLE001
             log.warning("solar-funding check failed (%s) — proceeding without it", exc)
             solar_skip, detail = False, f"solar-funding check failed: {exc}"
-    expected_soc_now = plan_expected_soc_now(dispatch, idx, prev_soc, now) if action != "idle" else None
+    # A fixed save target deliberately deviates from an idle plan's same-SoC trajectory. Do not
+    # apply the stale-plan divergence guard to it; the fixed target is the explicit policy here.
+    expected_soc_now = (
+        None if save_mode else plan_expected_soc_now(dispatch, idx, prev_soc, now) if action != "idle" else None
+    )
     return slot_time, action, power_w, expected_soc_now, solar_skip, detail, numbers
+
+
+def battery_save_target(action: str, power_w: int):
+    """Map a planned idle slot to the optional fixed battery-save discharge target."""
+    if action == "idle" and BATTERY_SAVE_W > 0:
+        return "discharge", BATTERY_SAVE_W
+    return action, power_w
 
 
 def apply_target(inv: Inverter, action: str, power_w: int) -> None:

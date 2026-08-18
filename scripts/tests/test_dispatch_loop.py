@@ -239,6 +239,23 @@ class ApplyTargetRouting(unittest.TestCase):
         dl.apply_target(object(), "discharge", 2000)
         self.assertEqual(self.calls, [("discharge", 2000)])
 
+    def test_battery_save_replaces_idle_with_small_fixed_discharge(self):
+        original = dl.BATTERY_SAVE_W
+        dl.BATTERY_SAVE_W = 50
+        try:
+            self.assertEqual(dl.battery_save_target("idle", 0), ("discharge", 50))
+        finally:
+            dl.BATTERY_SAVE_W = original
+
+    def test_battery_save_leaves_non_idle_targets_unchanged(self):
+        original = dl.BATTERY_SAVE_W
+        dl.BATTERY_SAVE_W = 50
+        try:
+            self.assertEqual(dl.battery_save_target("discharge", 2000), ("discharge", 2000))
+            self.assertEqual(dl.battery_save_target("charge", 1000), ("charge", 1000))
+        finally:
+            dl.BATTERY_SAVE_W = original
+
     def test_idle_returns_to_auto_without_warning(self):
         # 'idle' is a declared AUTO_ACTION, so auto is intended and must stay quiet — otherwise
         # the warning below would fire on every idle slot and become noise nobody reads.
