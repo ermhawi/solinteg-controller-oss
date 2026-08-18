@@ -243,7 +243,25 @@ class ApplyTargetRouting(unittest.TestCase):
         original = dl.BATTERY_SAVE_W
         dl.BATTERY_SAVE_W = 50
         try:
-            self.assertEqual(dl.battery_save_target("idle", 0), ("discharge", 50))
+            hold_slot = {"loadFromGridKwh": 0.3, "socAfter": dl.BATTERY_FLOOR_KWH + 1.5}
+            self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", 50))
+        finally:
+            dl.BATTERY_SAVE_W = original
+
+    def test_battery_save_leaves_solar_idle_unchanged(self):
+        original = dl.BATTERY_SAVE_W
+        dl.BATTERY_SAVE_W = 50
+        try:
+            solar_idle = {"loadFromGridKwh": 0.0, "socAfter": dl.BATTERY_FLOOR_KWH + 1.5}
+            self.assertEqual(dl.battery_save_target("idle", 0, solar_idle), ("idle", 0))
+        finally:
+            dl.BATTERY_SAVE_W = original
+
+    def test_battery_save_leaves_legacy_idle_unchanged(self):
+        original = dl.BATTERY_SAVE_W
+        dl.BATTERY_SAVE_W = 50
+        try:
+            self.assertEqual(dl.battery_save_target("idle", 0, {}), ("idle", 0))
         finally:
             dl.BATTERY_SAVE_W = original
 
@@ -251,8 +269,8 @@ class ApplyTargetRouting(unittest.TestCase):
         original = dl.BATTERY_SAVE_W
         dl.BATTERY_SAVE_W = 50
         try:
-            self.assertEqual(dl.battery_save_target("discharge", 2000), ("discharge", 2000))
-            self.assertEqual(dl.battery_save_target("charge", 1000), ("charge", 1000))
+            self.assertEqual(dl.battery_save_target("discharge", 2000, {}), ("discharge", 2000))
+            self.assertEqual(dl.battery_save_target("charge", 1000, {}), ("charge", 1000))
         finally:
             dl.BATTERY_SAVE_W = original
 

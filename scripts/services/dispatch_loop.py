@@ -278,6 +278,12 @@ AUTO_ACTIONS = ("idle", "hold")
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
 BATTERY_KWH = float(os.environ.get("SOLINTEG_BATTERY_KWH", "25.6"))  # usable capacity
+SOC_FLOOR_PCT = float(os.environ.get("SOLINTEG_SOC_FLOOR_PCT", "8"))
+BATTERY_FLOOR_KWH = BATTERY_KWH * SOC_FLOOR_PCT / 100
+# Keep these aligned with lib/chart-utils.ts's hold-band classification. Missing flow fields
+# deliberately do not qualify: older/partial plans must retain the safe idle -> Auto behaviour.
+HOLD_LOAD_FROM_GRID_KWH = 0.15
+HOLD_SOC_HEADROOM_KWH = 1.0
 # How far actual SoC may drift from the plan's assumed starting point for this slot before
 # we stop trusting the plan's calculated power and fall back to auto instead. The plan is
 # only as fresh as the last optimizer_runs row (recomputed on a dashboard view, or hourly
@@ -305,7 +311,7 @@ LIVE_LOAD_ROUND_W = int(os.environ.get("DISPATCH_LIVE_LOAD_ROUND_W", "100"))
 # (thousands of W) clears this immediately, so reaction latency to the events this
 # tracking exists for is unaffected. Must be > LIVE_LOAD_ROUND_W to do anything.
 LIVE_LOAD_DEADBAND_W = int(os.environ.get("DISPATCH_LIVE_LOAD_DEADBAND_W", "250"))
-# Optional battery-save emulation for planned idle/hold slots. A positive value keeps the
+# Optional battery-save emulation for qualified planned hold slots. A positive value keeps the
 # inverter in EMS BattCtrl with a small fixed discharge target instead of returning to Auto,
 # whose self-use logic would discharge as much as the house can consume. Zero leaves the
 # existing idle -> Auto behaviour unchanged. Use a multiple of 10 W because register 50207
@@ -679,7 +685,7 @@ def decide(con: sqlite3.Connection, now: datetime):
     planned_action = dispatch[idx]["action"]
     prev_soc = expected_prev_soc_kwh(dispatch, idx, start_soc_kwh)
     planned_power_w = slot_power_w(dispatch, idx, prev_soc) if planned_action != "idle" else 0
-    action, power_w = battery_save_target(planned_action, planned_power_w)
+    action, power_w = battery_save_target(planned_action, planned_power_w, dispatch[idx])
     save_mode = planned_action == "idle" and action == "discharge"
 
     numbers: dict = {}
@@ -749,9 +755,22 @@ def decide(con: sqlite3.Connection, now: datetime):
     return slot_time, action, power_w, expected_soc_now, solar_skip, detail, numbers
 
 
-def battery_save_target(action: str, power_w: int):
-    """Map a planned idle slot to the optional fixed battery-save discharge target."""
-    if action == "idle" and BATTERY_SAVE_W > 0:
+def is_planned_hold(slot: dict) -> bool:
+    """Return true only for an idle slot where the plan deliberately leaves load to the grid."""
+    try:
+        load_from_grid = float(slot.get("loadFromGridKwh") or 0)
+        soc_after = float(slot["socAfter"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        load_from_grid >= HOLD_LOAD_FROM_GRID_KWH
+        and soc_after >= BATTERY_FLOOR_KWH + HOLD_SOC_HEADROOM_KWH
+    )
+
+
+def battery_save_target(action: str, power_w: int, slot: dict | None = None):
+    """Map only a planned hold slot to the optional fixed battery-save target."""
+    if action == "idle" and BATTERY_SAVE_W > 0 and slot is not None and is_planned_hold(slot):
         return "discharge", BATTERY_SAVE_W
     return action, power_w
 
