@@ -25,8 +25,9 @@ let initFailed = false;
 export function getDb(): DatabaseSync | null {
   if (!DB_PATH || initFailed) return null;
   if (db) return db;
+  let handle: DatabaseSync | null = null;
   try {
-    const handle = new DatabaseSync(DB_PATH);
+    handle = new DatabaseSync(DB_PATH);
     handle.exec('PRAGMA journal_mode=WAL'); // concurrent access with the Python poller
     handle.exec('PRAGMA busy_timeout=5000');
     // Canonical schema for all telemetry.db tables: deploy/schema.sql — keep this in sync.
@@ -79,6 +80,11 @@ export function getDb(): DatabaseSync | null {
     db = handle;
     return db;
   } catch {
+    try {
+      handle?.close();
+    } catch {
+      // The initialization error is the useful failure; cleanup is best-effort.
+    }
     initFailed = true; // stop retrying every render once it's clear the DB is unusable
     return null;
   }

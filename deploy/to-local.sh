@@ -16,14 +16,23 @@ set -euo pipefail
 APP_DIR="${SOLINTEG_APP_DIR:-/opt/solinteg/app}"
 ENV_FILE="${SOLINTEG_ENV_FILE:-/opt/solinteg/solinteg.env}"
 STAGING_DIR="${APP_DIR}-staging"
-# Node lives in a standalone install (the solinteg user has no nvm), so it must be on PATH for
-# the build — npm's launcher resolves `node` via `env node`. See deploy/README / systemd drop-in.
-NODE_BIN="${SOLINTEG_NODE_BIN:-/opt/solinteg/node/bin}"
+# Node is installed system-wide from NodeSource so deploys and systemd use the same runtime.
+# npm's launcher resolves `node` via `env node`, so keep /usr/bin explicit for the solinteg user.
+NODE_BIN="${SOLINTEG_NODE_BIN:-/usr/bin}"
 PORT="${SOLINTEG_WEB_PORT:-3007}"
 BASE_PATH="${NEXT_BASE_PATH:-/solinteg}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+if [[ ! -x "${NODE_BIN}/node" ]]; then
+  echo "ERROR: Node.js executable not found at ${NODE_BIN}/node" >&2
+  exit 1
+fi
+if [[ ! -x "${NODE_BIN}/npm" ]]; then
+  echo "ERROR: npm executable not found at ${NODE_BIN}/npm" >&2
+  exit 1
+fi
 
 echo "==> Staging working tree into ${STAGING_DIR} (caches persist for fast rebuilds)..."
 sudo mkdir -p "$STAGING_DIR"
@@ -55,5 +64,8 @@ sleep 2
 sudo systemctl is-active solinteg-dispatch
 
 echo "==> Verifying..."
-curl -s -o /dev/null -w "local curl ${BASE_PATH}: %{http_code}\n" "http://localhost:${PORT}${BASE_PATH}"
+curl --fail --silent --show-error \
+  -o /dev/null \
+  -w "local curl ${BASE_PATH}: %{http_code}\n" \
+  "http://localhost:${PORT}${BASE_PATH}"
 echo "==> Done."

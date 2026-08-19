@@ -1,6 +1,6 @@
 'use client';
 
-import { interventionLabel, isBandDivergent } from '@/lib/chart-utils';
+import { interventionLabel, isBandDivergent, shouldShowSupplementalBatteryExport } from '@/lib/chart-utils';
 import type { ActionBand, BandActualSummary, ChartPoint } from '@/lib/chart-utils';
 
 /**
@@ -90,7 +90,10 @@ export default function ChartTooltip({
         {point.decision === 'sell' && <span style={{ color: 'var(--color-sell-band)' }}> · Säljer till nätet</span>}
         {point.decision === 'hold' && <span style={{ color: 'var(--color-hold-band)' }}> · Sparar batteriet</span>}
         {point.decision == null && point.action === 'discharge' && (
-          <span style={{ color: 'var(--text-muted)' }}> · Urladdar (täcker last)</span>
+          <span style={{ color: 'var(--text-muted)' }}>
+            · Urladdar (täcker last)
+            {point.batteryToGridKwh != null && point.batteryToGridKwh > 0 && ' + liten planerad försäljning'}
+          </span>
         )}
         {point.decision == null && point.action === 'charge' && (
           <span style={{ color: 'var(--text-muted)' }}> · Laddar</span>
@@ -156,6 +159,16 @@ export default function ChartTooltip({
 
       {point.decision == null && point.action === 'discharge' && point.batteryToLoadKwh != null && point.batteryToLoadKwh > 0 && (
         <TooltipRow color="var(--color-soc)" label="Batteri → hus" value={`${point.batteryToLoadKwh.toFixed(1)} kWh`} />
+      )}
+
+      {/* Small battery exports remain below the threshold used for visual sell zones, but are
+          still part of the optimizer's plan and must be visible in the slot hover. */}
+      {shouldShowSupplementalBatteryExport(point) && (
+        <TooltipRow
+          color="var(--color-sell-band)"
+          label="Planerad försäljning"
+          value={`${(point.batteryToGridKwh ?? 0).toFixed(2)} kWh`}
+        />
       )}
 
       {hasPlan && point.socPct != null && (

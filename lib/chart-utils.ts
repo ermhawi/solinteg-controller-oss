@@ -110,6 +110,11 @@ export interface ChartPoint {
   interventions: string[];
 }
 
+/** Whether the tooltip should show a small battery export outside a deliberate sell zone. */
+export function shouldShowSupplementalBatteryExport(point: ChartPoint): boolean {
+  return point.decision == null && point.batteryToGridKwh != null && point.batteryToGridKwh > 0;
+}
+
 /**
  * Buckets raw poller readings (30 s cadence) into 15-min slot averages, keyed the same way
  * buildPriceLookup keys price slots (stockholmSlotKey — "YYYY-MM-DDTHH:MM", no seconds) so a

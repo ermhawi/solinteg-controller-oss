@@ -16,6 +16,7 @@ import {
   interventionLabel,
   isBandDivergent,
   priceYScale,
+  shouldShowSupplementalBatteryExport,
   socYScale,
   solarYScale,
   sumActualForBand,
@@ -397,6 +398,29 @@ describe('buildChartData', () => {
       actualSocByTime,
     );
     expect(pt.actualSocPct).toBe(42.5);
+  });
+});
+
+describe('shouldShowSupplementalBatteryExport', () => {
+  it('shows a positive export only for a slot without a deliberate decision', () => {
+    const point = makePoint('2026-06-28T20:00:00', { batteryToGridKwh: 0.2 });
+    expect(shouldShowSupplementalBatteryExport(point)).toBe(true);
+  });
+
+  it('does not show a supplemental export for a deliberate buy or hold decision', () => {
+    expect(
+      shouldShowSupplementalBatteryExport(makePoint('2026-06-28T20:00:00', { decision: 'buy', batteryToGridKwh: 0.2 })),
+    ).toBe(false);
+    expect(
+      shouldShowSupplementalBatteryExport(makePoint('2026-06-28T20:00:00', { decision: 'hold', batteryToGridKwh: 0.2 })),
+    ).toBe(false);
+  });
+
+  it('does not show a supplemental export for a sell decision or missing flow', () => {
+    expect(
+      shouldShowSupplementalBatteryExport(makePoint('2026-06-28T20:00:00', { decision: 'sell', batteryToGridKwh: 2 })),
+    ).toBe(false);
+    expect(shouldShowSupplementalBatteryExport(makePoint('2026-06-28T20:00:00'))).toBe(false);
   });
 });
 
