@@ -19,8 +19,9 @@ const BAND_COLOR: Record<BandKind, string> = {
 };
 export const BAND_LABEL: Record<BandKind, string> = { buy: 'Ladda', sell: 'Sälj', hold: 'Sparar' };
 // Hold zones ("the plan is deliberately NOT using the battery") are context, not action —
-// drawn fainter and without the leading edge bar so buy/sell decisions stay dominant.
-const BAND_FILL_PCT: Record<BandKind, number> = { buy: 11, sell: 11, hold: 6 };
+// drawn fainter and without the leading edge bar so buy/sell decisions stay dominant. The CSS
+// variables use stronger values in dark mode, where the same light-theme opacity is too faint
+// against the dark card background.
 
 export function DayZones({
   frame,
@@ -83,7 +84,7 @@ export function DecisionBands({ frame, bands }: { frame: ChartFrame; bands: Acti
               y={geo.padT}
               width={bw}
               height={geo.plotH}
-              fill={`color-mix(in srgb, ${color} ${BAND_FILL_PCT[band.kind]}%, transparent)`}
+              fill={`color-mix(in srgb, ${color} ${isHold ? 'var(--decision-hold-fill)' : 'var(--decision-band-fill)'}, transparent)`}
             />
             {!isHold && (
               <rect x={bx} y={geo.padT} width={2} height={geo.plotH} fill={`color-mix(in srgb, ${color} 50%, transparent)`} />
