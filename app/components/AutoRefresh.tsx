@@ -38,9 +38,15 @@ export default function AutoRefresh({ intervalMs = 5 * 60_000 }: { intervalMs?: 
     };
     const id = setInterval(refreshIfDue, Math.min(intervalMs, 60_000));
     document.addEventListener('visibilitychange', refreshIfDue);
+    window.addEventListener('focus', refreshIfDue);
+    window.addEventListener('pageshow', refreshIfDue);
+    window.addEventListener('online', refreshIfDue);
     return () => {
       clearInterval(id);
       document.removeEventListener('visibilitychange', refreshIfDue);
+      window.removeEventListener('focus', refreshIfDue);
+      window.removeEventListener('pageshow', refreshIfDue);
+      window.removeEventListener('online', refreshIfDue);
     };
   }, [router, intervalMs]);
 
