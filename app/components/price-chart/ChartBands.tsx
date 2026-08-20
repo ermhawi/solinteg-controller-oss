@@ -59,7 +59,7 @@ export function DayZones({
 }
 
 export function DecisionBands({ frame, bands }: { frame: ChartFrame; bands: ActionBand[] }) {
-  const { geo, tx, stepX, chartData, timeIndex } = frame;
+  const { geo, stepX, chartData, timeIndex } = frame;
   return (
     <>
       {bands.map((band, i) => {
@@ -71,10 +71,14 @@ export function DecisionBands({ frame, bands }: { frame: ChartFrame; bands: Acti
           bandEndIndex < frame.viewStartIndex ||
           bandStartIndex > frame.viewEndIndex
         ) return null;
-        const x1 = tx(band.x1);
-        const x2 = tx(band.x2);
-        if (x1 == null || x2 == null) return null;
-        const bx = x1 - stepX / 2;
+        // Dispatch timestamps are slot START times. Draw from the first slot's start to the
+        // last slot's end, rather than centering the band around the timestamp points. Clamp a
+        // band that crosses a zoom boundary to the visible slots before projecting it.
+        const visibleStartIndex = Math.max(bandStartIndex, frame.viewStartIndex);
+        const visibleEndIndex = Math.min(bandEndIndex, frame.viewEndIndex);
+        const x1 = frame.xAt(visibleStartIndex);
+        const x2 = frame.xAt(visibleEndIndex);
+        const bx = x1;
         const bw = x2 - x1 + stepX;
         const color = BAND_COLOR[band.kind];
         const isHold = band.kind === 'hold';
