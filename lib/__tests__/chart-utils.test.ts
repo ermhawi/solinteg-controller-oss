@@ -253,9 +253,11 @@ describe('isMinorGridCharge', () => {
     expect(isMinorGridCharge({ gridToBatteryKwh: 0.216 })).toBe(true);
   });
 
-  it('does not classify zero, negative, or threshold-sized charges as minor', () => {
+  it('ignores rounding noise and does not classify threshold-sized charges as minor', () => {
     expect(isMinorGridCharge({ gridToBatteryKwh: 0 })).toBe(false);
     expect(isMinorGridCharge({ gridToBatteryKwh: -0.1 })).toBe(false);
+    expect(isMinorGridCharge({ gridToBatteryKwh: 0.004 })).toBe(false);
+    expect(isMinorGridCharge({ gridToBatteryKwh: 0.05 })).toBe(true);
     expect(isMinorGridCharge({ gridToBatteryKwh: 0.5 })).toBe(false);
   });
 });
