@@ -15,7 +15,7 @@ import {
 import type { ActualSlotFlows } from '@/lib/actual-flows';
 import { useChartData } from './useChartData';
 import { buildFrame } from './price-chart/frame';
-import { DayZones, DecisionBands } from './price-chart/ChartBands';
+import { DayZones, DecisionBands, MinorChargeBands } from './price-chart/ChartBands';
 import { PriceAxis, SocAxis, TimeAxis } from './price-chart/ChartAxes';
 import ChartLegend from './price-chart/ChartLegend';
 import type { ChartLayers } from './price-chart/ChartLegend';
@@ -434,6 +434,7 @@ export default function PriceChart({
             beforeTomorrowTime={beforeTomorrowTime}
           />
 
+          {layers.zones && <MinorChargeBands frame={frame} />}
           {layers.zones && <DecisionBands frame={frame} bands={actionBands} />}
 
           <PriceAxis frame={frame} />

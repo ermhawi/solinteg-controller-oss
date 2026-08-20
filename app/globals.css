@@ -36,6 +36,7 @@
   --zone-tomorrow: rgba(70, 100, 170, 0.055);
   --decision-band-fill: 11%;
   --decision-hold-fill: 6%;
+  --decision-minor-charge-fill: 4%;
 
   /* Net-favorable/unfavorable/balanced trading result. --econ-spent is
      deliberately a different red than --color-charge-band and unrelated to
@@ -91,6 +92,7 @@
     --zone-tomorrow: rgba(96, 120, 180, 0.1);
     --decision-band-fill: 22%;
     --decision-hold-fill: 14%;
+    --decision-minor-charge-fill: 10%;
 
     --econ-green: #3ee0a6;
     --econ-red: #ff6b63;

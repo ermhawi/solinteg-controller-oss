@@ -24,6 +24,12 @@ export type BandKind = 'buy' | 'sell' | 'hold';
 // kWh per 15-min slot (≈2 kW average) — below this a battery-grid flow is slot-granularity
 // slop around covering load, not a decision. Real planned buys/sells run ~2-2.7 kWh/slot.
 const DECISION_GRID_KWH = 0.5;
+
+/** True for a planned grid charge that is real but below the strong decision-zone threshold. */
+export function isMinorGridCharge(d: Pick<DispatchSlot, 'gridToBatteryKwh'>): boolean {
+  return d.gridToBatteryKwh > 0 && d.gridToBatteryKwh < DECISION_GRID_KWH;
+}
+
 // Grid-covered load before a slot reads as a "hold". Must clear the DP's SoC discretisation
 // step (~0.123 kWh for the reference 25.6 kWh battery): a discharge-to-load slot can leave up
 // to one step of load to the grid purely from snap-to-grid rounding, which is not a reserve

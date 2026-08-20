@@ -14,6 +14,7 @@ import {
   computeSolarMax,
   indexToX,
   interventionLabel,
+  isMinorGridCharge,
   isBandDivergent,
   priceYScale,
   shouldShowSupplementalBatteryExport,
@@ -244,6 +245,18 @@ describe('buildActionBands', () => {
     const bands = buildActionBands(schedule, FLOOR);
     expect(bands).toHaveLength(2);
     expect(bands.map((b) => b.kind)).toEqual(['hold', 'sell']);
+  });
+});
+
+describe('isMinorGridCharge', () => {
+  it('recognizes a positive grid charge below the deliberate-buy threshold', () => {
+    expect(isMinorGridCharge({ gridToBatteryKwh: 0.216 })).toBe(true);
+  });
+
+  it('does not classify zero, negative, or threshold-sized charges as minor', () => {
+    expect(isMinorGridCharge({ gridToBatteryKwh: 0 })).toBe(false);
+    expect(isMinorGridCharge({ gridToBatteryKwh: -0.1 })).toBe(false);
+    expect(isMinorGridCharge({ gridToBatteryKwh: 0.5 })).toBe(false);
   });
 });
 

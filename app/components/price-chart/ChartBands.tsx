@@ -1,6 +1,6 @@
 'use client';
 
-import { isBandDivergent, sumActualForBand } from '@/lib/chart-utils';
+import { isBandDivergent, isMinorGridCharge, sumActualForBand } from '@/lib/chart-utils';
 import type { ActionBand, BandKind } from '@/lib/chart-utils';
 import type { ChartFrame } from './frame';
 
@@ -54,6 +54,35 @@ export function DayZones({
         height={geo.plotH}
         fill="var(--zone-tomorrow)"
       />
+    </>
+  );
+}
+
+/** A softer backdrop for real planned grid charges below the strong buy-zone threshold. */
+export function MinorChargeBands({ frame }: { frame: ChartFrame }) {
+  const { geo, stepX, chartData, timeIndex } = frame;
+  return (
+    <>
+      {chartData.map((point) => {
+        const index = timeIndex.get(point.time);
+        if (
+          index == null ||
+          index < frame.viewStartIndex ||
+          index > frame.viewEndIndex ||
+          point.decision != null ||
+          !isMinorGridCharge({ gridToBatteryKwh: point.gridToBatteryKwh ?? 0 })
+        ) return null;
+        return (
+          <rect
+            key={`minor-charge-${point.time}`}
+            x={frame.xAt(index)}
+            y={geo.padT}
+            width={stepX}
+            height={geo.plotH}
+            fill="color-mix(in srgb, var(--color-charge-band) var(--decision-minor-charge-fill), transparent)"
+          />
+        );
+      })}
     </>
   );
 }

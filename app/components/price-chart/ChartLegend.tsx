@@ -86,6 +86,13 @@ export default function ChartLegend({
             Ladda
           </span>
           <span className="flex items-center gap-1">
+            <span
+              className="h-[11px] w-[9px] rounded-sm"
+              style={{ background: 'color-mix(in srgb, var(--color-charge-band) var(--decision-minor-charge-fill), transparent)' }}
+            />
+            Liten laddning
+          </span>
+          <span className="flex items-center gap-1">
             <span className="h-[11px] w-[9px] rounded-sm" style={{ background: 'var(--color-sell-band)' }} />
             Sälj
           </span>
