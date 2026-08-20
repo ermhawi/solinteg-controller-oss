@@ -266,15 +266,13 @@ export const SITE_LONGITUDE = numEnv('SITE_LONGITUDE', 11.78);
 export const SOLAR_FORECAST_MODEL = process.env.SOLAR_FORECAST_MODEL ?? 'metno_nordic';
 
 // ---- Solar installation ----
-// tiltDeg/azimuthDeg are informational only (not read by any formula — lib/solar.ts's
-// ghiToKwh() only uses kWp and performanceRatio) — they document how performanceRatio was
-// estimated for this array, and help a new adopter sanity-check their own numbers against
-// their install docs. performanceRatio accounts for tilt, orientation, inverter losses, and
-// shading relative to GHI; it's a semi-empirical derating estimate, not computed from
-// tilt/azimuth by any formula here — a new adopter without production history yet should
-// start around 0.7-0.8 for an unshaded south-facing array and expect to refine it later
-// against real production data (see solarCalibrationByMonth's generator script,
-// scripts/tools/process-inverter-data.ts, for the same kind of per-installation calibration).
+// tiltDeg/azimuthDeg are sent to Open-Meteo's global_tilted_irradiance forecast. They are also
+// used when documenting and calibrating the array. performanceRatio now represents the remaining
+// system losses (inverter, cables, temperature, dirt and mismatch), not panel orientation —
+// orientation is already present in the irradiance input. A new adopter without production
+// history should start around 0.7-0.8 for an unshaded array and refine it against real production
+// data (see solarCalibrationByMonth's generator script, scripts/tools/process-inverter-data.ts,
+// for the same kind of per-installation calibration).
 //
 // To adapt for a different site: replace this array with your own — kWp is nameplate power
 // per string/array (from your panel spec sheet), tiltDeg/azimuthDeg from your install's own

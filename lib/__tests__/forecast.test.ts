@@ -30,12 +30,12 @@ vi.mock('../consumption-data', async (importOriginal) => ({
 
 import { fetchSolarForecast, fetchDailyMeanTemp } from '../forecast';
 
-function openMeteoHourlyResponse(hourlyTimes: string[], ghi: number[]) {
-  return { hourly: { time: hourlyTimes, shortwave_radiation: ghi } };
+function openMeteoHourlyResponse(hourlyTimes: string[], irradiance: number[]) {
+  return { hourly: { time: hourlyTimes, global_tilted_irradiance: irradiance } };
 }
 
-function openMeteoMinutely15Response(times: string[], ghi: number[]) {
-  return { minutely_15: { time: times, shortwave_radiation: ghi } };
+function openMeteoMinutely15Response(times: string[], irradiance: number[]) {
+  return { minutely_15: { time: times, global_tilted_irradiance: irradiance } };
 }
 
 function expectedKwhPerSlot(ghiWm2: number, month: number): number {
@@ -54,6 +54,24 @@ afterEach(() => {
 });
 
 describe('fetchSolarForecast — hourly model (default SOLAR_FORECAST_MODEL=metno_nordic)', () => {
+  it('requests panel-plane irradiance with the configured tilt and azimuth', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => openMeteoHourlyResponse([], []),
+    } as Response);
+
+    await fetchSolarForecast();
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('hourly=global_tilted_irradiance'),
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('tilt=45&azimuth=153'),
+      expect.anything(),
+    );
+  });
+
   it('shifts each hourly label back one hour, since Open-Meteo labels an hour by its END', async () => {
     // label "13:00" describes the 12:00-13:00 average -> must land on hour=12's four slots,
     // not hour=13's. This is the exact bug fixed 2026-07-20 (see the module's own comment).

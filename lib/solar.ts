@@ -2,9 +2,10 @@ import { avgGhiByMonthHour } from './irradiance-data';
 import { SOLAR_ARRAYS } from './constants';
 import { solarCalibrationByMonth } from './consumption-data';
 
-export function ghiToKwh(ghiWm2: number): number {
+/** Convert panel-plane irradiance in W/m² to modeled array energy in kWh. */
+export function ghiToKwh(irradianceWm2: number): number {
   return SOLAR_ARRAYS.reduce(
-    (sum, { kWp, performanceRatio }) => sum + (ghiWm2 / 1000) * kWp * performanceRatio,
+    (sum, { kWp, performanceRatio }) => sum + (irradianceWm2 / 1000) * kWp * performanceRatio,
     0,
   );
 }

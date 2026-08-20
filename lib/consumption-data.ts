@@ -13,8 +13,8 @@ export const avgDailyProductionByMonth: number[] = [4, 11.2, 25.5, 50, 68.8, 67.
  *  dragged Jan/Feb/Dec ~7-13% low in the previous values. */
 export const avgDailyConsumptionByMonth: number[] = [55.2, 54.1, 42.6, 51.4, 22.4, 19, 21.6, 19.5, 18.6, 24.1, 39.9, 44.6];
 
-/** Ratio of actual daily production to the GHI-based model estimate, by month; multiply
- *  ghiToKwh() output by this factor. RESET to uniform 1.0 (no correction) for this site, which
+/** Ratio of actual daily production to the panel-plane irradiance model estimate, by month;
+ *  multiply ghiToKwh() output by this factor. RESET to uniform 1.0 (no correction) for this site, which
  *  has no production history yet: per DOMAIN.md's "Adapting to a new site", a zero-history site
  *  ships twelve 1.0s rather than carrying another install's fitted curve. (The Göteborg reference
  *  fit ran +13–43%, worst in spring/fall — kept here for reference:

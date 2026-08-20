@@ -23,7 +23,7 @@ export interface WeatherCardData {
   humidityPct: number | null;
   windMs: number | null;
   rainDayMm: number | null;
-  forecastGhiWm2: number | null; // today's forecast for the CURRENT hour, same W/m² units
+  forecastSolarWm2: number | null; // panel-plane forecast for the CURRENT hour
   forecastMeanTempC: number | null; // today's forecast daily mean
 }
 
@@ -35,7 +35,7 @@ const STALE_AFTER_S = 15 * 60;
 
 export function buildWeatherCardData(
   latest: LatestWeather | null,
-  forecastGhiWm2: number | null,
+  forecastSolarWm2: number | null,
   forecastMeanTempC: number | null,
   now: Date,
 ): WeatherCardData | null {
@@ -49,7 +49,7 @@ export function buildWeatherCardData(
     humidityPct: latest.humidity_pct,
     windMs: latest.wind_ms,
     rainDayMm: latest.rain_day_mm,
-    forecastGhiWm2,
+    forecastSolarWm2,
     forecastMeanTempC,
   };
 }

@@ -28,7 +28,7 @@ describe('buildWeatherCardData', () => {
       humidityPct: 55,
       windMs: 3.1,
       rainDayMm: 0,
-      forecastGhiWm2: 600,
+      forecastSolarWm2: 600,
       forecastMeanTempC: 19.5,
     });
   });
@@ -50,7 +50,7 @@ describe('buildWeatherCardData', () => {
     const now = new Date('2026-07-25T12:00:00.000Z');
     const result = buildWeatherCardData(weather(), null, null, now);
     expect(result?.tempC).toBe(21.3);
-    expect(result?.forecastGhiWm2).toBeNull();
+    expect(result?.forecastSolarWm2).toBeNull();
     expect(result?.forecastMeanTempC).toBeNull();
   });
 

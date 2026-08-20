@@ -94,7 +94,7 @@ export default function WeatherCard({ data }: { data: WeatherCardData | null }) 
           <Metric
             label="Solinstrålning"
             liveValue={fmt(data.solarWm2, 0, 'W/m²')}
-            forecastValue={data.forecastGhiWm2 != null ? `${data.forecastGhiWm2.toFixed(0)} W/m² (denna timme)` : null}
+            forecastValue={data.forecastSolarWm2 != null ? `${data.forecastSolarWm2.toFixed(0)} W/m² (panelplan)` : null}
           />
           <Metric label="Luftfuktighet" liveValue={fmt(data.humidityPct, 0, '%')} forecastValue={null} />
           <Metric label="Vind" liveValue={fmt(data.windMs, 1, 'm/s')} forecastValue={null} />
