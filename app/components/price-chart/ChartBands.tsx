@@ -63,6 +63,14 @@ export function DecisionBands({ frame, bands }: { frame: ChartFrame; bands: Acti
   return (
     <>
       {bands.map((band, i) => {
+        const bandStartIndex = timeIndex.get(band.x1);
+        const bandEndIndex = timeIndex.get(band.x2);
+        if (
+          bandStartIndex == null ||
+          bandEndIndex == null ||
+          bandEndIndex < frame.viewStartIndex ||
+          bandStartIndex > frame.viewEndIndex
+        ) return null;
         const x1 = tx(band.x1);
         const x2 = tx(band.x2);
         if (x1 == null || x2 == null) return null;

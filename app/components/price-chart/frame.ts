@@ -1,6 +1,6 @@
 'use client';
 
-import { indexToX, timeToX } from '@/lib/chart-utils';
+import { indexToX } from '@/lib/chart-utils';
 import type { ChartGeometry, ChartPoint } from '@/lib/chart-utils';
 
 /**
@@ -26,6 +26,9 @@ export interface ChartFrame {
   priceMin: number;
   priceMax: number;
   solarMax: number;
+  /** Inclusive absolute chart-data indices currently visible on the x-axis. */
+  viewStartIndex: number;
+  viewEndIndex: number;
   /** Horizontal position of slot `i`. */
   xAt: (i: number) => number;
   /** Horizontal position of a slot's startTime, or null if it isn't in this chart's data. */
@@ -41,8 +44,17 @@ export function buildFrame(
   priceMin: number,
   priceMax: number,
   solarMax: number,
+  viewStartIndex = 0,
+  viewEndIndex = Math.max(0, chartData.length - 1),
 ): ChartFrame {
   const count = chartData.length;
+  const start = Math.max(0, Math.min(viewStartIndex, Math.max(0, count - 1)));
+  const end = Math.max(start, Math.min(viewEndIndex, Math.max(0, count - 1)));
+  const span = Math.max(1, end - start);
+  const xForIndex = (index: number) => {
+    const clamped = Math.max(start, Math.min(index, end));
+    return indexToX((clamped - start) / span * (count - 1), count, geo);
+  };
   return {
     chartData,
     geo,
@@ -50,8 +62,13 @@ export function buildFrame(
     priceMin,
     priceMax,
     solarMax,
-    xAt: (i: number) => indexToX(i, count, geo),
-    tx: (time: string) => timeToX(time, chartData, geo, timeIndex),
-    stepX: count > 1 ? geo.plotW / (count - 1) : 0,
+    viewStartIndex: start,
+    viewEndIndex: end,
+    xAt: xForIndex,
+    tx: (time: string) => {
+      const index = timeIndex.get(time);
+      return index == null ? null : xForIndex(index);
+    },
+    stepX: count > 1 ? geo.plotW / span : 0,
   };
 }

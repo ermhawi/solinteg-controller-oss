@@ -111,6 +111,11 @@ interface HoverState {
   containerWidth: number;
 }
 
+interface ZoomRange {
+  start: number;
+  end: number;
+}
+
 export default function PriceChart({
   data,
   solarProfiles,
@@ -157,6 +162,13 @@ export default function PriceChart({
   const hasPlan = !!dispatchSchedule;
 
   const [layers, setLayers] = useState<ChartLayers>({ solar: true, soc: true, zones: true });
+  const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null);
+  const count = chartData.length;
+  const fullEnd = Math.max(0, count - 1);
+  const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
+  const todayEnd = tomorrowIndex > 0 ? tomorrowIndex - 1 : fullEnd;
+  const viewStartIndex = Math.max(0, Math.min(zoomRange?.start ?? 0, fullEnd));
+  const viewEndIndex = Math.max(viewStartIndex, Math.min(zoomRange?.end ?? fullEnd, fullEnd));
 
   // "Now" marker: recomputed every minute so a dashboard left open stays accurate.
   const [nowTime, setNowTime] = useState<string | null>(null);
@@ -169,27 +181,45 @@ export default function PriceChart({
   }, [chartData]);
 
   const nowPoint = nowTime ? chartData.find((d) => d.time === nowTime) : undefined;
+  const nowIndex = nowPoint ? timeIndex.get(nowPoint.time) : undefined;
+  const nowVisible = nowIndex != null && nowIndex >= viewStartIndex && nowIndex <= viewEndIndex;
 
   // Everything the layers draw against: data, box, scales (see price-chart/frame.ts).
   const frame = useMemo(
-    () => buildFrame(chartData, geometry, timeIndex, priceMin, priceMax, solarMax),
-    [chartData, geometry, timeIndex, priceMin, priceMax, solarMax],
+    () => buildFrame(chartData, geometry, timeIndex, priceMin, priceMax, solarMax, viewStartIndex, viewEndIndex),
+    [chartData, geometry, timeIndex, priceMin, priceMax, solarMax, viewStartIndex, viewEndIndex],
   );
   const geo = geometry;
   const { xAt, tx } = frame;
-  const count = chartData.length;
+
+  const visibleXTicks = useMemo(
+    () => xTicks.filter((tick) => {
+      const index = timeIndex.get(tick);
+      return index != null && index >= viewStartIndex && index <= viewEndIndex;
+    }),
+    [xTicks, timeIndex, viewStartIndex, viewEndIndex],
+  );
 
   const buyPath = useMemo(
-    () => buildLinePath(chartData.map((d, i): Point => [xAt(i), priceYScale(d.buy, priceMax, geo, priceMin)])),
-    [chartData, priceMax, priceMin, geo, xAt],
+    () => buildLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
+      const i = viewStartIndex + offset;
+      return [xAt(i), priceYScale(d.buy, priceMax, geo, priceMin)];
+    })),
+    [chartData, viewStartIndex, viewEndIndex, priceMax, priceMin, geo, xAt],
   );
   const sellPath = useMemo(
-    () => buildLinePath(chartData.map((d, i): Point => [xAt(i), priceYScale(d.sell, priceMax, geo, priceMin)])),
-    [chartData, priceMax, priceMin, geo, xAt],
+    () => buildLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
+      const i = viewStartIndex + offset;
+      return [xAt(i), priceYScale(d.sell, priceMax, geo, priceMin)];
+    })),
+    [chartData, viewStartIndex, viewEndIndex, priceMax, priceMin, geo, xAt],
   );
   const solarTopPoints = useMemo(
-    () => chartData.map((d, i): Point => [xAt(i), solarYScale(d.solarKwh, solarMax, geo)]),
-    [chartData, solarMax, geo, xAt],
+    () => chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
+      const i = viewStartIndex + offset;
+      return [xAt(i), solarYScale(d.solarKwh, solarMax, geo)];
+    }),
+    [chartData, viewStartIndex, viewEndIndex, solarMax, geo, xAt],
   );
   const solarAreaPath = useMemo(() => buildAreaPath(solarTopPoints, geo.baseY), [solarTopPoints, geo]);
   const solarLinePath = useMemo(() => buildLinePath(solarTopPoints), [solarTopPoints]);
@@ -197,31 +227,36 @@ export default function PriceChart({
   const socPlannedRuns = useMemo(
     () =>
       contiguousRuns(
-        chartData.map((d, i): Point | null => (d.socPct == null ? null : [xAt(i), socYScale(d.socPct, geo)])),
+        chartData.map((d, i): Point | null =>
+          i < viewStartIndex || i > viewEndIndex || d.socPct == null ? null : [xAt(i), socYScale(d.socPct, geo)],
+        ),
       ),
-    [chartData, geo, xAt],
+    [chartData, viewStartIndex, viewEndIndex, geo, xAt],
   );
   const socActualRuns = useMemo(
     () =>
       contiguousRuns(
         chartData.map((d, i): Point | null =>
-          d.actualSocPct == null ? null : [xAt(i), socYScale(d.actualSocPct, geo)],
+          i < viewStartIndex || i > viewEndIndex || d.actualSocPct == null
+            ? null
+            : [xAt(i), socYScale(d.actualSocPct, geo)],
         ),
       ),
-    [chartData, geo, xAt],
+    [chartData, viewStartIndex, viewEndIndex, geo, xAt],
   );
 
   const peakSolarIdx = useMemo(() => {
     let best = -1;
     let bestVal = 0;
     chartData.forEach((d, i) => {
+      if (i < viewStartIndex || i > viewEndIndex) return;
       if (d.solarKwh > bestVal) {
         bestVal = d.solarKwh;
         best = i;
       }
     });
     return best;
-  }, [chartData]);
+  }, [chartData, viewStartIndex, viewEndIndex]);
 
   // Hover detail (restores what the old Recharts <Tooltip> gave for free): a transparent
   // full-height hit area over the chart maps cursor x -> nearest slot index, independent of
@@ -238,11 +273,35 @@ export default function PriceChart({
     const localY = clientY - rect.top;
     const fraction = Math.min(1, Math.max(0, localX / rect.width));
     const viewBoxX = fraction * geo.width;
-    const idxFloat = ((viewBoxX - geo.padL) / geo.plotW) * (count - 1);
+    const idxFloat = viewStartIndex + ((viewBoxX - geo.padL) / geo.plotW) * (viewEndIndex - viewStartIndex);
     const index = Math.min(count - 1, Math.max(0, Math.round(idxFloat)));
     setHover({ index, x: localX, y: localY, containerWidth: rect.width });
   };
   const clearHover = () => setHover(null);
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (count < 2) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    const currentSpan = Math.max(1, viewEndIndex - viewStartIndex);
+    const maxSpan = Math.max(1, fullEnd);
+    const requestedSpan = Math.round(currentSpan * (event.deltaY < 0 ? 0.75 : 1.33));
+    const nextSpan = Math.max(8, Math.min(maxSpan, requestedSpan));
+    if (nextSpan >= maxSpan) {
+      setZoomRange(null);
+      return;
+    }
+    const cursorIndex = viewStartIndex + fraction * currentSpan;
+    let nextStart = Math.round(cursorIndex - fraction * nextSpan);
+    nextStart = Math.max(0, Math.min(nextStart, fullEnd - nextSpan));
+    setZoomRange({ start: nextStart, end: nextStart + nextSpan });
+  };
+
+  const setVisibleRange = (start: number, end: number) => {
+    if (start <= 0 && end >= fullEnd) setZoomRange(null);
+    else setZoomRange({ start, end });
+  };
 
   const hoverPoint = hover ? chartData[hover.index] : null;
 
@@ -320,6 +379,41 @@ export default function PriceChart({
 
       <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} />
 
+      <div className="mb-2 flex items-center justify-end gap-1.5" aria-label="Zooma grafens tidsintervall">
+        <span className="mr-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+          Zoom
+        </span>
+        <button
+          type="button"
+          className="chip rounded-full px-2 py-1 text-[11px] font-semibold"
+          style={zoomRange == null ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
+          onClick={() => setVisibleRange(0, fullEnd)}
+        >
+          Hela
+        </button>
+        <button
+          type="button"
+          className="chip rounded-full px-2 py-1 text-[11px] font-semibold"
+          style={zoomRange?.start === 0 && zoomRange?.end === todayEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
+          onClick={() => setVisibleRange(0, todayEnd)}
+        >
+          Idag
+        </button>
+        {tomorrowIndex > 0 && (
+          <button
+            type="button"
+            className="chip rounded-full px-2 py-1 text-[11px] font-semibold"
+            style={zoomRange?.start === tomorrowIndex && zoomRange?.end === fullEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
+            onClick={() => setVisibleRange(tomorrowIndex, fullEnd)}
+          >
+            Imorgon
+          </button>
+        )}
+        <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          Mushjul för stegvis zoom
+        </span>
+      </div>
+
       <div
         ref={containerRef}
         className="relative"
@@ -329,6 +423,7 @@ export default function PriceChart({
           if (e.touches[0]) updateHover(e.touches[0].clientX, e.touches[0].clientY);
         }}
         onTouchEnd={clearHover}
+        onWheel={handleWheel}
       >
         <svg viewBox={`0 0 ${geo.width} ${geo.height}`} width="100%" style={{ display: 'block', height: 'auto', overflow: 'visible' }}>
           <DayZones
@@ -352,7 +447,7 @@ export default function PriceChart({
               {peakSolarIdx >= 0 && (
                 <text
                   x={xAt(peakSolarIdx)}
-                  y={solarTopPoints[peakSolarIdx][1] - 6}
+                  y={solarTopPoints[peakSolarIdx - viewStartIndex][1] - 6}
                   textAnchor="middle"
                   fontSize={9}
                   fontWeight={700}
@@ -433,6 +528,7 @@ export default function PriceChart({
           {/* now marker */}
           {nowTime &&
             nowPoint &&
+            nowVisible &&
             (() => {
               const xn = tx(nowTime);
               if (xn == null) return null;
@@ -454,7 +550,7 @@ export default function PriceChart({
               );
             })()}
 
-          <TimeAxis frame={frame} ticks={xTicks} />
+          <TimeAxis frame={frame} ticks={visibleXTicks} />
 
           {/* hover guide + per-series dots */}
           {hover && hoverPoint && (
