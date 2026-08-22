@@ -1,7 +1,7 @@
 /**
  * deploy/schema.sql is declared the single source of truth for telemetry.db's shape, but it is
- * never actually applied: six tables are created by five different processes, each running
- * its own inline `CREATE TABLE IF NOT EXISTS` at startup (three in lib/telemetry/core.ts, the
+ * never actually applied: seven tables are created by five different processes, each running
+ * its own inline `CREATE TABLE IF NOT EXISTS` at startup (four in lib/telemetry/core.ts, the
  * rest across scripts/services/*.py). The only thing keeping those copies honest has been a
  * "keep this in sync" comment on each one.
  *
@@ -32,7 +32,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /** Every file that creates a telemetry.db table, and which tables it owns. */
 const WRITERS: { file: string; tables: string[] }[] = [
-  { file: 'lib/telemetry/core.ts', tables: ['price_snapshots', 'optimizer_runs', 'oracle_daily'] },
+  { file: 'lib/telemetry/core.ts', tables: ['price_snapshots', 'optimizer_runs', 'solar_forecasts', 'oracle_daily'] },
   { file: 'scripts/services/modbus_poller.py', tables: ['readings'] },
   { file: 'scripts/services/weather_poller.py', tables: ['weather'] },
   { file: 'scripts/services/dispatch_loop.py', tables: ['control_actions'] },
@@ -76,10 +76,10 @@ function addedColumns(text: string): Map<string, string[]> {
 const canonical = createdColumns(read('deploy/schema.sql'));
 
 describe('deploy/schema.sql covers every telemetry.db table', () => {
-  it('declares all six tables', () => {
+  it('declares all seven tables', () => {
     expect([...canonical.keys()].sort()).toEqual([
       'control_actions', 'optimizer_runs', 'oracle_daily',
-      'price_snapshots', 'readings', 'weather',
+      'price_snapshots', 'readings', 'solar_forecasts', 'weather',
     ]);
   });
 

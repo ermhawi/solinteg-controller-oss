@@ -1,7 +1,7 @@
 import { connection } from 'next/server';
 import { fetchPricesUncached, currentSlotIndexInPrices } from './prices';
 import type { PriceData } from './prices';
-import { fetchSolarForecast, fetchDailyMeanTemp } from './forecast';
+import { combineSolarForecasts, fetchSolarForecastSources, fetchDailyMeanTemp } from './forecast';
 import { fetchSolarForecastDirect, fetchDailyMeanTempDirect } from './metno-thredds';
 import { readFreshSolarForecast, saveSolarForecast } from './solar-forecast-cache';
 import { buildSolarProfiles, buildOptimizerSlots } from './pipeline';
@@ -9,7 +9,7 @@ import { optimizeDispatch } from './optimizer';
 import type { DispatchSlot } from './optimizer';
 import { readLiveInverterData, socKwhOrDefault } from './inverter';
 import type { InverterLiveData } from './inverter';
-import { logPriceSnapshot, logOptimizerRun, readTrailingLoadProfile } from './telemetry';
+import { logPriceSnapshot, logOptimizerRun, logSolarForecasts, readTrailingLoadProfile } from './telemetry';
 import {
   LIVE_LOAD_PROFILE_DAYS,
   LOAD_FORECAST_MARGIN,
@@ -90,7 +90,8 @@ export async function producePlan(): Promise<PlanResult> {
   // instead of passing for a healthy one — a fallback nothing records is a fallback that can rot
   // unnoticed until the day it is needed.
   let solarForecastFromDisk = false;
-  const [data, solarForecast, tempByDate, inverterData] = await Promise.all([
+  let persistedSolarForecast: Record<string, number[]> | null = null;
+  const [data, solarForecastSources, tempByDate, inverterData] = await Promise.all([
     // A prices outage must not take down the whole page: live status and earnings don't
     // need spot prices. The chart/optimizer sections degrade to a notice instead.
     fetchPricesUncached().catch((err) => {
@@ -103,12 +104,12 @@ export async function producePlan(): Promise<PlanResult> {
     // (the default), a failure here tries MET Norway's own Thredds server directly
     // (lib/metno-thredds.ts) before giving up to seasonal-average climatology — that fallback
     // only mirrors metno_nordic specifically, so it's skipped for any other model choice.
-    fetchSolarForecast()
+    fetchSolarForecastSources()
       .catch((err) => {
-        console.error('fetchSolarForecast failed:', err);
+        console.error('fetchSolarForecastSources failed:', err);
         if (SOLAR_FORECAST_MODEL !== 'metno_nordic') throw err;
         console.error('trying direct MET Norway fallback');
-        return fetchSolarForecastDirect();
+        return fetchSolarForecastDirect().then((forecast) => ({ metno_nordic: forecast }));
       })
       .catch(async (err) => {
         // Last resort before climatology: a forecast WE persisted earlier
@@ -117,9 +118,9 @@ export async function producePlan(): Promise<PlanResult> {
         // average ones. Model-agnostic — it replays whatever the primary last returned.
         // Returns null when there is no fresh-enough file, which is the true climatology case.
         console.error('both live solar sources failed, trying the persisted last-good forecast:', err);
-        const persisted = await readFreshSolarForecast();
-        if (persisted) solarForecastFromDisk = true;
-        return persisted;
+        persistedSolarForecast = await readFreshSolarForecast();
+        if (persistedSolarForecast) solarForecastFromDisk = true;
+        return null;
       }),
     fetchDailyMeanTemp()
       .catch((err) => {
@@ -134,6 +135,9 @@ export async function producePlan(): Promise<PlanResult> {
       }),
     readLiveInverterData(),
   ]);
+
+  const solarForecast = persistedSolarForecast ??
+    (solarForecastSources ? combineSolarForecasts(solarForecastSources) : null);
 
   // Persist a live forecast so a later outage has something better than climatology to reach
   // for. Never re-persist one that came off disk — that would refresh its own timestamp and let
@@ -162,6 +166,7 @@ export async function producePlan(): Promise<PlanResult> {
     // Telemetry (best-effort, no-op unless TELEMETRY_DB_PATH is set). producePlan() awaits
     // connection() at its top, so this runs at request time, never during `next build`.
     logPriceSnapshot(data);
+    if (solarForecastSources) logSolarForecasts(data.today, solarForecastSources);
 
     try {
       // Slice off already-elapsed slots so the optimizer's own index 0 lines up with

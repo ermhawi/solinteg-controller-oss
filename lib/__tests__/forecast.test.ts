@@ -28,7 +28,7 @@ vi.mock('../consumption-data', async (importOriginal) => ({
   solarCalibrationByMonth: Array.from({ length: 12 }, (_, i) => 1 + (i + 1) / 100),
 }));
 
-import { fetchSolarForecast, fetchDailyMeanTemp } from '../forecast';
+import { fetchSolarForecast, fetchDailyMeanTemp, combineSolarForecasts } from '../forecast';
 
 function openMeteoHourlyResponse(hourlyTimes: string[], irradiance: number[]) {
   return { hourly: { time: hourlyTimes, global_tilted_irradiance: irradiance } };
@@ -51,6 +51,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.unstubAllEnvs();
+});
+
+describe('combineSolarForecasts', () => {
+  it('uses the median per slot and ignores missing providers', () => {
+    const result = combineSolarForecasts({
+      metno_nordic: { '2026-08-23': Array(96).fill(1) },
+      ecmwf_ifs025: { '2026-08-23': Array(96).fill(3) },
+      icon_seamless: { '2026-08-23': Array(96).fill(9) },
+      forecast_solar: { '2026-08-23': Array(96).fill(5) },
+    });
+    expect(result['2026-08-23'][0]).toBe(4);
+  });
 });
 
 describe('fetchSolarForecast — hourly model (default SOLAR_FORECAST_MODEL=metno_nordic)', () => {

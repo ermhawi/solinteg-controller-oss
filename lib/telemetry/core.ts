@@ -52,6 +52,15 @@ export function getDb(): DatabaseSync | null {
     `);
     handle.exec('CREATE INDEX IF NOT EXISTS idx_runs_date ON optimizer_runs(price_date)');
     handle.exec(`
+      CREATE TABLE IF NOT EXISTS solar_forecasts (
+        date         TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        logged_at    TEXT NOT NULL,
+        forecast_json TEXT NOT NULL,
+        PRIMARY KEY (date, source, forecast_json)
+      )
+    `);
+    handle.exec(`
       CREATE TABLE IF NOT EXISTS oracle_daily (
         date                      TEXT PRIMARY KEY,  -- Stockholm day D being scored
         computed_at               TEXT NOT NULL,

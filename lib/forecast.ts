@@ -4,88 +4,130 @@ import { slotIndex } from './slot-utils';
 import { solarCalibrationByMonth } from './consumption-data';
 import { FETCH_TIMEOUT_MS, SITE_LATITUDE, SITE_LONGITUDE, SOLAR_ARRAYS, SOLAR_FORECAST_MODEL } from './constants';
 
-// SOLAR_FORECAST_MODEL (see lib/constants.ts) picks a `models=` value or '' for the default
-// best_match blend. Non-default models (verified for metno_nordic, 2026-07-18) don't expose
-// a minutely_15 variant, so a model choice always fetches hourly here — see the slot-filling
-// comment below for how that's spread across each hour's four 15-min slots.
 const SOLAR_ARRAY = SOLAR_ARRAYS[0];
+const SOLAR_FORECAST_MODELS = ['metno_nordic', 'ecmwf_ifs025', 'icon_seamless'] as const;
+export type SolarForecastSource = (typeof SOLAR_FORECAST_MODELS)[number] | 'openmeteo_best_match' | 'forecast_solar';
+export type SolarForecastSources = Partial<Record<SolarForecastSource, Record<string, number[]>>>;
 const FORECAST_URL =
   `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}` +
   (SOLAR_FORECAST_MODEL
     ? `&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${SOLAR_FORECAST_MODEL}`
     : `&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}`) +
   '&forecast_days=2&timezone=Europe%2FStockholm';
+const FORECAST_SOLAR_URL =
+  `https://api.forecast.solar/estimate/${SITE_LATITUDE}/${SITE_LONGITUDE}/${SOLAR_ARRAY.tiltDeg}/${SOLAR_ARRAY.azimuthDeg}/${SOLAR_ARRAY.kWp}`;
 
 const TEMP_URL =
   `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}` +
   '&daily=temperature_2m_mean&forecast_days=2&timezone=Europe%2FStockholm';
 
-// Returns date → 96-element array of kWh per 15-min slot, indexed by slotIndex = hour*4 + quarter (0-95).
-// Open-Meteo's global_tilted_irradiance is panel-plane W/m² for the configured array; dividing
-// ghiToKwh by 4 converts from kWh/h to kWh/15min.
-export async function fetchSolarForecast(): Promise<Record<string, number[]>> {
-  'use cache';
-  // Still try to refresh hourly, but keep serving a stale forecast for up to 8h if Open-Meteo
-  // is unreachable — a several-hours-old forecast still encodes today-specific conditions (an
-  // approaching front, expected cloud cover) that a climatological monthly average has no way
-  // to know. slotSolarKwh's fallback (lib/slot-utils.ts) is already per-slot/per-date, so any
-  // slot the stale snapshot doesn't cover (e.g. a date it never fetched) still falls back to the
-  // seasonal average on its own — widening this window can only ever help, never hurt.
-  cacheLife({ revalidate: 3600, expire: 8 * 3600 });
-
-  const res = await fetch(FORECAST_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`Open Meteo fetch failed: ${res.status}`);
-  const data = await res.json();
-
+// Returns date → 96-element array of kWh per 15-min slot. Open-Meteo's panel-plane irradiance
+// is converted with the configured array and performance ratio; hourly values are spread across
+// four slots after shifting the preceding-interval label back one hour.
+function parseOpenMeteo(data: { hourly?: { time: string[]; global_tilted_irradiance: number[] } }): Record<string, number[]> {
   const result: Record<string, number[]> = {};
-
-  if (SOLAR_FORECAST_MODEL) {
-    // Hourly-only model: repeat each hour's value across its four 15-min slots rather than
-    // interpolating — an Open-Meteo hourly value is itself an hour-average, not an instant
-    // sample a real sub-hourly curve could be recovered from.
-    //
-    // Open-Meteo's hourly label is the average of the PRECEDING hour (confirmed against their
-    // docs, a live MET Nordic Thredds cross-check, and compare-metno-solar.mjs's own
-    // empirically-fit alignment offset), so shift back one hour to land on the slots the value
-    // actually describes. Skip label hour 0: its target would be the previous day's 23:00,
-    // already elapsed and outside the fetched window — slotSolarKwh's seasonal-average fallback
-    // covers that one slot until the next hourly refetch's window reaches it.
-    const times: string[] = data.hourly.time;
-    const irradianceValues: number[] = data.hourly.global_tilted_irradiance;
-    for (let i = 0; i < times.length; i++) {
-      const labelHour = parseInt(times[i].slice(11, 13), 10);
-      if (labelHour === 0) continue;
-      const date = times[i].slice(0, 10);
-      const hour = labelHour - 1;
-      const month = parseInt(date.slice(5, 7), 10);
-      const cal = solarCalibrationByMonth[month - 1];
-      const kwhPerSlot = Math.round((ghiToKwh(irradianceValues[i]) * cal / 4) * 100) / 100;
-      if (!result[date]) result[date] = new Array(96).fill(0);
-      for (let minute = 0; minute < 60; minute += 15) {
-        result[date][slotIndex(hour, minute)] = kwhPerSlot;
-      }
-    }
-    return result;
-  }
-
-  // Same preceding-interval convention applies at 15-min granularity ("preceding 15 minutes
-  // mean" per Open-Meteo's docs) — shift back one slot, skipping slot 0 for the same
-  // already-elapsed-previous-day reason as above.
-  const times: string[] = data.minutely_15.time;
-  const irradianceValues: number[] = data.minutely_15.global_tilted_irradiance;
+  const times = data.hourly?.time ?? [];
+  const values = data.hourly?.global_tilted_irradiance ?? [];
   for (let i = 0; i < times.length; i++) {
+    const labelHour = parseInt(times[i].slice(11, 13), 10);
+    if (labelHour === 0) continue;
     const date = times[i].slice(0, 10);
-    const hour = parseInt(times[i].slice(11, 13), 10);
-    const minute = parseInt(times[i].slice(14, 16), 10);
-    const labelIdx = slotIndex(hour, minute);
-    if (labelIdx === 0) continue;
-    const idx = labelIdx - 1;
-    const month = parseInt(date.slice(5, 7), 10);
-    const cal = solarCalibrationByMonth[month - 1];
+    const hour = labelHour - 1;
+    const cal = solarCalibrationByMonth[parseInt(date.slice(5, 7), 10) - 1];
+    const kwhPerSlot = Math.round((ghiToKwh(values[i]) * cal / 4) * 100) / 100;
     if (!result[date]) result[date] = new Array(96).fill(0);
-    result[date][idx] = Math.round((ghiToKwh(irradianceValues[i]) * cal / 4) * 100) / 100;
+    for (let minute = 0; minute < 60; minute += 15) result[date][slotIndex(hour, minute)] = kwhPerSlot;
   }
   return result;
+}
+
+/** Forecast.Solar returns hourly watt-hours for the preceding interval. */
+function parseForecastSolar(data: { result?: { watt_hours_period?: Record<string, number> } }): Record<string, number[]> {
+  const result: Record<string, number[]> = {};
+  for (const [time, wattHours] of Object.entries(data.result?.watt_hours_period ?? {})) {
+    const labelHour = parseInt(time.slice(11, 13), 10);
+    if (labelHour === 0) continue;
+    const date = time.slice(0, 10);
+    const hour = labelHour - 1;
+    const kwhPerSlot = Math.round((wattHours / 1000 / 4) * 100) / 100;
+    if (!result[date]) result[date] = new Array(96).fill(0);
+    for (let minute = 0; minute < 60; minute += 15) result[date][slotIndex(hour, minute)] = kwhPerSlot;
+  }
+  return result;
+}
+
+function parseOpenMeteoMinutely(data: { minutely_15?: { time: string[]; global_tilted_irradiance: number[] } }): Record<string, number[]> {
+  const result: Record<string, number[]> = {};
+  const times = data.minutely_15?.time ?? [];
+  const values = data.minutely_15?.global_tilted_irradiance ?? [];
+  for (let i = 0; i < times.length; i++) {
+    const labelIdx = slotIndex(parseInt(times[i].slice(11, 13), 10), parseInt(times[i].slice(14, 16), 10));
+    if (labelIdx === 0) continue;
+    const date = times[i].slice(0, 10);
+    const idx = labelIdx - 1;
+    const cal = solarCalibrationByMonth[parseInt(date.slice(5, 7), 10) - 1];
+    if (!result[date]) result[date] = new Array(96).fill(0);
+    result[date][idx] = Math.round((ghiToKwh(values[i]) * cal / 4) * 100) / 100;
+  }
+  return result;
+}
+
+/** Median ensemble per slot; missing providers are ignored rather than treated as zero. */
+export function combineSolarForecasts(sources: SolarForecastSources): Record<string, number[]> {
+  const dates = new Set(Object.values(sources).flatMap((forecast) => Object.keys(forecast ?? {})));
+  const result: Record<string, number[]> = {};
+  for (const date of dates) {
+    result[date] = new Array(96).fill(0).map((_, index) => {
+      const values = Object.values(sources)
+        .map((forecast) => forecast?.[date]?.[index])
+        .filter((value): value is number => value != null && Number.isFinite(value));
+      if (values.length === 0) return 0;
+      values.sort((a, b) => a - b);
+      const middle = Math.floor(values.length / 2);
+      return Math.round((values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2) * 100) / 100;
+    });
+  }
+  return result;
+}
+
+export async function fetchSolarForecastSources(): Promise<SolarForecastSources> {
+  'use cache';
+  cacheLife({ revalidate: 3600, expire: 8 * 3600 });
+  const requests = [
+    ...SOLAR_FORECAST_MODELS.map(async (model) => {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${model}&forecast_days=2&timezone=Europe%2FStockholm`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`Open-Meteo ${model} failed: ${res.status}`);
+      return [model, parseOpenMeteo(await res.json())] as const;
+    }),
+    (async () => {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&forecast_days=2&timezone=Europe%2FStockholm`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`Open-Meteo best_match failed: ${res.status}`);
+      return ['openmeteo_best_match', parseOpenMeteoMinutely(await res.json())] as const;
+    })(),
+    (async () => {
+      const res = await fetch(FORECAST_SOLAR_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`Forecast.Solar failed: ${res.status}`);
+      return ['forecast_solar', parseForecastSolar(await res.json())] as const;
+    })(),
+  ];
+  const settled = await Promise.allSettled(requests);
+  const sources: SolarForecastSources = {};
+  for (const result of settled) if (result.status === 'fulfilled') sources[result.value[0]] = result.value[1];
+  if (Object.keys(sources).length === 0) {
+    const failures = settled
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result) => String(result.reason?.message ?? result.reason))
+      .join('; ');
+    throw new Error(`all solar forecast sources failed: ${failures}`);
+  }
+  return sources;
+}
+
+export async function fetchSolarForecast(): Promise<Record<string, number[]>> {
+  const sources = await fetchSolarForecastSources();
+  return combineSolarForecasts(sources);
 }
 
 // Returns date → forecast daily mean outdoor temperature (°C), for today and tomorrow.

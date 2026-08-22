@@ -49,11 +49,32 @@ export function logPriceSnapshot(data: PriceData): void {
         JSON.stringify(data.prices),
       );
   } catch (err) {
-    // Best-effort (a telemetry failure must never break the page), but silently swallowing
+    // Best-effort (a telemetry failure must never break a page render), but silently swallowing
     // this previously hid a real bug: this write failed for ~7 hours overnight 2026-07-02/03
     // while logOptimizerRun kept succeeding every hour on the same data, and there was no way
     // to tell why. Logged now so a recurrence shows up in journalctl instead of vanishing.
     console.error('logPriceSnapshot failed:', err);
+  }
+}
+
+/** Persist each source's raw forecast so future MAE/bias analysis can score sources independently. */
+export function logSolarForecasts(
+  date: string,
+  sources: Record<string, Record<string, number[]>>,
+): void {
+  const handle = getDb();
+  if (!handle) return;
+  try {
+    const insert = handle.prepare(
+      `INSERT OR IGNORE INTO solar_forecasts (date, source, logged_at, forecast_json)
+       VALUES (?, ?, ?, ?)`,
+    );
+    const loggedAt = new Date().toISOString();
+    for (const [source, forecast] of Object.entries(sources)) {
+      insert.run(date, source, loggedAt, JSON.stringify(forecast));
+    }
+  } catch (err) {
+    console.error('logSolarForecasts failed:', err);
   }
 }
 

@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS optimizer_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_date ON optimizer_runs(price_date);
 
+-- Raw forecasts from every solar provider, deduplicated by date/source/payload so forecast
+-- revisions remain available for later MAE/bias scoring without repeating identical snapshots.
+CREATE TABLE IF NOT EXISTS solar_forecasts (
+    date          TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    logged_at     TEXT NOT NULL,
+    forecast_json TEXT NOT NULL,
+    PRIMARY KEY (date, source, forecast_json)
+);
+
 -- Audit trail for the dispatch loop: every decision it made against the live plan, whether
 -- armed or not. planned_action/power_w are what the loop decided to apply — AFTER a guard
 -- below may have demoted the plan's action to idle (the plan's original action is implied by
