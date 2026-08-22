@@ -85,10 +85,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const periods = useMemo(() => aggregate(daily, period), [daily, period]);
   const visible = periods.slice(-31);
   const latest = periods[periods.length - 1];
-  const total = periods.reduce((acc, row) => {
-    for (const field of Object.keys(acc) as (keyof SystemDailyTotals)[]) acc[field] += row[field];
-    return acc;
-  }, emptyTotals());
+  const total = latest ?? emptyTotals();
 
   if (daily.length === 0) {
     return (
