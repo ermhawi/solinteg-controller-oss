@@ -27,6 +27,7 @@ export function useChartData(
   pastDispatchSlots: DispatchSlot[] | null | undefined = [],
   actualFlowsByTime: Record<string, ActualSlotFlows> = {},
   interventionsByTime: Record<string, string[]> = {},
+  startSocKwh = batteryKwh / 2,
 ) {
   // Past slots first, live schedule second: on the one key both could theoretically share (the
   // live plan's first slot vs a past run's last, which readPastDispatchSlots' cutoff already
@@ -59,6 +60,7 @@ export function useChartData(
         actualSocByTime,
         actualFlowsByTime,
         interventionsByTime,
+        startSocKwh,
       ),
     [
       data.prices,
@@ -71,6 +73,7 @@ export function useChartData(
       actualSocByTime,
       actualFlowsByTime,
       interventionsByTime,
+      startSocKwh,
     ],
   );
 

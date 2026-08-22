@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SKATT_OVERFÖRING } from '../constants';
 import {
   computeDailyEconomics,
+  computeDailySystemEconomics,
   mergeDailyEconomics,
   summarize,
   stockholmDateOf,
@@ -88,6 +89,25 @@ describe('computeDailyEconomics', () => {
     ];
     const daily = computeDailyEconomics(readings, flatPrice, OPTS);
     expect([...daily.keys()].sort()).toEqual(['2026-07-01', '2026-07-02']);
+  });
+});
+
+describe('computeDailySystemEconomics', () => {
+  it('compares measured net cost with buying all measured load without PV or battery', () => {
+    const readings = [10, 11, 12].map((hour) => ({
+      timestamp: `2026-07-01T${String(hour).padStart(2, '0')}:00:00.000Z`,
+      grid_w: -500,
+      pv_w: 500,
+      battery_w: 0,
+      house_load_w: 1000,
+    }));
+    const day = computeDailySystemEconomics(readings, flatPrice, OPTS).get('2026-07-01')!;
+    expect(day.loadKwh).toBeCloseTo(2);
+    expect(day.solarKwh).toBeCloseTo(1);
+    expect(day.boughtKwh).toBeCloseTo(1);
+    expect(day.actualCostKr).toBeCloseTo(2);
+    expect(day.baselineCostKr).toBeCloseTo(4);
+    expect(day.savingsKr).toBeCloseTo(2);
   });
 });
 

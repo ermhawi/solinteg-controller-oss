@@ -10,7 +10,14 @@ import { SKATT_OVERFÖRING } from './constants';
 
 export interface EconReading {
   timestamp: string; // UTC ISO (as written by the poller)
-  grid_w: number; // +ve = export, −ve = import (as reported by the inverter)
+  grid_w: number; // +ve = export, −ve = import (as reported)
+}
+
+/** Full measured energy row used for the no-solar/no-battery counterfactual. */
+export interface SystemEconReading extends EconReading {
+  pv_w: number | null;
+  battery_w: number | null;
+  house_load_w: number | null;
 }
 
 export interface SlotPrice {
@@ -35,6 +42,20 @@ export interface EconSummary {
   allTime: EconTotals;
   days: number; // distinct Stockholm days with data
   latestDate: string | null;
+}
+
+/** Daily actual-vs-counterfactual totals for the energy comparison card. */
+export interface SystemDailyTotals {
+  loadKwh: number;
+  solarKwh: number;
+  batteryChargeKwh: number;
+  batteryDischargeKwh: number;
+  boughtKwh: number;
+  soldKwh: number;
+  actualCostKr: number;
+  baselineCostKr: number;
+  savingsKr: number;
+  readingCount: number;
 }
 
 export interface EconOptions {
@@ -141,6 +162,66 @@ export function computeDailyEconomics(
     }
     acc.netKr = acc.incomeKr - acc.costKr;
     acc.readingCount += 1;
+    byDay.set(day, acc);
+  }
+
+  return byDay;
+}
+
+/**
+ * Values the measured system and a no-solar/no-battery counterfactual by Stockholm day.
+ * The counterfactual keeps measured household load unchanged and buys all of it at the
+ * period's consumer price; it has no PV production, battery flow, export, or export income.
+ */
+export function computeDailySystemEconomics(
+  readings: SystemEconReading[],
+  priceAt: PriceLookup,
+  options: EconOptions = {},
+): Map<string, SystemDailyTotals> {
+  const { defaultIntervalMs, maxGapMs } = { ...DEFAULTS, ...options };
+  const byDay = new Map<string, SystemDailyTotals>();
+
+  for (let i = 0; i < readings.length; i++) {
+    const r = readings[i];
+    const price = priceAt(r.timestamp);
+    if (!price || r.house_load_w == null) continue;
+
+    let intervalMs = defaultIntervalMs;
+    if (i + 1 < readings.length) {
+      const dt = Date.parse(readings[i + 1].timestamp) - Date.parse(r.timestamp);
+      if (dt > 0) intervalMs = Math.min(dt, maxGapMs);
+    }
+    const hours = intervalMs / 3_600_000;
+    const loadKwh = (Math.max(0, r.house_load_w) / 1000) * hours;
+    const solarKwh = (Math.max(0, r.pv_w ?? 0) / 1000) * hours;
+    const batteryChargeKwh = (Math.max(0, -(r.battery_w ?? 0)) / 1000) * hours;
+    const batteryDischargeKwh = (Math.max(0, r.battery_w ?? 0) / 1000) * hours;
+    const gridKwh = (Math.abs(r.grid_w) / 1000) * hours;
+    const actualCostKr = r.grid_w < 0 ? gridKwh * (price.buy / 100) : r.grid_w > 0 ? -gridKwh * (price.sell / 100) : 0;
+    const baselineCostKr = loadKwh * (price.buy / 100);
+    const day = stockholmDateOf(r.timestamp);
+    const acc = byDay.get(day) ?? {
+      loadKwh: 0,
+      solarKwh: 0,
+      batteryChargeKwh: 0,
+      batteryDischargeKwh: 0,
+      boughtKwh: 0,
+      soldKwh: 0,
+      actualCostKr: 0,
+      baselineCostKr: 0,
+      savingsKr: 0,
+      readingCount: 0,
+    };
+    acc.loadKwh += loadKwh;
+    acc.solarKwh += solarKwh;
+    acc.batteryChargeKwh += batteryChargeKwh;
+    acc.batteryDischargeKwh += batteryDischargeKwh;
+    if (r.grid_w < 0) acc.boughtKwh += gridKwh;
+    if (r.grid_w > 0) acc.soldKwh += gridKwh;
+    acc.actualCostKr += actualCostKr;
+    acc.baselineCostKr += baselineCostKr;
+    acc.savingsKr += baselineCostKr - actualCostKr;
+    acc.readingCount++;
     byDay.set(day, acc);
   }
 

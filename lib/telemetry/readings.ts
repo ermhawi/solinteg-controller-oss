@@ -12,11 +12,13 @@ import type { TrailingLoadProfile } from '../load';
 import type { FlowReading } from '../actual-flows';
 import {
   computeDailyEconomics,
+  computeDailySystemEconomics,
   mergeDailyEconomics,
   priceSlotsToMap,
   stockholmDateOf,
   stockholmSlotKey,
   type EconReading,
+  type SystemEconReading,
   type EconTotals,
   type PriceLookup,
 } from '../economics';
@@ -140,6 +142,19 @@ export function readDailyEconomics(now: Date = new Date()): Map<string, EconTota
     }
     const live = computeDailyEconomics(readReadings(frozenBoundaryIso!), buildPriceLookup());
     return mergeDailyEconomics(frozenDaily, live);
+  });
+}
+
+/** Full daily energy/cost comparison from measured load, PV, battery, and grid readings. */
+export function readDailySystemEconomics(): Map<string, import('../economics').SystemDailyTotals> {
+  return readOrFallback(new Map(), (handle) => {
+    const rows = handle
+      .prepare(
+        `SELECT timestamp, grid_w, pv_w, battery_w, house_load_w
+         FROM readings ORDER BY timestamp`,
+      )
+      .all() as unknown as SystemEconReading[];
+    return computeDailySystemEconomics(rows, buildPriceLookup());
   });
 }
 

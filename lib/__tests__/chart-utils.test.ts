@@ -6,6 +6,7 @@ import {
   buildChartData,
   buildChartGeometry,
   buildLinePath,
+  buildStepLinePath,
   buildTimeIndex,
   buildXTicks,
   computeNowSlotTime,
@@ -17,6 +18,7 @@ import {
   isMinorGridCharge,
   isBandDivergent,
   priceYScale,
+  pinchZoomRange,
   shouldShowSupplementalBatteryExport,
   socYScale,
   solarYScale,
@@ -281,7 +283,37 @@ describe('buildChartData', () => {
     const dispatchByTime = { '2026-06-28T10:00:00': makeDispatch('2026-06-28T10:00:00', 'charge') };
     const [pt] = buildChartData(prices, null, profiles, dispatchByTime, BATTERY_KWH, SKATT_OVERFÖRING, BATTERY_MIN_SOC_KWH);
     expect(pt.action).toBe('charge');
-    expect(pt.socPct).toBeCloseTo((12 / BATTERY_KWH) * 100, 1); // socAfter 12 kWh
+    expect(pt.socPct).toBeCloseTo(50, 1); // SoC at slot start (default startSoc)
+  });
+
+  it('plots SoC at slot boundaries so a later charge is not drawn in the previous decision zone', () => {
+    const prices = [makePrice('2026-06-28T22:30:00'), makePrice('2026-06-28T22:45:00')];
+    const dispatchByTime = {
+      '2026-06-28T22:30:00': makeDispatch('2026-06-28T22:30:00', 'idle', {
+        loadFromGridKwh: 0.4,
+        socAfter: 12,
+      }),
+      '2026-06-28T22:45:00': makeDispatch('2026-06-28T22:45:00', 'charge', {
+        gridToBatteryKwh: 2,
+        socAfter: 14,
+      }),
+    };
+    const points = buildChartData(
+      prices,
+      null,
+      profiles,
+      dispatchByTime,
+      BATTERY_KWH,
+      SKATT_OVERFÖRING,
+      BATTERY_MIN_SOC_KWH,
+      {},
+      {},
+      {},
+      10,
+    );
+    expect(points.map((point) => point.socPct)).toEqual([39.1, 46.9]);
+    expect(points[0].decision).toBe('hold');
+    expect(points[1].decision).toBe('buy');
   });
 
   it('passes the planned battery flows through for the tooltip (null without a plan)', () => {
@@ -442,7 +474,7 @@ describe('shouldShowSupplementalBatteryExport', () => {
 // ─── buildActualSocByTime ───────────────────────────────────────────────────────
 
 describe('buildActualSocByTime', () => {
-  it('averages multiple readings landing in the same 15-min slot', () => {
+  it('uses the first reading in a slot as the closest value to the slot start', () => {
     // 2026-06-28 10:00-10:15 CEST = 08:00-08:15 UTC
     const readings = [
       { timestamp: '2026-06-28T08:00:13Z', soc_pct: 40.0 },
@@ -450,7 +482,7 @@ describe('buildActualSocByTime', () => {
       { timestamp: '2026-06-28T08:14:59Z', soc_pct: 42.0 },
     ];
     const out = buildActualSocByTime(readings);
-    expect(out['2026-06-28T10:00']).toBeCloseTo(41.0);
+    expect(out['2026-06-28T10:00']).toBe(40.0);
   });
 
   it('keys landing in different slots stay separate', () => {
@@ -701,6 +733,28 @@ describe('buildLinePath / buildAreaPath', () => {
 
   it('buildAreaPath returns empty string for no points', () => {
     expect(buildAreaPath([], 40)).toBe('');
+  });
+});
+
+describe('buildStepLinePath', () => {
+  it('keeps each price horizontal and changes level vertically at the slot boundary', () => {
+    expect(buildStepLinePath([[0, 10], [10, 20], [20, 15]])).toBe(
+      'M 0.0 10.0 L 10.0 10.0 L 10.0 20.0 L 20.0 20.0 L 20.0 15.0',
+    );
+  });
+
+  it('returns empty string for no points', () => {
+    expect(buildStepLinePath([])).toBe('');
+  });
+});
+
+describe('pinchZoomRange', () => {
+  it('zooms in around the fingers midpoint', () => {
+    expect(pinchZoomRange(0, 40, 96, 100, 200, 0.5)).toEqual({ start: 10, end: 30 });
+  });
+
+  it('zooms back to the full range when the pinch span reaches the maximum', () => {
+    expect(pinchZoomRange(20, 40, 96, 100, 10, 0.5)).toBeNull();
   });
 });
 

@@ -6,7 +6,9 @@ import type { DispatchSlot } from '@/lib/optimizer';
 import {
   buildAreaPath,
   buildLinePath,
+  buildStepLinePath,
   computeNowSlotTime,
+  pinchZoomRange,
   priceYScale,
   socYScale,
   solarYScale,
@@ -156,6 +158,7 @@ export default function PriceChart({
     pastDispatchSlots,
     actualFlowsByTime,
     interventionsByTime,
+    startSocKwh,
   );
 
   const hasActualSoc = chartData.some((d) => d.actualSocPct != null);
@@ -201,14 +204,14 @@ export default function PriceChart({
   );
 
   const buyPath = useMemo(
-    () => buildLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
+    () => buildStepLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
       const i = viewStartIndex + offset;
       return [xAt(i), priceYScale(d.buy, priceMax, geo, priceMin)];
     })),
     [chartData, viewStartIndex, viewEndIndex, priceMax, priceMin, geo, xAt],
   );
   const sellPath = useMemo(
-    () => buildLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
+    () => buildStepLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
       const i = viewStartIndex + offset;
       return [xAt(i), priceYScale(d.sell, priceMax, geo, priceMin)];
     })),
@@ -264,6 +267,11 @@ export default function PriceChart({
   // pixel width rather than SVG-space coordinates).
   const containerRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
+  const pinchRef = useRef<{ distance: number; centerFraction: number; viewStart: number; viewEnd: number } | null>(null);
+
+  const touchDistance = (a: React.Touch, b: React.Touch) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const touchCenterFraction = (a: React.Touch, b: React.Touch, rect: DOMRect) =>
+    Math.min(1, Math.max(0, ((a.clientX + b.clientX) / 2 - rect.left) / rect.width));
 
   const updateHover = (clientX: number, clientY: number) => {
     const el = containerRef.current;
@@ -417,12 +425,42 @@ export default function PriceChart({
       <div
         ref={containerRef}
         className="relative"
+        style={{ touchAction: 'none' }}
         onMouseMove={(e) => updateHover(e.clientX, e.clientY)}
         onMouseLeave={clearHover}
+        onTouchStart={(e) => {
+          if (e.touches.length < 2 || count < 2) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const [a, b] = [e.touches[0], e.touches[1]];
+          pinchRef.current = {
+            distance: touchDistance(a, b),
+            centerFraction: touchCenterFraction(a, b, rect),
+            viewStart: viewStartIndex,
+            viewEnd: viewEndIndex,
+          };
+          setHover(null);
+        }}
         onTouchMove={(e) => {
+          if (e.touches.length >= 2 && pinchRef.current) {
+            e.preventDefault();
+            const [a, b] = [e.touches[0], e.touches[1]];
+            const range = pinchZoomRange(
+              pinchRef.current.viewStart,
+              pinchRef.current.viewEnd,
+              fullEnd,
+              pinchRef.current.distance,
+              touchDistance(a, b),
+              pinchRef.current.centerFraction,
+            );
+            setZoomRange(range);
+            return;
+          }
           if (e.touches[0]) updateHover(e.touches[0].clientX, e.touches[0].clientY);
         }}
-        onTouchEnd={clearHover}
+        onTouchEnd={(e) => {
+          if (e.touches.length < 2) pinchRef.current = null;
+          if (e.touches.length === 0) clearHover();
+        }}
         onWheel={handleWheel}
       >
         <svg viewBox={`0 0 ${geo.width} ${geo.height}`} width="100%" style={{ display: 'block', height: 'auto', overflow: 'visible' }}>
@@ -487,7 +525,7 @@ export default function PriceChart({
             d={sellPath}
             fill="none"
             stroke="var(--color-sell)"
-            strokeWidth={2}
+            strokeWidth={1.0}
             strokeLinejoin="round"
             strokeLinecap="round"
             style={{ filter: 'drop-shadow(0 1px 4px color-mix(in srgb, var(--color-sell) 35%, transparent))' }}
@@ -496,7 +534,7 @@ export default function PriceChart({
             d={buyPath}
             fill="none"
             stroke="var(--color-buy)"
-            strokeWidth={2.6}
+            strokeWidth={1.0}
             strokeLinejoin="round"
             strokeLinecap="round"
             style={{ filter: 'drop-shadow(0 1px 5px color-mix(in srgb, var(--color-buy) 40%, transparent))' }}

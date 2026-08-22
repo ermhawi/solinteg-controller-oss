@@ -123,25 +123,19 @@ export function shouldShowSupplementalBatteryExport(point: ChartPoint): boolean 
 }
 
 /**
- * Buckets raw poller readings (30 s cadence) into 15-min slot averages, keyed the same way
- * buildPriceLookup keys price slots (stockholmSlotKey — "YYYY-MM-DDTHH:MM", no seconds) so a
- * ChartPoint can look itself up with `slot.startTime.slice(0, 16)`, matching priceSlotsToMap's
- * own convention.
+ * Uses the first raw poller reading in each 15-min slot, keyed the same way buildPriceLookup
+ * keys price slots. The first reading is the closest available measurement to the slot boundary,
+ * which keeps actual SoC comparable to the planned SoC plotted at the slot start.
  */
 export function buildActualSocByTime(
   readings: { timestamp: string; soc_pct: number }[],
 ): Record<string, number> {
-  const buckets = new Map<string, { sum: number; n: number }>();
+  const out: Record<string, number> = {};
   for (const r of readings) {
     if (r.soc_pct == null || !isFinite(r.soc_pct)) continue;
     const key = stockholmSlotKey(r.timestamp);
-    const b = buckets.get(key) ?? { sum: 0, n: 0 };
-    b.sum += r.soc_pct;
-    b.n += 1;
-    buckets.set(key, b);
+    if (out[key] == null) out[key] = Math.round(r.soc_pct * 10) / 10;
   }
-  const out: Record<string, number> = {};
-  for (const [key, { sum, n }] of buckets) out[key] = Math.round((sum / n) * 10) / 10;
   return out;
 }
 
@@ -247,7 +241,18 @@ export function buildChartData(
   actualSocByTime: Record<string, number> = {},
   actualFlowsByTime: Record<string, ActualSlotFlows> = {},
   interventionsByTime: Record<string, string[]> = {},
+  startSocKwh = batteryKwh / 2,
 ): ChartPoint[] {
+  // Decision bands occupy [slot start, slot start + 15 min]. Plot the SoC at the
+  // slot boundary, not socAfter, otherwise each charge/discharge appears one slot
+  // earlier than its decision band.
+  const socAtStartByTime = new Map<string, number>();
+  let soc = startSocKwh;
+  for (const dispatch of Object.values(dispatchByTime).sort((a, b) => a.startTime.localeCompare(b.startTime))) {
+    socAtStartByTime.set(dispatch.startTime, soc);
+    soc = dispatch.socAfter;
+  }
+
   return prices.map((slot) => {
     const { kwh: solarKwh, source: solarSource } = slotSolarKwh(slot.startTime, forecast, profiles);
     const dispatch = dispatchByTime[slot.startTime];
@@ -255,7 +260,9 @@ export function buildChartData(
       time: slot.startTime,
       buy: slot.priceIncludingTaxAndSurcharge + skattOverforing,
       sell: slot.price,
-      socPct: dispatch ? Math.round((dispatch.socAfter / batteryKwh) * 1000) / 10 : null,
+      socPct: dispatch
+        ? Math.round(((socAtStartByTime.get(slot.startTime) ?? dispatch.socAfter) / batteryKwh) * 1000) / 10
+        : null,
       actualSocPct: actualSocByTime[slot.startTime.slice(0, 16)] ?? null,
       solarKwh,
       solarSource,
@@ -403,6 +410,44 @@ export function solarYScale(value: number, max: number, geometry: ChartGeometry,
 export function buildLinePath(points: [number, number][]): string {
   if (!points.length) return '';
   return 'M ' + points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L ');
+}
+
+/**
+ * Builds a step path for quarter-hour prices: keep each price horizontal for its
+ * entire slot, then change level vertically at the next slot boundary.
+ */
+export function buildStepLinePath(points: [number, number][]): string {
+  if (!points.length) return '';
+  const parts = [`M ${points[0][0].toFixed(1)} ${points[0][1].toFixed(1)}`];
+  for (let i = 1; i < points.length; i++) {
+    const [x, y] = points[i];
+    const previousY = points[i - 1][1];
+    parts.push(`L ${x.toFixed(1)} ${previousY.toFixed(1)}`);
+    parts.push(`L ${x.toFixed(1)} ${y.toFixed(1)}`);
+  }
+  return parts.join(' ');
+}
+
+/** Calculates an index range for a two-finger pinch, anchored at the fingers' midpoint. */
+export function pinchZoomRange(
+  viewStart: number,
+  viewEnd: number,
+  fullEnd: number,
+  initialDistance: number,
+  currentDistance: number,
+  centerFraction: number,
+  minSpan = 8,
+): { start: number; end: number } | null {
+  if (!(initialDistance > 0) || !(currentDistance > 0) || fullEnd < 1) return null;
+  const maxSpan = Math.max(1, fullEnd);
+  const initialSpan = Math.max(1, viewEnd - viewStart);
+  const nextSpan = Math.max(minSpan, Math.min(maxSpan, Math.round(initialSpan * (initialDistance / currentDistance))));
+  if (nextSpan >= maxSpan) return null;
+
+  const clampedFraction = Math.max(0, Math.min(1, centerFraction));
+  const anchorIndex = viewStart + clampedFraction * initialSpan;
+  const start = Math.max(0, Math.min(Math.round(anchorIndex - clampedFraction * nextSpan), fullEnd - nextSpan));
+  return { start, end: start + nextSpan };
 }
 
 /** Closes a filled area under a top line, down to baseY, back along the baseline. */

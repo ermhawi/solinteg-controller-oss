@@ -3,6 +3,7 @@ import PriceChart from '@/app/components/PriceChart';
 import { producePlan } from '@/lib/plan';
 import {
   readDailyEconomics,
+  readDailySystemEconomics,
   readTodaySocHistory,
   readTodayFlowRows,
   readPastDispatchSlots,
@@ -24,7 +25,8 @@ import EarningsCard from '@/app/components/EarningsCard';
 import LiveInverterPanel from '@/app/components/LiveInverterPanel';
 import OracleCard from '@/app/components/OracleCard';
 import WeatherCard from '@/app/components/WeatherCard';
-import type { EconSummary } from '@/lib/economics';
+import EnergySavingsCard from '@/app/components/EnergySavingsCard';
+import type { EconSummary, SystemDailyTotals } from '@/lib/economics';
 import type { DispatchSlot } from '@/lib/optimizer';
 import type { ActualSlotFlows } from '@/lib/actual-flows';
 import type { WeatherCardData } from '@/lib/weather-card';
@@ -51,6 +53,13 @@ export default async function Home() {
     }
   } catch {
     // non-fatal — page renders without the earnings panel
+  }
+
+  let dailySystemEconomics: ({ date: string } & SystemDailyTotals)[] = [];
+  try {
+    dailySystemEconomics = [...readDailySystemEconomics()].map(([date, totals]) => ({ date, ...totals }));
+  } catch {
+    // non-fatal — the comparison card renders its empty state
   }
 
   // Actual SoC history, for the chart's plan-vs-actual overlay (best-effort).
@@ -169,6 +178,7 @@ export default async function Home() {
         <OracleCard data={oracleData} />
         {/* Row 4: Väder, full width, display-only — see WeatherCard.tsx. */}
         <WeatherCard data={weatherData} />
+        <EnergySavingsCard daily={dailySystemEconomics} />
       </div>
     </AppShell>
   );
