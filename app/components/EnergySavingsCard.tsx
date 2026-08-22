@@ -104,6 +104,13 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const barWidth = Math.max(5, Math.min(13, 28 / Math.max(1, visible.length / 12)));
   const groupWidth = chartWidth / Math.max(1, visible.length);
   const zeroY = chartHeight - ((0 - minCost) / costRange) * chartHeight;
+  const savingsMin = Math.min(0, ...visible.map((row) => row.savingsKr));
+  const savingsMax = Math.max(1, ...visible.map((row) => row.savingsKr));
+  const savingsRange = Math.max(1, savingsMax - savingsMin);
+  const savingsZeroY = chartHeight - ((0 - savingsMin) / savingsRange) * chartHeight;
+  const savingsPoints = visible
+    .map((row, index) => `${index * groupWidth + groupWidth / 2},${chartHeight - ((row.savingsKr - savingsMin) / savingsRange) * chartHeight}`)
+    .join(' ');
   const hovered = visible.find((row) => row.key === hoveredKey) ?? null;
 
   return (
@@ -137,8 +144,10 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
         <Metric label="Solproduktion" value={kwh(total.solarKwh)} detail={`${kwh(total.batteryChargeKwh)} laddat · ${kwh(total.batteryDischargeKwh)} urladdat`} tone="muted" />
       </div>
 
-      <div className="mt-4 overflow-x-auto pb-1">
-        <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Faktisk kostnad och motkostnad över tid">
+      <div className="mt-4 grid grid-cols-1 gap-4 min-[900px]:grid-cols-2">
+        <div className="min-w-0 overflow-x-auto pb-1">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Kostnad jämfört med motkostnad</div>
+          <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Faktisk kostnad och motkostnad över tid">
           <line x1="0" y1={zeroY} x2={chartWidth} y2={zeroY} stroke="var(--divider)" strokeWidth="1" />
           {visible.map((row, index) => {
             const center = index * groupWidth + groupWidth / 2;
@@ -187,7 +196,28 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
               </g>
             );
           })()}
-        </svg>
+          </svg>
+        </div>
+        <div className="min-w-0 overflow-x-auto pb-1">
+          <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Besparing över tid</div>
+          <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Besparing över tid">
+            <line x1="0" y1={savingsZeroY} x2={chartWidth} y2={savingsZeroY} stroke="var(--divider)" strokeWidth="1" />
+            <polyline points={savingsPoints} fill="none" stroke="var(--econ-green)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            {visible.map((row, index) => {
+              const center = index * groupWidth + groupWidth / 2;
+              const y = chartHeight - ((row.savingsKr - savingsMin) / savingsRange) * chartHeight;
+              return (
+                <g key={row.key} onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
+                  <circle cx={center} cy={y} r="9" fill="transparent" />
+                  <circle cx={center} cy={y} r={hoveredKey === row.key ? 4 : 2.5} fill={row.savingsKr >= 0 ? 'var(--econ-green)' : 'var(--econ-red)'} />
+                  {(index === 0 || index === visible.length - 1 || index % Math.max(1, Math.ceil(visible.length / 6)) === 0) && (
+                    <text x={center} y={chartHeight + 16} textAnchor="middle" fontSize="9" fill="var(--text-muted)">{row.label}</text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-3 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
         <span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--econ-earned)' }} />Faktisk nettokostnad</span>
