@@ -81,6 +81,7 @@ function Metric({ label, value, detail, tone = 'neutral' }: { label: string; val
 
 export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const [period, setPeriod] = useState<Period>('dag');
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const periods = useMemo(() => aggregate(daily, period), [daily, period]);
   const visible = periods.slice(-31);
   const latest = periods[periods.length - 1];
@@ -106,6 +107,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const barWidth = Math.max(5, Math.min(13, 28 / Math.max(1, visible.length / 12)));
   const groupWidth = chartWidth / Math.max(1, visible.length);
   const zeroY = chartHeight - ((0 - minCost) / costRange) * chartHeight;
+  const hovered = visible.find((row) => row.key === hoveredKey) ?? null;
 
   return (
     <section className="card-surface box-border min-w-0 p-5 min-[1600px]:[grid-column:1/span_3]" aria-label="Besparing från sol och batteri">
@@ -148,15 +150,46 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
             const actualY = row.actualCostKr >= 0 ? zeroY - actualHeight : zeroY;
             const baselineY = zeroY - baselineHeight;
             return (
-              <g key={row.key}>
+              <g
+                key={row.key}
+                onMouseEnter={() => setHoveredKey(row.key)}
+                onMouseLeave={() => setHoveredKey(null)}
+                style={{ cursor: 'default' }}
+              >
                 <rect x={center - barWidth - 2} y={actualY} width={barWidth} height={actualHeight} rx="2" fill="var(--econ-earned)" opacity="0.9" />
                 <rect x={center + 2} y={baselineY} width={barWidth} height={baselineHeight} rx="2" fill="var(--text-muted)" opacity="0.35" />
+                {hoveredKey === row.key && (
+                  <rect
+                    x={center - 5}
+                    y={0}
+                    width={10}
+                    height={chartHeight}
+                    fill="var(--text-muted)"
+                    opacity="0.06"
+                    pointerEvents="none"
+                  />
+                )}
                 {(index === 0 || index === visible.length - 1 || index % Math.max(1, Math.ceil(visible.length / 6)) === 0) && (
                   <text x={center} y={chartHeight + 16} textAnchor="middle" fontSize="9" fill="var(--text-muted)">{row.label}</text>
                 )}
               </g>
             );
           })}
+          {hovered && (() => {
+            const index = visible.findIndex((row) => row.key === hovered.key);
+            const center = index * groupWidth + groupWidth / 2;
+            const tooltipWidth = 164;
+            const tooltipX = Math.max(4, Math.min(chartWidth - tooltipWidth - 4, center - tooltipWidth / 2));
+            return (
+              <g pointerEvents="none">
+                <rect x={tooltipX} y={5} width={tooltipWidth} height={58} rx="7" fill="var(--card-bg)" stroke="var(--card-border)" />
+                <text x={tooltipX + 9} y={19} fontSize="10" fontWeight="700" fill="var(--text)">{hovered.label}</text>
+                <text x={tooltipX + 9} y={33} fontSize="9" fill="var(--text-muted)">Faktiskt: {kr(hovered.actualCostKr)}</text>
+                <text x={tooltipX + 9} y={45} fontSize="9" fill="var(--text-muted)">Utan sol/batteri: {kr(hovered.baselineCostKr)}</text>
+                <text x={tooltipX + 9} y={57} fontSize="9" fontWeight="700" fill="var(--econ-green)">Skillnad: {kr(hovered.savingsKr)}</text>
+              </g>
+            );
+          })()}
         </svg>
       </div>
       <div className="flex flex-wrap items-center gap-3 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
