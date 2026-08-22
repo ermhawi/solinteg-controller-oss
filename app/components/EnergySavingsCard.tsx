@@ -182,7 +182,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
             const tooltipX = Math.max(4, Math.min(chartWidth - tooltipWidth - 4, center - tooltipWidth / 2));
             return (
               <g pointerEvents="none">
-                <rect x={tooltipX} y={5} width={tooltipWidth} height={58} rx="7" fill="var(--card-bg)" stroke="var(--card-border)" />
+                <rect x={tooltipX} y={5} width={tooltipWidth} height={58} rx="7" fill="var(--node-bg)" stroke="var(--card-border)" />
                 <text x={tooltipX + 9} y={19} fontSize="10" fontWeight="700" fill="var(--text)">{hovered.label}</text>
                 <text x={tooltipX + 9} y={33} fontSize="9" fill="var(--text-muted)">Faktiskt: {kr(hovered.actualCostKr)}</text>
                 <text x={tooltipX + 9} y={45} fontSize="9" fill="var(--text-muted)">Utan sol/batteri: {kr(hovered.baselineCostKr)}</text>
