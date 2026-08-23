@@ -184,7 +184,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
                 style={{ cursor: 'default' }}
               >
                 <rect x={center - barWidth - 2} y={actualY} width={barWidth} height={actualHeight} rx="2" fill="var(--econ-earned)" opacity="0.9" />
-                <rect x={center + 2} y={baselineY} width={barWidth} height={baselineHeight} rx="2" fill="var(--text-muted)" opacity="0.35" />
+                <rect x={center + 2} y={baselineY} width={barWidth} height={baselineHeight} rx="2" fill="var(--econ-red)" opacity="0.8" />
                 {hoveredKey === row.key && (
                   <rect
                     x={center - 5}
@@ -251,7 +251,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
       </div>
       <div className="flex flex-wrap items-center gap-3 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
         <span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--econ-earned)' }} />Faktisk nettokostnad</span>
-        <span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--text-muted)', opacity: 0.45 }} />Utan sol + batteri</span>
+        <span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--econ-red)', opacity: 0.8 }} />Utan sol + batteri</span>
         {latest && <span className="ml-auto">Senaste period: {latest.label} · {kr(latest.savingsKr)} sparat</span>}
       </div>
     </section>
