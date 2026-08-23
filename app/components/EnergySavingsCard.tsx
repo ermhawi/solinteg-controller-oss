@@ -51,6 +51,14 @@ function kwh(value: number): string {
   return `${value.toFixed(1)} kWh`;
 }
 
+function axisTicks(min: number, max: number, count = 4): number[] {
+  return Array.from({ length: count + 1 }, (_, index) => min + ((max - min) * index) / count);
+}
+
+function axisLabel(value: number): string {
+  return `${Math.round(value)} kr`;
+}
+
 function aggregate(rows: DailyEnergy[], period: Period): AggregatedEnergy[] {
   const grouped = new Map<string, SystemDailyTotals>();
   for (const row of rows) {
@@ -101,15 +109,19 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const costRange = Math.max(1, maxCost - minCost);
   const chartHeight = 148;
   const chartWidth = Math.max(520, visible.length * 42);
+  const chartLeft = 42;
+  const plotWidth = chartWidth - chartLeft;
   const barWidth = Math.max(5, Math.min(13, 28 / Math.max(1, visible.length / 12)));
-  const groupWidth = chartWidth / Math.max(1, visible.length);
+  const groupWidth = plotWidth / Math.max(1, visible.length);
   const zeroY = chartHeight - ((0 - minCost) / costRange) * chartHeight;
+  const costTicks = axisTicks(minCost, maxCost);
   const savingsMin = Math.min(0, ...visible.map((row) => row.savingsKr));
   const savingsMax = Math.max(1, ...visible.map((row) => row.savingsKr));
   const savingsRange = Math.max(1, savingsMax - savingsMin);
   const savingsZeroY = chartHeight - ((0 - savingsMin) / savingsRange) * chartHeight;
+  const savingsTicks = axisTicks(savingsMin, savingsMax);
   const savingsPoints = visible
-    .map((row, index) => `${index * groupWidth + groupWidth / 2},${chartHeight - ((row.savingsKr - savingsMin) / savingsRange) * chartHeight}`)
+    .map((row, index) => `${chartLeft + index * groupWidth + groupWidth / 2},${chartHeight - ((row.savingsKr - savingsMin) / savingsRange) * chartHeight}`)
     .join(' ');
   const hovered = visible.find((row) => row.key === hoveredKey) ?? null;
 
@@ -148,9 +160,18 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
         <div className="min-w-0 overflow-x-auto pb-1">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Kostnad jämfört med motkostnad</div>
           <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Faktisk kostnad och motkostnad över tid">
-          <line x1="0" y1={zeroY} x2={chartWidth} y2={zeroY} stroke="var(--divider)" strokeWidth="1" />
+          {costTicks.map((tick, index) => {
+            const y = chartHeight - ((tick - minCost) / costRange) * chartHeight;
+            return (
+              <g key={`cost-axis-${index}`}>
+                <line x1={chartLeft} y1={y} x2={chartWidth} y2={y} stroke="var(--grid-line)" strokeWidth="1" />
+                <text x={chartLeft - 6} y={y + 3} textAnchor="end" fontSize="9" fill="var(--text-muted)">{axisLabel(tick)}</text>
+              </g>
+            );
+          })}
+          <line x1={chartLeft} y1={zeroY} x2={chartWidth} y2={zeroY} stroke="var(--divider)" strokeWidth="1" />
           {visible.map((row, index) => {
-            const center = index * groupWidth + groupWidth / 2;
+            const center = chartLeft + index * groupWidth + groupWidth / 2;
             const actualHeight = (Math.abs(row.actualCostKr) / costRange) * chartHeight;
             const baselineHeight = (Math.max(0, row.baselineCostKr) / costRange) * chartHeight;
             const actualY = row.actualCostKr >= 0 ? zeroY - actualHeight : zeroY;
@@ -183,7 +204,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
           })}
           {hovered && (() => {
             const index = visible.findIndex((row) => row.key === hovered.key);
-            const center = index * groupWidth + groupWidth / 2;
+            const center = chartLeft + index * groupWidth + groupWidth / 2;
             const tooltipWidth = 164;
             const tooltipX = Math.max(4, Math.min(chartWidth - tooltipWidth - 4, center - tooltipWidth / 2));
             return (
@@ -201,10 +222,19 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
         <div className="min-w-0 overflow-x-auto pb-1">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Besparing över tid</div>
           <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Besparing över tid">
-            <line x1="0" y1={savingsZeroY} x2={chartWidth} y2={savingsZeroY} stroke="var(--divider)" strokeWidth="1" />
+            {savingsTicks.map((tick, index) => {
+              const y = chartHeight - ((tick - savingsMin) / savingsRange) * chartHeight;
+              return (
+                <g key={`savings-axis-${index}`}>
+                  <line x1={chartLeft} y1={y} x2={chartWidth} y2={y} stroke="var(--grid-line)" strokeWidth="1" />
+                  <text x={chartLeft - 6} y={y + 3} textAnchor="end" fontSize="9" fill="var(--text-muted)">{axisLabel(tick)}</text>
+                </g>
+              );
+            })}
+            <line x1={chartLeft} y1={savingsZeroY} x2={chartWidth} y2={savingsZeroY} stroke="var(--divider)" strokeWidth="1" />
             <polyline points={savingsPoints} fill="none" stroke="var(--econ-green)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
             {visible.map((row, index) => {
-              const center = index * groupWidth + groupWidth / 2;
+              const center = chartLeft + index * groupWidth + groupWidth / 2;
               const y = chartHeight - ((row.savingsKr - savingsMin) / savingsRange) * chartHeight;
               return (
                 <g key={row.key} onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
