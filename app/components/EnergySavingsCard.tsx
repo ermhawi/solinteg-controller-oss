@@ -97,7 +97,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
 
   if (daily.length === 0) {
     return (
-      <section className="card-surface box-border min-w-0 p-5 min-[1600px]:[grid-column:1/span_3]">
+      <section className="card-surface box-border min-w-0 p-5 order-7 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3]">
         <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>Besparing från sol och batteri</h2>
         <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>Inväntar tillräckligt med mätdata.</p>
       </section>
@@ -126,7 +126,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const hovered = visible.find((row) => row.key === hoveredKey) ?? null;
 
   return (
-    <section className="card-surface box-border min-w-0 p-5 min-[1600px]:[grid-column:1/span_3]" aria-label="Besparing från sol och batteri">
+    <section className="card-surface box-border min-w-0 p-5 order-7 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3]" aria-label="Besparing från sol och batteri">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>Besparing från sol och batteri</h2>
