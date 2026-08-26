@@ -80,7 +80,7 @@ describe('producePlan cache contract — forecasts stay cached ON PURPOSE', () =
   // climatology, which knows none of that — so stale strictly beats fresh-or-nothing here. The
   // 8 h expire is a resilience feature against an upstream outage, not an oversight.
   // Prices are the opposite case: there, stale means solving yesterday's problem.
-  it.each(['fetchSolarForecast', 'fetchDailyMeanTemp'])('%s keeps its cache', (fn) => {
+  it.each(['fetchSolarForecastSources', 'fetchDailyMeanTemp'])('%s keeps its cache', (fn) => {
     const body = functionBody(forecastSrc, fn);
     expect(body).toContain('use cache');
     expect(body).toContain('cacheLife');
