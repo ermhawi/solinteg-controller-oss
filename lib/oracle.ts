@@ -500,7 +500,7 @@ function historicalPlanTrajectory(
   runs: HistoricalOptimizerRun[] | undefined,
   startSoc: number,
   actualSocAtEnd: (index: number) => number | null,
-): { trajectory: { socAfter: number }[]; coveredSlots: number } {
+): { trajectory: { socAfter: number }[]; coveredSlots: number; endSoc: number } {
   const planned = new Map<string, { delta: number; runKey: string }>();
   for (let r = 0; r < (runs?.length ?? 0); r++) {
     const run = runs![r];
@@ -530,13 +530,14 @@ function historicalPlanTrajectory(
     }
     trajectory.push({ socAfter: soc });
   }
-  return { trajectory, coveredSlots };
+  return { trajectory, coveredSlots, endSoc: soc };
 }
 
 export interface HistoricalPlanBenchmark {
   valueOre: number;
   coveredSlots: number;
   coverage: number;
+  endSoc: number;
 }
 
 export function evaluateHistoricalPlanBenchmark(
@@ -549,7 +550,12 @@ export function evaluateHistoricalPlanBenchmark(
   const replay = historicalPlanTrajectory(slots, runs, startSoc, actualSocAtEnd);
   if (replay.coveredSlots === 0) return null;
   const value = evaluateDispatch(slots, replay.trajectory, startSoc).valueOre;
-  return { valueOre: value, coveredSlots: replay.coveredSlots, coverage: replay.coveredSlots / slots.length };
+  return {
+    valueOre: value,
+    coveredSlots: replay.coveredSlots,
+    coverage: replay.coveredSlots / slots.length,
+    endSoc: replay.endSoc,
+  };
 }
 
 export interface OracleDayInputs {
@@ -660,7 +666,6 @@ export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
 
   // Continuation value of the SoC the system ACTUALLY handed to D+1.
   const contDispatch = optimizeDispatch(slotsCont, endSoc.soc);
-  const achievedContinuationOre = evaluateDispatch(slotsCont, contDispatch, endSoc.soc).valueOre;
 
   // Achieved wear on the DP's own basis (Σ|ΔSoC| across day-D slot boundaries), so the wear
   // term subtracts identically on both sides. Boundary SoC gaps carry the last known value
@@ -695,18 +700,30 @@ export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
   }
 
   const achievedDayValueOre = inputs.achievedCashOre - achievedWearOre;
+  const achievedContinuationOre = evaluateDispatch(slotsCont, contDispatch, endSoc.soc).valueOre;
+  const achievedTotalOre = achievedDayValueOre + achievedContinuationOre;
   const historicalBenchmark = evaluateHistoricalPlanBenchmark(
     slotsD,
     inputs.historicalRuns,
     startSoc.soc,
     (index) => socAtInstant(soc, dayStartMs + (index + 1) * SLOT_MS)?.soc ?? null,
   );
-  if (historicalBenchmark) {
-    diagnostics.informedBenchmarkOre = round1(historicalBenchmark.valueOre);
+  const historicalBenchmarkContinuationOre = historicalBenchmark
+    ? evaluateDispatch(
+        slotsCont,
+        optimizeDispatch(slotsCont, historicalBenchmark.endSoc),
+        historicalBenchmark.endSoc,
+      ).valueOre
+    : null;
+  const informedBenchmarkTotalOre = historicalBenchmark
+    ? historicalBenchmark.valueOre + (historicalBenchmarkContinuationOre ?? 0)
+    : null;
+  if (historicalBenchmark && informedBenchmarkTotalOre !== null) {
+    diagnostics.informedBenchmarkOre = round1(informedBenchmarkTotalOre);
     diagnostics.informedBenchmarkCoverage = round3(historicalBenchmark.coverage);
-    diagnostics.informedBenchmarkRegretOre = round1(historicalBenchmark.valueOre - achievedDayValueOre);
+    diagnostics.informedBenchmarkRegretOre = round1(informedBenchmarkTotalOre - achievedTotalOre);
   }
-  const achievedTotalOre = achievedDayValueOre + achievedContinuationOre;
+
   const oracleTotalOre = oracleAll.valueOre;
   const regretOre = oracleTotalOre - achievedTotalOre;
   const regretIntradayOre =
