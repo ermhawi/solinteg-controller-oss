@@ -73,6 +73,15 @@ describe('buildOptimizerSlots', () => {
     expect(slots[1].sellPrice).toBe(120);
   });
 
+  it('preserves price provenance for the decision log', () => {
+    const data = makeData({ prices: [{
+      startTime: '2026-06-28T12:00:00', endTime: '2026-06-28T12:15:00', price: 80,
+      priceIncludingTaxAndSurcharge: 110, source: 'forecast',
+    }] });
+    const slots = buildOptimizerSlots(data, null, buildSolarProfiles(data));
+    expect(slots[0].priceSource).toBe('forecast');
+  });
+
   it('uses forecast kWh when a forecast entry is present for the date and slot', () => {
     const data = makeData();
     // slotIndex(12, 0) = 48

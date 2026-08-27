@@ -6,7 +6,7 @@
 ### Data flow
 
 ```
-elprisetjustnu.se SE3  Open Meteo (SOLAR_FORECAST_MODEL, Open Meteo (daily temp)
+elprisetjustnu.se SE2  Open Meteo (SOLAR_FORECAST_MODEL, Open Meteo (daily temp)
                         default metno_nordic)
        │                        │                          │
  lib/prices.ts           lib/forecast.ts            lib/forecast.ts

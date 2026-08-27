@@ -1,7 +1,7 @@
 import { cacheLife } from 'next/cache';
 import { VAT_RATE, SUPPLIER_SURCHARGE_ORE, PRICE_ZONE, EXPORT_BONUS_ORE, FETCH_TIMEOUT_MS } from './constants';
 
-// Raw Nord Pool day-ahead spot prices per bidding zone (SE3), 15-min resolution, free & no key.
+// Raw Nord Pool day-ahead spot prices per bidding zone (SE2 by default), 15-min resolution, free & no key.
 // Publishes tomorrow ~13:00 CET — reliably, unlike the Mölndal feed it replaced (which lagged by
 // hours). Per-day URLs: /api/v1/prices/YYYY/MM-DD_<ZONE>.json. Prices are raw spot, excl VAT.
 const PRICES_BASE_URL = 'https://www.elprisetjustnu.se/api/v1/prices';
@@ -11,6 +11,7 @@ export interface PriceSlot {
   endTime: string;
   price: number; // öre/kWh — the SELL price you actually receive: spot + EXPORT_BONUS_ORE
   priceIncludingTaxAndSurcharge: number; // öre/kWh — (spot + surcharge) × VAT (buy price, pre skatt/överföring)
+  source?: 'actual' | 'forecast';
 }
 
 export interface PriceData {
@@ -29,6 +30,16 @@ interface ElprisSlot {
   time_end: string;
 }
 
+interface PlaneraPriceSlot {
+  time: string;
+  price: number; // EUR/MWh
+  source: 'actual' | 'forecast';
+}
+
+interface PlaneraResponse {
+  data?: PlaneraPriceSlot[];
+}
+
 /**
  * Convert an elprisetjustnu slot to our PriceSlot: the tax-inclusive buy price is reconstructed
  * from the raw spot; the sell price is the spot plus the flat grid-export compensation
@@ -42,7 +53,56 @@ export function toSlot(p: ElprisSlot): PriceSlot {
     endTime: p.time_end.slice(0, 19),
     price: Math.round((spot + EXPORT_BONUS_ORE) * 100) / 100, // sell = spot + export compensation
     priceIncludingTaxAndSurcharge: inclTax,
+    source: 'actual',
   };
+}
+
+function forecastToSlot(p: PlaneraPriceSlot): PriceSlot {
+  const instant = new Date(p.time);
+  const local = stockholmParts(instant);
+  const end = new Date(instant.getTime() + 15 * 60_000);
+  const endLocal = stockholmParts(end);
+  const localTime = (parts: ReturnType<typeof stockholmParts>) =>
+    `${parts.dateStr}T${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}:00`;
+  const spot = Math.round(p.price * 0.1 * 100) / 100; // EUR/MWh → öre/kWh
+  return {
+    startTime: localTime(local),
+    endTime: localTime(endLocal),
+    price: Math.round((spot + EXPORT_BONUS_ORE) * 100) / 100,
+    priceIncludingTaxAndSurcharge: Math.round((spot + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
+    source: p.source,
+  };
+}
+
+/** Merge authoritative day-ahead prices with a bounded PlaneraElen forecast horizon. */
+export function mergePriceHorizon(
+  actual: PriceSlot[],
+  forecast: PriceSlot[],
+  horizonEndLocal: string,
+): { prices: PriceSlot[]; hasTomorrow: boolean; actualSlots: number; forecastSlots: number } {
+  const byTime = new Map<string, PriceSlot>();
+  for (const slot of forecast) if (slot.startTime < horizonEndLocal) byTime.set(slot.startTime, slot);
+  for (const slot of actual) if (slot.startTime < horizonEndLocal) byTime.set(slot.startTime, { ...slot, source: 'actual' });
+  const prices = [...byTime.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const actualSlots = prices.filter((p) => p.source === 'actual').length;
+  const firstDate = prices[0]?.startTime.slice(0, 10);
+  return {
+    prices,
+    hasTomorrow: prices.some((p) => p.source === 'actual' && p.startTime.slice(0, 10) !== firstDate),
+    actualSlots,
+    forecastSlots: prices.length - actualSlots,
+  };
+}
+
+async function fetchPlaneraForecast(): Promise<PriceSlot[]> {
+  const res = await fetch(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}`, {
+    headers: { 'User-Agent': 'solinteg-controller' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`PlaneraElen forecast failed: HTTP ${res.status}`);
+  const payload = (await res.json()) as PlaneraResponse;
+  if (!Array.isArray(payload.data)) throw new Error('PlaneraElen forecast response has no data array');
+  return payload.data.filter((p) => p.source === 'forecast').map(forecastToSlot);
 }
 
 /** Fetch one Stockholm day of 15-min slots, or null if not published yet (404 before release). */
@@ -201,11 +261,19 @@ export async function fetchPricesUncached(): Promise<PriceData> {
   const todaySlots = await fetchDay(parts.dateStr);
   if (!todaySlots) throw new Error(`No spot prices for ${parts.dateStr} (${PRICE_ZONE})`);
 
-  // Tomorrow returns null until Nord Pool releases it (~13:00 CET); hasTomorrow reflects that.
+  // Tomorrow returns null until Nord Pool releases it (~13:00); forecast fills the remainder.
   const tomorrowSlots = await fetchDay(tomorrowStr);
+  const actualPrices = tomorrowSlots ? [...todaySlots, ...tomorrowSlots] : todaySlots;
+  const horizonEnd = new Date(now.getTime() + 48 * 60 * 60_000);
+  const horizonParts = stockholmParts(horizonEnd);
+  const horizonEndLocal = `${horizonParts.dateStr}T${String(horizonParts.hour).padStart(2, '0')}:${String(horizonParts.minute).padStart(2, '0')}:00`;
+  let prices = actualPrices;
+  try {
+    prices = mergePriceHorizon(actualPrices, await fetchPlaneraForecast(), horizonEndLocal).prices;
+  } catch (err) {
+    console.warn('PlaneraElen forecast unavailable; using actual prices only:', err);
+  }
   const hasTomorrow = tomorrowSlots !== null;
-
-  const prices = tomorrowSlots ? [...todaySlots, ...tomorrowSlots] : todaySlots;
   const maxAge = computeMaxAge(hasTomorrow, now, parts);
 
   const sells = prices.map((p) => p.price);

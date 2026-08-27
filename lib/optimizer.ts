@@ -46,6 +46,7 @@ export interface OptimizerSlot {
   // available estimator, so errors there are genuine household unpredictability.
   solarSource?: 'forecast' | 'stale' | 'typical';
   loadSource?: 'modeled' | 'baseline' | 'live';
+  priceSource?: 'actual' | 'forecast';
 }
 
 export interface DispatchSlot {

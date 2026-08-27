@@ -49,9 +49,8 @@ export const SUPPLIER_SURCHARGE_ORE = numEnv('SUPPLIER_SURCHARGE_ORE', 11.5);
  */
 export const EXPORT_BONUS_ORE = numEnv('EXPORT_BONUS_ORE', 5.1);
 
-/** Bidding zone for spot prices — Gothenburg is in SE3. Env: PRICE_ZONE, any of SE1-SE4 (the
- *  elprisetjustnu.se feed already serves all four the same way; nothing else needs to change to
- *  move zones). Falls back to SE3 on an unrecognised value rather than silently 404ing later. */
+/** Swedish bidding zone for the Sundsvall reference installation. Env: PRICE_ZONE, any of SE1-SE4.
+ * Falls back to SE2 on an unrecognised value rather than silently 404ing later. */
 const VALID_PRICE_ZONES = ['SE1', 'SE2', 'SE3', 'SE4'] as const;
 export type PriceZone = (typeof VALID_PRICE_ZONES)[number];
 function isPriceZone(v: string): v is PriceZone {
@@ -59,7 +58,7 @@ function isPriceZone(v: string): v is PriceZone {
 }
 const rawPriceZone = process.env.PRICE_ZONE;
 export const PRICE_ZONE: PriceZone =
-  rawPriceZone && isPriceZone(rawPriceZone) ? rawPriceZone : 'SE3';
+  rawPriceZone && isPriceZone(rawPriceZone) ? rawPriceZone : 'SE2';
 
 // ---- Battery: Enershare Energy-Core 25.6 kWh ----
 
