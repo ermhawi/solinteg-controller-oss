@@ -18,6 +18,8 @@ export interface OracleTrendDay {
   achievedKr: number | null;
   oracleKr: number | null;
   capturedPct: number | null; // share of the battery's theoretically possible value captured
+  informedBenchmarkKr: number | null;
+  informedBenchmarkRegretKr: number | null;
 }
 
 export interface OracleCardData {
@@ -65,6 +67,9 @@ function toTrendDay(r: OracleDaySummaryRow): OracleTrendDay {
     achievedKr: r.achievedTotalOre == null ? null : r.achievedTotalOre / 100,
     oracleKr: r.oracleTotalOre == null ? null : r.oracleTotalOre / 100,
     capturedPct: capturedPct(r.achievedTotalOre, r.oracleTotalOre, r.baselineNetOre),
+    informedBenchmarkKr: r.informedBenchmarkOre == null ? null : r.informedBenchmarkOre / 100,
+    informedBenchmarkRegretKr:
+      r.informedBenchmarkRegretOre == null ? null : r.informedBenchmarkRegretOre / 100,
   };
 }
 

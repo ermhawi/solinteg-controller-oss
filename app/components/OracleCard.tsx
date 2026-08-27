@@ -52,22 +52,6 @@ function Tile({ label, value, caption, sub }: { label: string; value: string; ca
   );
 }
 
-/** Rounded top corners, square baseline — the bar spec (radius collapses on very short bars). */
-function barPath(x: number, yTop: number, w: number, h: number): string {
-  const r = Math.min(4, h, w / 2);
-  const right = x + w;
-  const bottom = yTop + h;
-  return [
-    `M ${x.toFixed(1)} ${bottom.toFixed(1)}`,
-    `L ${x.toFixed(1)} ${(yTop + r).toFixed(1)}`,
-    `Q ${x.toFixed(1)} ${yTop.toFixed(1)} ${(x + r).toFixed(1)} ${yTop.toFixed(1)}`,
-    `L ${(right - r).toFixed(1)} ${yTop.toFixed(1)}`,
-    `Q ${right.toFixed(1)} ${yTop.toFixed(1)} ${right.toFixed(1)} ${(yTop + r).toFixed(1)}`,
-    `L ${right.toFixed(1)} ${bottom.toFixed(1)}`,
-    'Z',
-  ].join(' ');
-}
-
 interface HoverState {
   index: number;
   x: number; // container-relative px, for tooltip placement
@@ -114,12 +98,18 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
 
   const days = data.days;
   const slotW = PLOT_W / Math.max(1, days.length);
-  const barW = Math.min(24, Math.max(6, slotW - 6));
-  const maxKr = Math.max(1, ...days.map((d) => d.regretKr ?? 0));
-  const xAt = (i: number) => PAD_L + i * slotW + (slotW - barW) / 2;
-  const heightFor = (v: number) => Math.max(2, (Math.max(0, v) / maxKr) * PLOT_H);
-
-  const latestIdx = days.findIndex((d) => d.date === data.latest.date);
+  const series = [
+    { key: 'achievedKr', color: 'var(--badge-color)' },
+    { key: 'informedBenchmarkKr', color: 'var(--color-buy)' },
+    { key: 'oracleKr', color: 'var(--color-sell)' },
+  ] as const;
+  const values = days.flatMap((d) => series.map(({ key }) => d[key]).filter((v): v is number => v != null));
+  const chartMin = Math.min(0, ...values);
+  const chartMax = Math.max(1, ...values);
+  const yFor = (v: number) => PAD_T + ((chartMax - v) / (chartMax - chartMin)) * PLOT_H;
+  const zeroY = yFor(0);
+  const barW = Math.min(12, Math.max(3, (slotW - 8) / series.length));
+  const xAt = (i: number) => PAD_L + i * slotW + (slotW - barW * series.length) / 2;
 
   const updateHover = (clientX: number) => {
     const el = containerRef.current;
@@ -200,6 +190,11 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
           </div>
         </div>
 
+        <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+          <span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: 'var(--badge-color)' }} />Uppnått</span>
+          <span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: 'var(--color-buy)' }} />Planbenchmark</span>
+          <span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: 'var(--color-sell)' }} />Facit</span>
+        </div>
         <div className="relative flex-1" ref={containerRef}>
           <svg
             viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
@@ -212,41 +207,37 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
             }}
             onTouchEnd={() => setHover(null)}
           >
-            <line x1={PAD_L} y1={BASE_Y} x2={PAD_L + PLOT_W} y2={BASE_Y} stroke="var(--divider)" strokeWidth={1} />
+            <line x1={PAD_L} y1={zeroY} x2={PAD_L + PLOT_W} y2={zeroY} stroke="var(--divider)" strokeWidth={1} />
             {days.map((d, i) => {
               const ok = d.status === 'ok';
-              const h = d.regretKr == null ? 3 : heightFor(d.regretKr);
-              const x = xAt(i);
-              return (
-                <path
-                  key={d.date}
-                  d={barPath(x, BASE_Y - h, barW, h)}
-                  fill={ok ? 'var(--color-sell)' : 'var(--econ-gray)'}
-                  opacity={hover && hover.index === i ? 1 : ok ? 0.85 : 0.3}
-                />
-              );
+              return series.map(({ key, color }, seriesIndex) => {
+                const value = d[key];
+                if (value == null) return null;
+                const y = yFor(value);
+                const rectY = Math.min(zeroY, y);
+                const rectHeight = Math.max(1.5, Math.abs(zeroY - y));
+                return (
+                  <rect
+                    key={`${d.date}-${key}`}
+                    x={xAt(i) + seriesIndex * barW}
+                    y={rectY}
+                    width={barW - 1}
+                    height={rectHeight}
+                    rx={Math.min(2, (barW - 1) / 2)}
+                    fill={color}
+                    opacity={hover && hover.index === i ? 1 : ok ? 0.82 : 0.28}
+                  />
+                );
+              });
             })}
-            {/* direct label on the headline day only — the tooltip carries the rest */}
-            {latestIdx >= 0 && days[latestIdx].regretKr != null && (
-              <text
-                x={xAt(latestIdx) + barW / 2}
-                y={BASE_Y - heightFor(days[latestIdx].regretKr as number) - 6}
-                textAnchor="middle"
-                fontSize={10}
-                fontWeight={700}
-                fill="var(--text)"
-              >
-                {kr(days[latestIdx].regretKr as number)}
-              </text>
-            )}
             {days.length > 0 && (
               <>
-                <text x={xAt(0) + barW / 2} y={BASE_Y + 13} textAnchor="middle" fontSize={9.5} fill="var(--axis-text)">
+                <text x={xAt(0) + (barW * series.length) / 2} y={BASE_Y + 13} textAnchor="middle" fontSize={9.5} fill="var(--axis-text)">
                   {dayLabel(days[0].date)}
                 </text>
                 {days.length > 1 && (
                   <text
-                    x={xAt(days.length - 1) + barW / 2}
+                    x={xAt(days.length - 1) + (barW * series.length) / 2}
                     y={BASE_Y + 13}
                     textAnchor="middle"
                     fontSize={9.5}
@@ -258,7 +249,7 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
               </>
             )}
             <text x={PAD_L} y={PAD_T - 10} fontSize={9} fontWeight={700} fill="var(--axis-text)">
-              Tappat värde per dygn, kr
+              Värde per dygn, kr
             </text>
           </svg>
 
@@ -283,11 +274,17 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
                   {STATUS_LABEL[hoverDay.status] ?? hoverDay.status}
                 </span>
               </div>
-              {hoverDay.regretKr != null && (
-                <TrendRow color="var(--color-sell)" label="Tappat vs facit" value={kr(hoverDay.regretKr)} />
-              )}
               {hoverDay.achievedKr != null && <TrendRow label="Uppnått värde" value={kr(hoverDay.achievedKr, 0)} />}
+              {hoverDay.informedBenchmarkKr != null && (
+                <TrendRow label="Planbenchmark" value={kr(hoverDay.informedBenchmarkKr, 0)} />
+              )}
               {hoverDay.oracleKr != null && <TrendRow label="Facit (optimalt)" value={kr(hoverDay.oracleKr, 0)} />}
+              {hoverDay.informedBenchmarkRegretKr != null && (
+                <TrendRow label="Tappat mot plan" value={kr(hoverDay.informedBenchmarkRegretKr)} />
+              )}
+              {hoverDay.regretKr != null && (
+                <TrendRow label="Tappat mot facit" value={kr(hoverDay.regretKr)} />
+              )}
               {hoverDay.capturedPct != null && (
                 <TrendRow label="Fångat värde" value={`${Math.round(hoverDay.capturedPct)} %`} />
               )}

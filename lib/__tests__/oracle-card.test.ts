@@ -93,6 +93,16 @@ describe('buildOracleCardData', () => {
     expect(result?.latestCarryKr).toBeCloseTo(0.1);
   });
 
+  it('carries the benchmark and both regret values into the trend day', () => {
+    const result = buildOracleCardData([
+      day({ informedBenchmarkOre: 4400, informedBenchmarkRegretOre: 200 }),
+    ]);
+    expect(result?.days[0].informedBenchmarkKr).toBeCloseTo(44);
+    expect(result?.days[0].informedBenchmarkRegretKr).toBeCloseTo(2);
+    expect(result?.latestInformedBenchmarkKr).toBeCloseTo(44);
+    expect(result?.latestInformedBenchmarkRegretKr).toBeCloseTo(2);
+  });
+
   it('tolerates a null regret split (infeasible terminal-constrained DP)', () => {
     const result = buildOracleCardData([day({ regretIntradayOre: null, regretCarryOre: null })]);
     expect(result?.latestIntradayKr).toBeNull();
