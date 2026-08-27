@@ -34,6 +34,8 @@ export interface OracleDaySummaryRow {
   shadowScored?: boolean;
   shadowDayAheadRegretOre?: number | null;
   shadowDayAheadTotalOre?: number | null;
+  informedBenchmarkOre?: number | null;
+  informedBenchmarkRegretOre?: number | null;
 }
 
 /**
@@ -65,18 +67,19 @@ export function readRecentOracleDays(limit = 14): OracleDaySummaryRow[] {
     }[];
     return rows
       .map((r) => {
-        // The shadow score lives under diagnostics_json.shadow (folded in by the nightly
-        // shadow sweep). shadowScored is true only for a parseable blob whose shadowVersion
-        // matches — anything else (absent key, malformed blob, older version) reads false and
-        // triggers a one-time re-score, whose write then replaces the blob with a current one
-        // (so a malformed blob self-heals on the next sweep rather than recomputing forever).
-        let shadow: { shadowVersion?: number; dayAhead?: ShadowScore | null } | null = null;
+        let diagnostics: Record<string, unknown> = {};
         try {
-          const diag = JSON.parse(r.diagnostics_json ?? 'null');
-          if (diag && typeof diag === 'object' && 'shadow' in diag) shadow = diag.shadow ?? null;
+          diagnostics = r.diagnostics_json ? (JSON.parse(r.diagnostics_json) as Record<string, unknown>) : {};
         } catch {
-          /* leave shadow null */
+          diagnostics = {};
         }
+        // The shadow score lives under diagnostics_json.shadow (folded in by the nightly
+        // sweep). shadowScored is true only for a parseable blob whose shadowVersion matches.
+        const shadowValue = diagnostics.shadow;
+        const shadow =
+          shadowValue && typeof shadowValue === 'object'
+            ? (shadowValue as { shadowVersion?: number; dayAhead?: ShadowScore | null })
+            : null;
         // A version mismatch is treated as unscored THROUGHOUT: the sweep re-scores the row,
         // and until it has, the stale-arithmetic numbers are withheld rather than served.
         const scored = shadow?.shadowVersion === SHADOW_SCORE_VERSION;
@@ -93,6 +96,10 @@ export function readRecentOracleDays(limit = 14): OracleDaySummaryRow[] {
           shadowScored: scored,
           shadowDayAheadRegretOre: scored ? (shadow?.dayAhead?.regretOre ?? null) : null,
           shadowDayAheadTotalOre: scored ? (shadow?.dayAhead?.totalOre ?? null) : null,
+          informedBenchmarkOre:
+            typeof diagnostics.informedBenchmarkOre === 'number' ? diagnostics.informedBenchmarkOre : null,
+          informedBenchmarkRegretOre:
+            typeof diagnostics.informedBenchmarkRegretOre === 'number' ? diagnostics.informedBenchmarkRegretOre : null,
         };
       })
       .reverse();

@@ -36,6 +36,13 @@ export interface LatestControlAction {
   detailJson: ControlActionDetail | null;
 }
 
+export interface HistoricalOptimizerRun {
+  loggedAt: string;
+  startSocKwh: number;
+  inputs: OptimizerSlot[];
+  dispatch: Pick<DispatchSlot, 'startTime' | 'socAfter'>[];
+}
+
 type ControlActionRow = {
   timestamp: string;
   slot_time: string | null;
@@ -134,6 +141,24 @@ export function readPastDispatchSlots(priceDate: string): DispatchSlot[] {
       }
     }
     return past;
+  });
+}
+
+/** Full optimizer snapshots for reconstructing the plan active at each historical slot. */
+export function readHistoricalOptimizerRuns(priceDate: string): HistoricalOptimizerRun[] {
+  return readOrFallback([] as HistoricalOptimizerRun[], (handle) => {
+    const rows = handle
+      .prepare(
+        `SELECT logged_at, start_soc_kwh, inputs_json, dispatch_json
+         FROM optimizer_runs WHERE price_date = ? ORDER BY id ASC`,
+      )
+      .all(priceDate) as { logged_at: string; start_soc_kwh: number; inputs_json: string; dispatch_json: string }[];
+    return rows.map((row) => ({
+      loggedAt: row.logged_at,
+      startSocKwh: row.start_soc_kwh,
+      inputs: JSON.parse(row.inputs_json) as OptimizerSlot[],
+      dispatch: JSON.parse(row.dispatch_json) as Pick<DispatchSlot, 'startTime' | 'socAfter'>[],
+    }));
   });
 }
 

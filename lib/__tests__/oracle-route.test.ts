@@ -25,6 +25,7 @@ vi.mock('../telemetry', () => ({
   readOracleReadings: vi.fn(),
   readArmedEvents: vi.fn(),
   readPriceSnapshot: vi.fn(),
+  readHistoricalOptimizerRuns: vi.fn(() => []),
   readOracleDates: vi.fn(),
   // Defaults to "nothing persisted yet": every day in the sweep falls through to a fresh
   // computeOracleDay call, matching these tests' original assumption from before the shadow

@@ -23,6 +23,7 @@ import {
   readOracleReadings,
   readArmedEvents,
   readPriceSnapshot,
+  readHistoricalOptimizerRuns,
   readOracleDates,
   readRecentOracleDays,
   readDayAheadDispatch,
@@ -161,6 +162,7 @@ function scoreDay(date: string, dry: boolean, shadow = false): DaySummary {
     armedEvents,
     achievedCashOre,
     planDayAheadD,
+    historicalRuns: readHistoricalOptimizerRuns(date),
   });
 
   // Persist the shadow score alongside the row so the Facit can show it without a live

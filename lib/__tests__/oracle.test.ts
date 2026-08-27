@@ -8,8 +8,10 @@ import {
   toOptimizerSlots,
   computeOracleDay,
   windowEnergyBalance,
+  evaluateHistoricalPlanBenchmark,
 } from '../oracle';
 import type { OracleReadingRow, ArmedEventRow, OracleDayInputs } from '../oracle';
+import type { HistoricalOptimizerRun } from '../telemetry/dispatch';
 import { BATTERY_KWH, BATTERY_MIN_SOC_KWH, GRID_KW, BATTERY_MAX_KW } from '../optimizer';
 import type { DispatchSlot } from '../optimizer';
 import { BATTERY_RT_EFF, SKATT_OVERFÖRING } from '../constants';
@@ -359,6 +361,35 @@ function makeInputs(overrides: Partial<OracleDayInputs> = {}): OracleDayInputs {
     ...overrides,
   };
 }
+
+describe('evaluateHistoricalPlanBenchmark', () => {
+  it('replays plan deltas from the logged decision SoC onto the real start SoC', () => {
+    const slots = [0, 1].map((i) => ({
+      startTime: `2026-06-29T0${i}:00:00`,
+      buyPrice: 100,
+      sellPrice: 100,
+      solarKwh: 0,
+      consumptionKwh: 0,
+    }));
+    const runs: HistoricalOptimizerRun[] = [
+      {
+        loggedAt: '2026-06-28T22:00:00.000Z',
+        startSocKwh: 7,
+        inputs: slots,
+        dispatch: [
+          { startTime: slots[0].startTime, socAfter: 8 },
+          { startTime: slots[1].startTime, socAfter: 7 },
+        ],
+      },
+    ];
+
+    const result = evaluateHistoricalPlanBenchmark(slots, runs, 5, () => 5);
+
+    expect(result?.coveredSlots).toBe(2);
+    expect(result?.coverage).toBe(1);
+    expect(result?.valueOre).toBeLessThan(0);
+  });
+});
 
 describe('computeOracleDay', () => {
   it('flat prices + idle battery ⇒ ~zero regret (the continuation credit at work)', () => {

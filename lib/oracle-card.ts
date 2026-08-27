@@ -24,6 +24,8 @@ export interface OracleCardData {
   latest: OracleTrendDay; // most recent status='ok' day — the headline
   latestIntradayKr: number | null; // regret split for the headline day
   latestCarryKr: number | null;
+  latestInformedBenchmarkKr: number | null;
+  latestInformedBenchmarkRegretKr: number | null;
   medianRegretKr: number; // over the ok days in the window
   medianCapturedPct: number | null;
   okDays: number; // how many days the medians rest on
@@ -85,6 +87,10 @@ export function buildOracleCardData(rows: OracleDaySummaryRow[]): OracleCardData
     latest: toTrendDay(latestRow),
     latestIntradayKr: latestRow.regretIntradayOre == null ? null : latestRow.regretIntradayOre / 100,
     latestCarryKr: latestRow.regretCarryOre == null ? null : latestRow.regretCarryOre / 100,
+    latestInformedBenchmarkKr:
+      latestRow.informedBenchmarkOre == null ? null : latestRow.informedBenchmarkOre / 100,
+    latestInformedBenchmarkRegretKr:
+      latestRow.informedBenchmarkRegretOre == null ? null : latestRow.informedBenchmarkRegretOre / 100,
     medianRegretKr: median(okRows.map((r) => r.regretOre as number)) / 100,
     medianCapturedPct: captured.length ? median(captured) : null,
     okDays: okRows.length,

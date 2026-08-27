@@ -183,6 +183,16 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
             />
             <Tile label={`Median · ${data.okDays} dygn`} value={kr(data.medianRegretKr)} caption="tappat per dygn" />
             <Tile
+              label={`Planbenchmark · ${dayLabel(data.latest.date)}`}
+              value={data.latestInformedBenchmarkKr == null ? '–' : kr(data.latestInformedBenchmarkKr)}
+              caption="med dåtidens info"
+              sub={
+                data.latestInformedBenchmarkRegretKr == null
+                  ? undefined
+                  : `${kr(data.latestInformedBenchmarkRegretKr)} över uppnått`
+              }
+            />
+            <Tile
               label="Fångat värde"
               value={data.medianCapturedPct == null ? '–' : `${Math.round(data.medianCapturedPct)} %`}
               caption="av teoretiskt max"
@@ -291,8 +301,10 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
         style={{ borderColor: 'var(--divider)', color: 'var(--text-muted)' }}
       >
         Facit = bästa möjliga styrning beräknad i efterhand med facit i hand (verkliga priser, sol och
-        förbrukning). Ett dygn utvärderas när nästa dygn är komplett, så siffrorna släpar ~2 dygn.
-        Gråa staplar = dygn som inte kan jämföras rättvist (ej skarp styrning eller datalucka).
+        förbrukning). Planbenchmark = värdet av den plan som faktiskt var aktiv med den information
+        som fanns vid beslutet, utvärderad mot det verkliga utfallet. Ett dygn utvärderas när nästa
+        dygn är komplett, så siffrorna släpar ~2 dygn. Gråa staplar = dygn som inte kan jämföras
+        rättvist (ej skarp styrning eller datalucka).
       </div>
     </div>
   );

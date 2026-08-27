@@ -55,6 +55,7 @@ import {
   GRID_KW,
 } from './optimizer';
 import type { OptimizerSlot, DispatchSlot } from './optimizer';
+import type { HistoricalOptimizerRun } from './telemetry/dispatch';
 import type { PriceSlot } from './prices';
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH, SKATT_OVERFÖRING } from './constants';
 
@@ -493,6 +494,64 @@ export function toOptimizerSlots(priceSlots: PriceSlot[], actuals: SlotActuals):
   }));
 }
 
+/** Replays the effective historical plans, preserving only information logged before each slot. */
+function historicalPlanTrajectory(
+  slots: OptimizerSlot[],
+  runs: HistoricalOptimizerRun[] | undefined,
+  startSoc: number,
+  actualSocAtEnd: (index: number) => number | null,
+): { trajectory: { socAfter: number }[]; coveredSlots: number } {
+  const planned = new Map<string, { delta: number; runKey: string }>();
+  for (let r = 0; r < (runs?.length ?? 0); r++) {
+    const run = runs![r];
+    const nextStart = runs![r + 1]?.dispatch[0]?.startTime ?? '\uffff';
+    let previousPlanned = run.startSocKwh;
+    const count = Math.min(run.inputs.length, run.dispatch.length);
+    for (let i = 0; i < count; i++) {
+      const slot = run.inputs[i];
+      const decision = run.dispatch[i];
+      if (slot.startTime >= nextStart) break;
+      const delta = decision.socAfter - previousPlanned;
+      previousPlanned = decision.socAfter;
+      planned.set(slot.startTime, { delta, runKey: `${r}` });
+    }
+  }
+
+  let soc = startSoc;
+  const trajectory: { socAfter: number }[] = [];
+  let coveredSlots = 0;
+  for (let i = 0; i < slots.length; i++) {
+    const plan = planned.get(slots[i].startTime);
+    if (plan) {
+      soc += plan.delta;
+      coveredSlots++;
+    } else {
+      soc = actualSocAtEnd(i) ?? soc;
+    }
+    trajectory.push({ socAfter: soc });
+  }
+  return { trajectory, coveredSlots };
+}
+
+export interface HistoricalPlanBenchmark {
+  valueOre: number;
+  coveredSlots: number;
+  coverage: number;
+}
+
+export function evaluateHistoricalPlanBenchmark(
+  slots: OptimizerSlot[],
+  runs: HistoricalOptimizerRun[] | undefined,
+  startSoc: number,
+  actualSocAtEnd: (index: number) => number | null,
+): HistoricalPlanBenchmark | null {
+  if (!runs?.length || !slots.length) return null;
+  const replay = historicalPlanTrajectory(slots, runs, startSoc, actualSocAtEnd);
+  if (replay.coveredSlots === 0) return null;
+  const value = evaluateDispatch(slots, replay.trajectory, startSoc).valueOre;
+  return { valueOre: value, coveredSlots: replay.coveredSlots, coverage: replay.coveredSlots / slots.length };
+}
+
 export interface OracleDayInputs {
   date: string; // Stockholm day D being scored
   dayStartMs: number; // UTC ms of D's Stockholm midnight (stockholmMidnightUtc)
@@ -505,6 +564,7 @@ export interface OracleDayInputs {
    *  undefined = shadow scoring not requested; null = requested but no qualifying run found
    *  (recorded as a shadowDayAheadSkip diagnostic). */
   planDayAheadD?: DispatchSlot[] | null; // day-D slice of the day-ahead committed plan's dispatch
+  historicalRuns?: HistoricalOptimizerRun[]; // plans logged with the information available at decision time
 }
 
 export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
@@ -635,6 +695,17 @@ export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
   }
 
   const achievedDayValueOre = inputs.achievedCashOre - achievedWearOre;
+  const historicalBenchmark = evaluateHistoricalPlanBenchmark(
+    slotsD,
+    inputs.historicalRuns,
+    startSoc.soc,
+    (index) => socAtInstant(soc, dayStartMs + (index + 1) * SLOT_MS)?.soc ?? null,
+  );
+  if (historicalBenchmark) {
+    diagnostics.informedBenchmarkOre = round1(historicalBenchmark.valueOre);
+    diagnostics.informedBenchmarkCoverage = round3(historicalBenchmark.coverage);
+    diagnostics.informedBenchmarkRegretOre = round1(historicalBenchmark.valueOre - achievedDayValueOre);
+  }
   const achievedTotalOre = achievedDayValueOre + achievedContinuationOre;
   const oracleTotalOre = oracleAll.valueOre;
   const regretOre = oracleTotalOre - achievedTotalOre;
