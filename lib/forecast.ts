@@ -1,5 +1,5 @@
 import { cacheLife } from 'next/cache';
-import { ghiToKwh } from './solar';
+import { ghiToKwh, calibrateForecastKwh } from './solar';
 import { slotIndex } from './slot-utils';
 import { solarCalibrationByMonth } from './consumption-data';
 import { FETCH_TIMEOUT_MS, SITE_LATITUDE, SITE_LONGITUDE, SOLAR_ARRAYS, SOLAR_FORECAST_MODEL } from './constants';
@@ -34,7 +34,7 @@ function parseOpenMeteo(data: { hourly?: { time: string[]; global_tilted_irradia
     const date = times[i].slice(0, 10);
     const hour = labelHour - 1;
     const cal = solarCalibrationByMonth[parseInt(date.slice(5, 7), 10) - 1];
-    const kwhPerSlot = Math.round((ghiToKwh(values[i]) * cal / 4) * 100) / 100;
+    const kwhPerSlot = Math.round((calibrateForecastKwh(ghiToKwh(values[i]) * cal) / 4) * 100) / 100;
     if (!result[date]) result[date] = new Array(96).fill(0);
     for (let minute = 0; minute < 60; minute += 15) result[date][slotIndex(hour, minute)] = kwhPerSlot;
   }
@@ -49,7 +49,7 @@ function parseForecastSolar(data: { result?: { watt_hours_period?: Record<string
     if (labelHour === 0) continue;
     const date = time.slice(0, 10);
     const hour = labelHour - 1;
-    const kwhPerSlot = Math.round((wattHours / 1000 / 4) * 100) / 100;
+    const kwhPerSlot = calibrateForecastKwh(wattHours / 1000 / 4);
     if (!result[date]) result[date] = new Array(96).fill(0);
     for (let minute = 0; minute < 60; minute += 15) result[date][slotIndex(hour, minute)] = kwhPerSlot;
   }
@@ -67,7 +67,7 @@ function parseOpenMeteoMinutely(data: { minutely_15?: { time: string[]; global_t
     const idx = labelIdx - 1;
     const cal = solarCalibrationByMonth[parseInt(date.slice(5, 7), 10) - 1];
     if (!result[date]) result[date] = new Array(96).fill(0);
-    result[date][idx] = Math.round((ghiToKwh(values[i]) * cal / 4) * 100) / 100;
+    result[date][idx] = Math.round((calibrateForecastKwh(ghiToKwh(values[i]) * cal) / 4) * 100) / 100;
   }
   return result;
 }

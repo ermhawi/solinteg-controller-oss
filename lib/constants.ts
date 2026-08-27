@@ -267,6 +267,9 @@ export const SITE_LONGITUDE = numEnv('SITE_LONGITUDE', 11.78);
  */
 export const SOLAR_FORECAST_MODEL = process.env.SOLAR_FORECAST_MODEL ?? 'metno_nordic';
 
+/** Conservative multiplier for live solar forecasts, calibrated from recent site telemetry. */
+export const SOLAR_FORECAST_BIAS_FACTOR = numEnv('SOLAR_FORECAST_BIAS_FACTOR', 1.75);
+
 // ---- Solar installation ----
 // tiltDeg/azimuthDeg are sent to Open-Meteo's global_tilted_irradiance forecast. They are also
 // used when documenting and calibrating the array. performanceRatio now represents the remaining

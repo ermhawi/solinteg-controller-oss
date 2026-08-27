@@ -1,5 +1,5 @@
 import { avgGhiByMonthHour } from './irradiance-data';
-import { SOLAR_ARRAYS } from './constants';
+import { SOLAR_FORECAST_BIAS_FACTOR, SOLAR_ARRAYS } from './constants';
 import { solarCalibrationByMonth } from './consumption-data';
 
 /** Convert panel-plane irradiance in W/m² to modeled array energy in kWh. */
@@ -10,7 +10,11 @@ export function ghiToKwh(irradianceWm2: number): number {
   );
 }
 
-// Returns 24 values (indexed by UTC hour) for the given 1-based month.
+export function calibrateForecastKwh(kwh: number): number {
+  return Math.max(0, kwh * SOLAR_FORECAST_BIAS_FACTOR);
+}
+
+
 // Values are calibrated against 3 years of actual inverter data so that the
 // monthly total matches observed production rather than the raw GHI-model estimate.
 export function getSolarProfileByMonth(month: number): number[] {

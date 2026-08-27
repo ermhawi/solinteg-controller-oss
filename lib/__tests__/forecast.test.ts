@@ -1,9 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ghiToKwh } from '../solar';
+import { ghiToKwh, calibrateForecastKwh } from '../solar';
 import { slotIndex } from '../slot-utils';
 import { solarCalibrationByMonth } from '../consumption-data';
 
-// fetchSolarForecast/fetchDailyMeanTemp are 'use cache' Server Components-only functions that
+describe('solar forecast calibration', () => {
+  it('applies the configured conservative bias correction', () => {
+    expect(calibrateForecastKwh(1)).toBeCloseTo(1.75, 6);
+  });
+});
+
+
 // hit Open-Meteo directly — untested until now. This is the exact file that shipped the
 // hour-label-shift bug fixed 2026-07-20: Open-Meteo's hourly label is the average of the
 // PRECEDING interval, so a naive same-hour mapping silently misattributes every slot by an
@@ -40,7 +46,7 @@ function openMeteoMinutely15Response(times: string[], irradiance: number[]) {
 
 function expectedKwhPerSlot(ghiWm2: number, month: number): number {
   const cal = solarCalibrationByMonth[month - 1];
-  return Math.round(((ghiToKwh(ghiWm2) * cal) / 4) * 100) / 100;
+  return Math.round((calibrateForecastKwh(ghiToKwh(ghiWm2) * cal) / 4) * 100) / 100;
 }
 
 beforeEach(() => {
