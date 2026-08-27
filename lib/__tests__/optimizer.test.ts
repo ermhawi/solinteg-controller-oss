@@ -6,6 +6,7 @@ import {
   GRID_KW,
   BATTERY_MAX_KW,
   BATTERY_MIN_SOC_KWH,
+  planningPrices,
 } from '../optimizer';
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
 import type { OptimizerSlot } from '../optimizer';
@@ -37,6 +38,13 @@ function uniformDay(buyPrice: number, sellPrice: number): OptimizerSlot[] {
 }
 
 describe('optimizeDispatch', () => {
+  it('applies forecast risk margin only to planning prices', () => {
+    const actual = makeSlot(1, 0, { buyPrice: 80, sellPrice: 120, priceSource: 'actual' });
+    const forecast = makeSlot(1, 1, { buyPrice: 80, sellPrice: 120, priceSource: 'forecast' });
+    expect(planningPrices(actual, 10)).toEqual({ buy: 80, sell: 120 });
+    expect(planningPrices(forecast, 10)).toEqual({ buy: 90, sell: 110 });
+  });
+
   // ── Shape & hard constraints ──────────────────────────────────────────────
   it('returns empty array for empty input', () => {
     expect(optimizeDispatch([])).toEqual([]);

@@ -128,6 +128,9 @@ export const LOAD_FORECAST_MARGIN = numEnv('SOLINTEG_LOAD_FORECAST_MARGIN', 1.15
  */
 export const DEFERRAL_RATE_ORE_PER_KWH_HOUR = numEnv('SOLINTEG_DEFERRAL_RATE_ORE', 0.4);
 
+/** Premium applied only to forecast slots while optimizing; logged prices remain untouched. */
+export const FORECAST_RISK_PREMIUM_ORE = numEnv('SOLINTEG_FORECAST_RISK_PREMIUM_ORE', 10);
+
 /**
  * Hard cap (öre, whole-plan total) on the real value the deferral bias may give up.
  * optimizeDispatch runs the DP twice when deferral is on — with and without the bias —

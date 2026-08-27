@@ -15,6 +15,7 @@ import {
   LOAD_FORECAST_MARGIN,
   DEFERRAL_RATE_ORE_PER_KWH_HOUR,
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+  FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
 } from './constants';
 
@@ -211,6 +212,7 @@ export async function producePlan(): Promise<PlanResult> {
         holdEnabled:
           process.env.SOLINTEG_HOLD_ENABLED === '1' &&
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
+        forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
       });
       logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
     } catch (err) {

@@ -183,6 +183,13 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
  *   hindsight, where deferral/uncertainty have no meaning — biasing it would poison the
  *   regret-≥0 invariant (lib/oracle.ts). Only lib/plan.ts sets them, for live plans.
  */
+export function planningPrices(slot: Pick<OptimizerSlot, 'buyPrice' | 'sellPrice' | 'priceSource'>, forecastRiskPremiumOre: number) {
+  if (slot.priceSource !== 'forecast' || forecastRiskPremiumOre <= 0) {
+    return { buy: slot.buyPrice, sell: slot.sellPrice };
+  }
+  return { buy: slot.buyPrice + forecastRiskPremiumOre, sell: slot.sellPrice - forecastRiskPremiumOre };
+}
+
 export function optimizeDispatch(
   slots: OptimizerSlot[],
   startSoc: number = BATTERY_KWH / 2,
@@ -193,6 +200,7 @@ export function optimizeDispatch(
     maxDeferralSacrificeOre?: number;
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
+    forecastRiskPremiumOre?: number;
   },
 ): DispatchSlot[] {
   if ((opts?.deferralRateOrePerKwhHour ?? 0) > 0 && slots.length > 0) {
@@ -220,6 +228,7 @@ function dpCore(
     deferralRateOrePerKwhHour?: number;
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
+    forecastRiskPremiumOre?: number;
   },
 ): DispatchSlot[] {
   const n = slots.length;
@@ -317,8 +326,7 @@ function dpCore(
   for (let i = n - 1; i >= 0; i--) {
     const cur = new Float64Array(SOC_LEVELS);
     const ch = new Int16Array(SOC_LEVELS);
-    const buy = slots[i].buyPrice;
-    const sell = slots[i].sellPrice;
+    const { buy, sell } = planningPrices(slots[i], opts?.forecastRiskPremiumOre ?? 0);
     const sr = solarRem[i];
     const lr = loadRem[i];
     const autoInput = autoChargeInputKwh[i];

@@ -98,6 +98,7 @@ export interface ChartPoint {
   time: string;
   buy: number; // full consumer buy price: priceIncludingTaxAndSurcharge + skatt/överföring
   sell: number; // the sell price (spot + EXPORT_BONUS_ORE nätnytta) — the export/sell price
+  priceSource?: 'actual' | 'forecast';
   socPct: number | null; // planned battery SoC % after this slot (null when there is no plan)
   actualSocPct: number | null; // real measured SoC %, averaged into this slot (null: future, or no readings)
   solarKwh: number;
@@ -260,6 +261,7 @@ export function buildChartData(
       time: slot.startTime,
       buy: slot.priceIncludingTaxAndSurcharge + skattOverforing,
       sell: slot.price,
+      priceSource: slot.source,
       socPct: dispatch
         ? Math.round(((socAtStartByTime.get(slot.startTime) ?? dispatch.socAfter) / batteryKwh) * 1000) / 10
         : null,

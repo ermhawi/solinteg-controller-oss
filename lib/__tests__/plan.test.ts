@@ -69,6 +69,7 @@ import {
   LOAD_FORECAST_MARGIN,
   DEFERRAL_RATE_ORE_PER_KWH_HOUR,
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+  FORECAST_RISK_PREMIUM_ORE,
   LIVE_LOAD_PROFILE_DAYS,
 } from '../constants';
 import { producePlan } from '../plan';
@@ -172,6 +173,7 @@ describe('producePlan — happy path wiring', () => {
       deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
       solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
       holdEnabled: false,
+      forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
     });
 
     expect(logPriceSnapshot).toHaveBeenCalledWith(PRICE_DATA);

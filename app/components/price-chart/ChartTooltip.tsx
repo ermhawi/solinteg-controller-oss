@@ -107,8 +107,8 @@ export default function ChartTooltip({
         )}
       </div>
 
-      <TooltipRow color="var(--color-buy)" label="Köp" value={`${point.buy.toFixed(1)} öre/kWh`} />
-      <TooltipRow color="var(--color-sell)" label="Sälj" value={`${point.sell.toFixed(1)} öre/kWh`} />
+      <TooltipRow color="var(--color-buy)" label={`Köp${point.priceSource === 'forecast' ? ' (prognos)' : ''}`} value={`${point.buy.toFixed(1)} öre/kWh`} />
+      <TooltipRow color="var(--color-sell)" label={`Sälj${point.priceSource === 'forecast' ? ' (prognos)' : ''}`} value={`${point.sell.toFixed(1)} öre/kWh`} />
       <TooltipRow
         color="var(--color-solar)"
         label={point.solarSource === 'forecast' ? 'Sol (prognos)' : 'Sol (typisk)'}
