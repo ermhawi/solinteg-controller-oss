@@ -5,6 +5,7 @@ import {
   computeMaxAge,
   currentSlotIndexInPrices,
   toSlot,
+  forecastToSlot,
   fetchDay,
   mergePriceHorizon,
 } from '../prices';
@@ -78,8 +79,27 @@ describe('stockholmToUtc', () => {
   });
 });
 
-// ─── computeMaxAge ────────────────────────────────────────────────────────────
+describe('forecastToSlot', () => {
+  it('converts PlaneraElen EUR/MWh payloads to öre/kWh', () => {
+    const slot = forecastToSlot({
+      time: '2026-08-28T23:45:00Z',
+      price: 19.59,
+      source: 'forecast',
+    });
+    expect(slot.startTime).toBe('2026-08-29T01:45:00');
+    expect(slot.price).toBeCloseTo(7.06, 2);
+  });
+  it('applies the EUR/SEK exchange rate before converting to öre/kWh', () => {
+    const slot = forecastToSlot({
+      time: '2026-08-28T23:45:00Z',
+      price: 40,
+      source: 'forecast',
+    }, 11.5);
+    expect(slot.price).toBeCloseTo(51.1, 2);
+  });
+});
 
+// ─── computeMaxAge ────────────────────────────────────────────────────────────
 describe('computeMaxAge', () => {
   it('returns seconds until midnight when tomorrow prices are available', () => {
     // now = 22:00 UTC = midnight Stockholm (CEST), so midnight is at 22:00 UTC

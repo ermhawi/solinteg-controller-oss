@@ -1,4 +1,5 @@
 import { cacheLife } from 'next/cache';
+import { request as httpsRequest } from 'node:https';
 import { VAT_RATE, SUPPLIER_SURCHARGE_ORE, PRICE_ZONE, EXPORT_BONUS_ORE, FETCH_TIMEOUT_MS } from './constants';
 
 // Raw Nord Pool day-ahead spot prices per bidding zone (SE2 by default), 15-min resolution, free & no key.
@@ -58,14 +59,14 @@ export function toSlot(p: ElprisSlot): PriceSlot {
   };
 }
 
-export function forecastToSlot(p: PlaneraPriceSlot): PriceSlot {
+export function forecastToSlot(p: PlaneraPriceSlot, eurSekRate = 1): PriceSlot {
   const instant = new Date(p.time);
   const local = stockholmParts(instant);
   const end = new Date(instant.getTime() + 15 * 60_000);
   const endLocal = stockholmParts(end);
   const localTime = (parts: ReturnType<typeof stockholmParts>) =>
     `${parts.dateStr}T${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}:00`;
-  const spot = Math.round(p.price * 0.1 * 100) / 100; // EUR/MWh → öre/kWh
+  const spot = Math.round(p.price * eurSekRate * 0.1 * 100) / 100; // EUR/MWh → SEK/MWh → öre/kWh
   return {
     startTime: localTime(local),
     endTime: localTime(endLocal),
@@ -95,20 +96,71 @@ export function mergePriceHorizon(
   };
 }
 
+/**
+ * Fetch PlaneraElen without Next's patched fetch implementation. This is deliberately a direct
+ * Node HTTPS request: the forecast changes during the day, and the normal fetch cache returned an
+ * older forecast even when the route itself was dynamic and marked no-store.
+ */
 async function fetchPlaneraForecast(): Promise<PriceSlot[]> {
-  const res = await fetch(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}&_=${Date.now()}`, {
-    headers: {
-      'User-Agent': 'solinteg-controller',
-      'Cache-Control': 'no-cache',
-      Pragma: 'no-cache',
-    },
+  const url = new URL(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}`);
+  url.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const payload = await new Promise<PlaneraResponse>((resolve, reject) => {
+    const req = httpsRequest(
+      url,
+      {
+        method: 'GET',
+        headers: {
+          'User-Agent': 'solinteg-controller',
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+          Accept: 'application/json',
+        },
+        signal,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          if ((res.statusCode ?? 500) < 200 || (res.statusCode ?? 500) >= 300) {
+            reject(new Error(`PlaneraElen forecast failed: HTTP ${res.statusCode ?? 500}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body) as PlaneraResponse);
+          } catch {
+            reject(new Error('PlaneraElen forecast returned invalid JSON'));
+          }
+        });
+        res.on('error', reject);
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+  if (!Array.isArray(payload.data)) throw new Error('PlaneraElen forecast response has no data array');
+  const forecast = payload.data.filter((p) => p.source === 'forecast');
+  let eurSekRate = 11.5;
+  try {
+    eurSekRate = await fetchEurSekRate();
+  } catch (err) {
+    console.warn('EUR/SEK rate unavailable; using fallback 11.5:', err);
+  }
+  return forecast.map((p) => forecastToSlot(p, eurSekRate));
+}
+
+async function fetchEurSekRate(): Promise<number> {
+  const res = await fetch('https://api.frankfurter.dev/v1/latest?from=EUR&to=SEK', {
+    headers: { Accept: 'application/json' },
     cache: 'no-store',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`PlaneraElen forecast failed: HTTP ${res.status}`);
-  const payload = (await res.json()) as PlaneraResponse;
-  if (!Array.isArray(payload.data)) throw new Error('PlaneraElen forecast response has no data array');
-  return payload.data.filter((p) => p.source === 'forecast').map(forecastToSlot);
+  if (!res.ok) throw new Error(`EUR/SEK rate failed: HTTP ${res.status}`);
+  const payload = (await res.json()) as { rates?: { SEK?: number } };
+  const rate = payload.rates?.SEK;
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) throw new Error('EUR/SEK response has no valid rate');
+  return rate;
 }
 
 /** Fetch one Stockholm day of 15-min slots, or null if not published yet (404 before release). */
