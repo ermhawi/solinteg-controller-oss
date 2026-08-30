@@ -97,7 +97,11 @@ export function mergePriceHorizon(
 
 async function fetchPlaneraForecast(): Promise<PriceSlot[]> {
   const res = await fetch(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}&_=${Date.now()}`, {
-    headers: { 'User-Agent': 'solinteg-controller' },
+    headers: {
+      'User-Agent': 'solinteg-controller',
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    },
     cache: 'no-store',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
