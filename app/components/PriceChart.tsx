@@ -170,8 +170,16 @@ export default function PriceChart({
   const fullEnd = Math.max(0, count - 1);
   const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
   const todayEnd = tomorrowIndex > 0 ? tomorrowIndex - 1 : fullEnd;
+  // The first forecast slot is the exact handover from published day-ahead prices to
+  // PlaneraElen's estimate. Keep this derived from provenance, not from a date boundary:
+  // the forecast may begin part-way through a day when only some actual slots are available.
+  const forecastStartIndex = chartData.findIndex((point) => point.priceSource === 'forecast');
+  const hasMixedPriceSources = forecastStartIndex > 0;
   const viewStartIndex = Math.max(0, Math.min(zoomRange?.start ?? 0, fullEnd));
   const viewEndIndex = Math.max(viewStartIndex, Math.min(zoomRange?.end ?? fullEnd, fullEnd));
+  const forecastStartVisible =
+    hasMixedPriceSources && forecastStartIndex <= viewEndIndex;
+  const forecastOverlayStartIndex = Math.max(viewStartIndex, forecastStartIndex);
 
   // "Now" marker: recomputed every minute so a dashboard left open stays accurate.
   const [nowTime, setNowTime] = useState<string | null>(null);
@@ -385,7 +393,7 @@ export default function PriceChart({
         )}
       </div>
 
-      <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} />
+      <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasMixedPriceSources={hasMixedPriceSources} />
 
       <div className="mb-2 flex items-center justify-end gap-1.5" aria-label="Zooma grafens tidsintervall">
         <span className="mr-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
@@ -519,6 +527,38 @@ export default function PriceChart({
             socActualRuns.map((run, i) => (
               <path key={`actual-${i}`} d={buildLinePath(run)} fill="none" stroke="var(--color-soc)" strokeWidth={2.4} strokeLinecap="round" />
             ))}
+
+          {/* actual/forecast handover — provenance boundary, independent of the day divider */}
+          {forecastStartVisible && (() => {
+            const xf = xAt(forecastOverlayStartIndex);
+            if (xf == null) return null;
+            return (
+              <g pointerEvents="none">
+                <rect
+                  x={xf}
+                  y={geo.padT}
+                  width={Math.max(0, geo.padL + geo.plotW - xf)}
+                  height={geo.baseY - geo.padT}
+                  fill="var(--color-now)"
+                  opacity={0.045}
+                />
+                <line
+                  x1={xf}
+                  y1={geo.padT}
+                  x2={xf}
+                  y2={geo.baseY}
+                  stroke="var(--color-now)"
+                  strokeWidth={2}
+                  strokeDasharray="5 4"
+                  opacity={0.9}
+                />
+                <rect x={xf + 5} y={geo.padT + 2} width={92} height={17} rx={5} fill="var(--color-now)" opacity={0.94} />
+                <text x={xf + 51} y={geo.padT + 14} textAnchor="middle" fontSize={9.5} fontWeight={700} fill="var(--color-now-text)" style={{ fontFamily: 'var(--font-body)' }}>
+                  Prognos börjar
+                </text>
+              </g>
+            );
+          })()}
 
           {/* price lines — sell then buy, buy on top */}
           <path

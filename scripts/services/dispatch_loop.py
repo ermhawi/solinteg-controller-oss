@@ -242,6 +242,8 @@ from inverter_control import (
     force_discharge,
     return_to_auto,
     clamp_power_w,
+    REG_BATT_POWER_TARGET,
+    target_raw_for_action,
 )
 
 log = logging.getLogger("solinteg.dispatch")
@@ -403,9 +405,56 @@ def init_db(path: str) -> sqlite3.Connection:
         con.execute("ALTER TABLE control_actions ADD COLUMN detail_json TEXT")
     except sqlite3.OperationalError:
         pass  # already applied
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS control_readbacks (
+            id                   INTEGER PRIMARY KEY,
+            timestamp            TEXT NOT NULL,
+            slot_time            TEXT,
+            planned_action       TEXT NOT NULL,
+            requested_power_w    INTEGER NOT NULL,
+            target_raw           INTEGER,
+            target_readback_raw  INTEGER,
+            mode_raw             INTEGER,
+            battery_w            INTEGER,
+            soc_pct              REAL,
+            readback_ok          INTEGER NOT NULL,
+            error                TEXT
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_readback_ts ON control_readbacks(timestamp)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_control_ts ON control_actions(timestamp)")
     con.commit()
     return con
+
+
+def log_control_readback(con: sqlite3.Connection, slot_time, planned_action: str,
+                         requested_power_w: int, inv) -> None:
+    """Persist the requested save target beside the inverter's readback.
+
+    This is deliberately separate from `readings`: it records the control boundary, while
+    readings remains the regular poller's time series. A failed read is retained as a row so
+    missing verification is visible rather than looking like a healthy zero.
+    """
+    target_raw = target_raw_for_action(planned_action, requested_power_w)
+    target_readback_raw = mode_raw = battery_w = soc_pct = None
+    error = None
+    try:
+        target_readback_raw = inv.read_s16(REG_BATT_POWER_TARGET)
+        mode_raw = inv.work_mode()
+        battery_w = inv.battery_power_w()
+        soc_pct = inv.soc_pct()
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)
+    con.execute(
+        """INSERT INTO control_readbacks
+           (timestamp, slot_time, planned_action, requested_power_w, target_raw,
+            target_readback_raw, mode_raw, battery_w, soc_pct, readback_ok, error)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (datetime.now(UTC).isoformat(), slot_time, planned_action, int(requested_power_w),
+         target_raw, target_readback_raw, mode_raw, battery_w, soc_pct,
+         1 if error is None else 0, error),
+    )
+    con.commit()
 
 
 def log_action(con: sqlite3.Connection, slot_time, planned_action, power_w, outcome, detail="",
@@ -995,6 +1044,13 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             if inv is None:
                 inv = Inverter()
             apply_target(inv, applied_action, applied_power)
+            if applied_action == "discharge" and "battery_save_w" in numbers:
+                try:
+                    log_control_readback(con, slot_time, applied_action, applied_power, inv)
+                except Exception as exc:  # noqa: BLE001
+                    # Readback telemetry is diagnostic only; never undo a successful inverter command
+                    # because SQLite is busy, read-only, or temporarily unavailable.
+                    log.warning("control readback logging failed for slot=%s: %s", slot_time, exc)
         loop_in_auto = applied_action == "idle"
         log_action(con, slot_time, applied_action, applied_power, outcome, detail, detail_json=numbers)
         log.info("slot=%s action=%s power=%dW armed=%s -> %s%s",

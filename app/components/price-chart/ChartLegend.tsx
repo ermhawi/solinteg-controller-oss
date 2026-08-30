@@ -39,10 +39,12 @@ export default function ChartLegend({
   layers,
   setLayers,
   hasPlan,
+  hasMixedPriceSources,
 }: {
   layers: ChartLayers;
   setLayers: React.Dispatch<React.SetStateAction<ChartLayers>>;
   hasPlan: boolean;
+  hasMixedPriceSources: boolean;
 }) {
   return (
     <div className="mb-1.5 flex flex-wrap items-center gap-3">
@@ -57,6 +59,19 @@ export default function ChartLegend({
         <span className="inline-block h-[3px] w-[18px] rounded" style={{ background: 'var(--color-sell)' }} />
         Sälj
       </span>
+      {hasMixedPriceSources && (
+        <>
+          <span className="mx-0.5 h-4 w-px" style={{ background: 'var(--divider)' }} />
+          <span className="flex items-center gap-1.5 text-xs font-semibold">
+            <span className="inline-block h-3 w-px border-l-2 border-dashed" style={{ borderColor: 'var(--color-now)' }} />
+            <span>Faktiskt pris</span>
+          </span>
+          <span className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
+            <span className="inline-block h-3 w-[18px] rounded-sm" style={{ background: 'color-mix(in srgb, var(--color-now) 12%, transparent)' }} />
+            Prognos
+          </span>
+        </>
+      )}
 
       <span className="mx-0.5 h-4 w-px" style={{ background: 'var(--divider)' }} />
 

@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -483,6 +484,24 @@ class ApplyDecisionTests(unittest.TestCase):
         return self.con.execute(
             "SELECT planned_action, power_w, outcome, detail FROM control_actions").fetchall()
 
+    def test_readback_database_failure_does_not_revert_applied_discharge(self):
+        original = dl.log_control_readback
+        dl.log_control_readback = lambda *args: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked"))
+        original_sign = ic.SIGN
+        ic.SIGN = "neg_charge"
+        try:
+            outcome, in_auto = dl.apply_decision(
+                self.con, "t0", "discharge", 3000, expected_soc_kwh=None,
+                solar_skipped_now=False, detail="save", numbers={"battery_save_w": 3000},
+                loop_in_auto=False,
+            )
+        finally:
+            dl.log_control_readback = original
+            ic.SIGN = original_sign
+        self.assertEqual(outcome, "applied")
+        self.assertFalse(in_auto)
+        self.assertEqual(self.applied, [("discharge", 3000)])
+
     def test_normal_charge_applies_and_logs_one_row(self):
         # expected SoC matches actual (50% of 25.6 = 12.8 kWh) — no drift, no guard.
         outcome, in_auto = dl.apply_decision(
@@ -590,6 +609,29 @@ class CheckSocDivergenceTests(unittest.TestCase):
         self.assertEqual(numbers["soc_drift_limit_kwh"], dl.SOC_DIVERGENCE_KWH)
         self.assertEqual(self.replans, [])
         self.assertIn("drift", detail)
+
+    def test_control_readback_is_persisted_with_command_and_actual_registers(self):
+        with tempfile.TemporaryDirectory() as td:
+            con = dl.init_db(Path(td) / "telemetry.db")
+            class ReadbackFake:
+                def soc_pct(self): return 50.0
+                def battery_power_w(self): return 228
+                def work_mode(self): return 0x303
+                def read_s16(self, addr): return 5
+            original_sign = ic.SIGN
+            ic.SIGN = "neg_charge"
+            try:
+                dl.log_control_readback(
+                    con, "2026-08-30T06:15:00", "discharge", 50, ReadbackFake(),
+                )
+            finally:
+                ic.SIGN = original_sign
+            row = con.execute(
+                "SELECT slot_time, requested_power_w, target_raw, target_readback_raw, mode_raw, battery_w, soc_pct "
+                "FROM control_readbacks"
+            ).fetchone()
+            self.assertEqual(row, ("2026-08-30T06:15:00", 50, 5, 5, 0x303, 228, 50.0))
+            con.close()
 
     def test_drift_past_the_replan_threshold_asks_for_a_plan_but_still_applies(self):
         # Between REPLAN_DRIFT_KWH (1.5) and SOC_DIVERGENCE_KWH (3.0): nudge, don't skip.

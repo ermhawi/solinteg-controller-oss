@@ -152,6 +152,25 @@ CREATE TABLE IF NOT EXISTS control_actions (
 );
 CREATE INDEX IF NOT EXISTS idx_control_ts ON control_actions(timestamp);
 
+-- Readback captured at active battery-save dispatch boundaries. This deliberately stays separate
+-- from the 30-second poller readings: it pairs the requested target with the inverter's immediate
+-- register readback so command-vs-effect can be diagnosed historically.
+CREATE TABLE IF NOT EXISTS control_readbacks (
+    id                  INTEGER PRIMARY KEY,
+    timestamp           TEXT NOT NULL,
+    slot_time           TEXT,
+    planned_action      TEXT NOT NULL,
+    requested_power_w   INTEGER NOT NULL,
+    target_raw          INTEGER,
+    target_readback_raw INTEGER,
+    mode_raw            INTEGER,
+    battery_w           INTEGER,
+    soc_pct             REAL,
+    readback_ok         INTEGER NOT NULL,
+    error               TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_readback_ts ON control_readbacks(timestamp);
+
 -- Hindsight-oracle scoring, one row per completed Stockholm day D — computed by lib/oracle.ts,
 -- written via /api/oracle, triggered by solinteg-oracle.timer.
 -- Day D is scored inside a 48 h window ending after D+1 so the oracle plans across midnight

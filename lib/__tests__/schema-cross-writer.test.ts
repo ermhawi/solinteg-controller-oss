@@ -1,6 +1,6 @@
 /**
  * deploy/schema.sql is declared the single source of truth for telemetry.db's shape, but it is
- * never actually applied: seven tables are created by five different processes, each running
+ * never actually applied: eight tables are created by five different processes, each running
  * its own inline `CREATE TABLE IF NOT EXISTS` at startup (four in lib/telemetry/core.ts, the
  * rest across scripts/services/*.py). The only thing keeping those copies honest has been a
  * "keep this in sync" comment on each one.
@@ -35,7 +35,7 @@ const WRITERS: { file: string; tables: string[] }[] = [
   { file: 'lib/telemetry/core.ts', tables: ['price_snapshots', 'optimizer_runs', 'solar_forecasts', 'oracle_daily'] },
   { file: 'scripts/services/modbus_poller.py', tables: ['readings'] },
   { file: 'scripts/services/weather_poller.py', tables: ['weather'] },
-  { file: 'scripts/services/dispatch_loop.py', tables: ['control_actions'] },
+  { file: 'scripts/services/dispatch_loop.py', tables: ['control_actions', 'control_readbacks'] },
 ];
 
 const read = (rel: string) => readFileSync(join(repoRoot, rel), 'utf-8');
@@ -76,9 +76,9 @@ function addedColumns(text: string): Map<string, string[]> {
 const canonical = createdColumns(read('deploy/schema.sql'));
 
 describe('deploy/schema.sql covers every telemetry.db table', () => {
-  it('declares all seven tables', () => {
+  it('declares all eight tables', () => {
     expect([...canonical.keys()].sort()).toEqual([
-      'control_actions', 'optimizer_runs', 'oracle_daily',
+      'control_actions', 'control_readbacks', 'optimizer_runs', 'oracle_daily',
       'price_snapshots', 'readings', 'solar_forecasts', 'weather',
     ]);
   });

@@ -199,6 +199,11 @@ def _charge_sign() -> int:
         "50207 sign convention not confirmed. Run scripts/tools/probe_50207_sign.py and "
         "set SOLINTEG_50207_SIGN=neg_charge|pos_charge before forcing charge/discharge."
     )
+def target_raw_for_action(action: str, power_w: int) -> int:
+    """Encode a charge/discharge watt target for signed register 50207."""
+    sign = _charge_sign()
+    magnitude = int(power_w) // 10
+    return sign * magnitude if action == "charge" else -sign * magnitude
 
 
 def restore_ac_limits(inv: Inverter) -> None:
@@ -310,7 +315,7 @@ def force_charge(inv: Inverter, power_w: int) -> None:
         log.info("force_charge: SoC %.1f%% >= ceiling %.1f%% — returning to auto instead", soc, SOC_CEILING_PCT)
         return_to_auto(inv)
         return
-    raw = sign * (power_w // 10)
+    raw = target_raw_for_action("charge", power_w)
     already_set = _already_set_for(inv, priority=0)
     log.info("force_charge: %d W (raw %d), SoC %.1f%%%s", power_w, raw, soc,
              " (fast path — already in EMS charge mode)" if already_set else "")
@@ -339,7 +344,7 @@ def force_discharge(inv: Inverter, power_w: int) -> None:
         log.info("force_discharge: SoC %.1f%% <= floor %.1f%% — returning to auto instead", soc, SOC_FLOOR_PCT)
         return_to_auto(inv)
         return
-    raw = -sign * (power_w // 10)  # discharge = opposite of charge sign
+    raw = target_raw_for_action("discharge", power_w)
     already_set = _already_set_for(inv, priority=1)
     log.info("force_discharge: %d W (raw %d), SoC %.1f%%%s", power_w, raw, soc,
              " (fast path — already in EMS discharge mode)" if already_set else "")

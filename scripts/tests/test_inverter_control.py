@@ -35,6 +35,14 @@ def set_already_in_ems_mode(inv: ic.Inverter, priority: int) -> None:
 
 
 class InverterControlTestCase(unittest.TestCase):
+    def test_target_raw_for_action_matches_charge_sign_convention(self):
+        with mock.patch.object(ic, "SIGN", "neg_charge"):
+            self.assertEqual(ic.target_raw_for_action("charge", 3000), -300)
+            self.assertEqual(ic.target_raw_for_action("discharge", 3000), 300)
+        with mock.patch.object(ic, "SIGN", "pos_charge"):
+            self.assertEqual(ic.target_raw_for_action("charge", 3000), 300)
+            self.assertEqual(ic.target_raw_for_action("discharge", 3000), -300)
+
     def setUp(self):
         self._armed_patch = mock.patch.object(ic, "ARMED", True)
         self._sign_patch = mock.patch.object(ic, "SIGN", "neg_charge")
