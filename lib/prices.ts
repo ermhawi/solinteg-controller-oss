@@ -32,7 +32,8 @@ interface ElprisSlot {
 
 interface PlaneraPriceSlot {
   time: string;
-  price: number; // EUR/MWh
+  // PlaneraElen's payload is EUR/MWh, matching the API metadata.
+  price: number;
   source: 'actual' | 'forecast';
 }
 
@@ -57,7 +58,7 @@ export function toSlot(p: ElprisSlot): PriceSlot {
   };
 }
 
-function forecastToSlot(p: PlaneraPriceSlot): PriceSlot {
+export function forecastToSlot(p: PlaneraPriceSlot): PriceSlot {
   const instant = new Date(p.time);
   const local = stockholmParts(instant);
   const end = new Date(instant.getTime() + 15 * 60_000);
@@ -95,8 +96,9 @@ export function mergePriceHorizon(
 }
 
 async function fetchPlaneraForecast(): Promise<PriceSlot[]> {
-  const res = await fetch(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}`, {
+  const res = await fetch(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}&_=${Date.now()}`, {
     headers: { 'User-Agent': 'solinteg-controller' },
+    cache: 'no-store',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`PlaneraElen forecast failed: HTTP ${res.status}`);
