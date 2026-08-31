@@ -8,6 +8,7 @@ import {
   forecastToSlot,
   fetchDay,
   mergePriceHorizon,
+  isUsablePlaneraSource,
 } from '../prices';
 import { EXPORT_BONUS_ORE, SUPPLIER_SURCHARGE_ORE, VAT_RATE } from '../constants';
 
@@ -76,6 +77,13 @@ describe('stockholmToUtc', () => {
     // Stockholm 13:05 CEST → UTC 11:05
     const result = stockholmToUtc(2026, 5, 15, 2, 13, 5);
     expect(result.toISOString()).toBe('2026-06-15T11:05:00.000Z');
+  });
+});
+
+describe('PlaneraElen source selection', () => {
+  it('keeps actual rows as a fallback when the primary day-ahead feed lags', () => {
+    expect(isUsablePlaneraSource('actual')).toBe(true);
+    expect(isUsablePlaneraSource('forecast')).toBe(true);
   });
 });
 

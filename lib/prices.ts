@@ -42,6 +42,11 @@ interface PlaneraResponse {
   data?: PlaneraPriceSlot[];
 }
 
+/** PlaneraElen's actual day-ahead rows are a valid fallback while the primary feed lags. */
+export function isUsablePlaneraSource(source: PlaneraPriceSlot['source']): boolean {
+  return source === 'actual' || source === 'forecast';
+}
+
 /**
  * Convert an elprisetjustnu slot to our PriceSlot: the tax-inclusive buy price is reconstructed
  * from the raw spot; the sell price is the spot plus the flat grid-export compensation
@@ -101,7 +106,7 @@ export function mergePriceHorizon(
  * Node HTTPS request: the forecast changes during the day, and the normal fetch cache returned an
  * older forecast even when the route itself was dynamic and marked no-store.
  */
-async function fetchPlaneraForecast(): Promise<PriceSlot[]> {
+async function fetchPlaneraPrices(): Promise<PriceSlot[]> {
   const url = new URL(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}`);
   url.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
@@ -140,14 +145,17 @@ async function fetchPlaneraForecast(): Promise<PriceSlot[]> {
     req.end();
   });
   if (!Array.isArray(payload.data)) throw new Error('PlaneraElen forecast response has no data array');
-  const forecast = payload.data.filter((p) => p.source === 'forecast');
+  // Keep both kinds of rows. The primary Nord Pool-derived feed remains authoritative when it
+  // has a slot, but PlaneraElen may publish tomorrow as `actual` before that feed does. Dropping
+  // those rows leaves a hole in the chart and falsely reports that tomorrow is unavailable.
+  const usable = payload.data.filter((p) => isUsablePlaneraSource(p.source));
   let eurSekRate = 11.5;
   try {
     eurSekRate = await fetchEurSekRate();
   } catch (err) {
     console.warn('EUR/SEK rate unavailable; using fallback 11.5:', err);
   }
-  return forecast.map((p) => forecastToSlot(p, eurSekRate));
+  return usable.map((p) => forecastToSlot(p, eurSekRate));
 }
 
 async function fetchEurSekRate(): Promise<number> {
@@ -326,12 +334,14 @@ export async function fetchPricesUncached(): Promise<PriceData> {
   const horizonParts = stockholmParts(horizonEnd);
   const horizonEndLocal = `${horizonParts.dateStr}T${String(horizonParts.hour).padStart(2, '0')}:${String(horizonParts.minute).padStart(2, '0')}:00`;
   let prices = actualPrices;
+  let hasTomorrow = tomorrowSlots !== null;
   try {
-    prices = mergePriceHorizon(actualPrices, await fetchPlaneraForecast(), horizonEndLocal).prices;
+    const merged = mergePriceHorizon(actualPrices, await fetchPlaneraPrices(), horizonEndLocal);
+    prices = merged.prices;
+    hasTomorrow = merged.hasTomorrow;
   } catch (err) {
     console.warn('PlaneraElen forecast unavailable; using actual prices only:', err);
   }
-  const hasTomorrow = tomorrowSlots !== null;
   const maxAge = computeMaxAge(hasTomorrow, now, parts);
 
   const sells = prices.map((p) => p.price);
