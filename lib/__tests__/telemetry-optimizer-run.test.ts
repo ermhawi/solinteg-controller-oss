@@ -153,6 +153,30 @@ describe('readPastDispatchSlots', () => {
     ]);
   });
 
+  it('reconstructs planned SoC from each run\u2019s own start SoC', () => {
+    const date = '2026-07-07';
+    telemetry.logOptimizerRun(
+      date,
+      false,
+      6,
+      [inputs[0]],
+      [slot('2026-07-07T00:00:00', 1), slot('2026-07-07T00:15:00', 1)],
+      true,
+    );
+    telemetry.logOptimizerRun(
+      date,
+      false,
+      12,
+      [inputs[0]],
+      [slot('2026-07-07T00:15:00', 2)],
+      true,
+    );
+
+    expect(telemetry.readPastPlannedSocByTime(date)).toEqual({
+      '2026-07-07T00:00:00': 6,
+    });
+  });
+
   it('returns [] for a date with no logged runs', () => {
     expect(telemetry.readPastDispatchSlots('2026-07-06')).toEqual([]);
   });

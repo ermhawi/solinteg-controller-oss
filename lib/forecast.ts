@@ -13,13 +13,13 @@ const FORECAST_URL =
   (SOLAR_FORECAST_MODEL
     ? `&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${SOLAR_FORECAST_MODEL}`
     : `&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}`) +
-  '&forecast_days=2&timezone=Europe%2FStockholm';
+  '&forecast_days=3&timezone=Europe%2FStockholm';
 const FORECAST_SOLAR_URL =
   `https://api.forecast.solar/estimate/${SITE_LATITUDE}/${SITE_LONGITUDE}/${SOLAR_ARRAY.tiltDeg}/${SOLAR_ARRAY.azimuthDeg}/${SOLAR_ARRAY.kWp}`;
 
 const TEMP_URL =
   `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}` +
-  '&daily=temperature_2m_mean&forecast_days=2&timezone=Europe%2FStockholm';
+  '&daily=temperature_2m_mean&forecast_days=3&timezone=Europe%2FStockholm';
 
 // Returns date → 96-element array of kWh per 15-min slot. Open-Meteo's panel-plane irradiance
 // is converted with the configured array and performance ratio; hourly values are spread across
@@ -95,13 +95,13 @@ export async function fetchSolarForecastSources(): Promise<SolarForecastSources>
   cacheLife({ revalidate: 3600, expire: 8 * 3600 });
   const requests = [
     ...SOLAR_FORECAST_MODELS.map(async (model) => {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${model}&forecast_days=2&timezone=Europe%2FStockholm`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${model}&forecast_days=3&timezone=Europe%2FStockholm`;
       const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`Open-Meteo ${model} failed: ${res.status}`);
       return [model, parseOpenMeteo(await res.json())] as const;
     }),
     (async () => {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&forecast_days=2&timezone=Europe%2FStockholm`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&forecast_days=3&timezone=Europe%2FStockholm`;
       const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`Open-Meteo best_match failed: ${res.status}`);
       return ['openmeteo_best_match', parseOpenMeteoMinutely(await res.json())] as const;

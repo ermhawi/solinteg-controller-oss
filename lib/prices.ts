@@ -87,8 +87,13 @@ export function mergePriceHorizon(
   forecast: PriceSlot[],
   horizonEndLocal: string,
 ): { prices: PriceSlot[]; hasTomorrow: boolean; actualSlots: number; forecastSlots: number } {
+  const horizonStartLocal = actual[0]?.startTime;
   const byTime = new Map<string, PriceSlot>();
-  for (const slot of forecast) if (slot.startTime < horizonEndLocal) byTime.set(slot.startTime, slot);
+  for (const slot of forecast) {
+    if (slot.startTime < horizonEndLocal && (!horizonStartLocal || slot.startTime >= horizonStartLocal)) {
+      byTime.set(slot.startTime, slot);
+    }
+  }
   for (const slot of actual) if (slot.startTime < horizonEndLocal) byTime.set(slot.startTime, { ...slot, source: 'actual' });
   const prices = [...byTime.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
   const actualSlots = prices.filter((p) => p.source === 'actual').length;
@@ -330,7 +335,9 @@ export async function fetchPricesUncached(): Promise<PriceData> {
   // Tomorrow returns null until Nord Pool releases it (~13:00); forecast fills the remainder.
   const tomorrowSlots = await fetchDay(tomorrowStr);
   const actualPrices = tomorrowSlots ? [...todaySlots, ...tomorrowSlots] : todaySlots;
-  const horizonEnd = new Date(now.getTime() + 48 * 60 * 60_000);
+  // Keep three calendar days in view so the day after tomorrow is complete at ordinary times.
+  // The horizon helper in lib/plan.ts removes any partial terminal day before optimization.
+  const horizonEnd = new Date(now.getTime() + 72 * 60 * 60_000);
   const horizonParts = stockholmParts(horizonEnd);
   const horizonEndLocal = `${horizonParts.dateStr}T${String(horizonParts.hour).padStart(2, '0')}:${String(horizonParts.minute).padStart(2, '0')}:00`;
   let prices = actualPrices;

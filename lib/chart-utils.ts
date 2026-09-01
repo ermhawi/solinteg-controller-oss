@@ -118,6 +118,16 @@ export interface ChartPoint {
   interventions: string[];
 }
 
+/** Limit chart input to the interval covered by the current forward plan. */
+export function limitPricesToPlan(prices: PriceSlot[], dispatch: Pick<DispatchSlot, 'startTime'>[]): PriceSlot[] {
+  if (dispatch.length === 0) return prices;
+  const lastPlannedTime = dispatch.reduce(
+    (latest, slot) => (slot.startTime > latest ? slot.startTime : latest),
+    dispatch[0].startTime,
+  );
+  return prices.filter((price) => price.startTime <= lastPlannedTime);
+}
+
 /** Whether the tooltip should show a small battery export outside a deliberate sell zone. */
 export function shouldShowSupplementalBatteryExport(point: ChartPoint): boolean {
   return point.decision == null && point.batteryToGridKwh != null && point.batteryToGridKwh > 0;
@@ -243,6 +253,7 @@ export function buildChartData(
   actualFlowsByTime: Record<string, ActualSlotFlows> = {},
   interventionsByTime: Record<string, string[]> = {},
   startSocKwh = batteryKwh / 2,
+  plannedSocKwhByTime: Record<string, number> = {},
 ): ChartPoint[] {
   // Decision bands occupy [slot start, slot start + 15 min]. Plot the SoC at the
   // slot boundary, not socAfter, otherwise each charge/discharge appears one slot
@@ -263,7 +274,7 @@ export function buildChartData(
       sell: slot.price,
       priceSource: slot.source,
       socPct: dispatch
-        ? Math.round(((socAtStartByTime.get(slot.startTime) ?? dispatch.socAfter) / batteryKwh) * 1000) / 10
+        ? Math.round(((plannedSocKwhByTime[slot.startTime] ?? socAtStartByTime.get(slot.startTime) ?? dispatch.socAfter) / batteryKwh) * 1000) / 10
         : null,
       actualSocPct: actualSocByTime[slot.startTime.slice(0, 16)] ?? null,
       solarKwh,

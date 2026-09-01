@@ -17,6 +17,7 @@ import {
   interventionLabel,
   isMinorGridCharge,
   isBandDivergent,
+  limitPricesToPlan,
   priceYScale,
   pinchZoomRange,
   shouldShowSupplementalBatteryExport,
@@ -30,6 +31,23 @@ import type { ActionBand, ChartPoint } from '../chart-utils';
 import type { ActualSlotFlows } from '../actual-flows';
 import type { DispatchSlot } from '../optimizer';
 import type { PriceSlot } from '../prices';
+
+describe('limitPricesToPlan', () => {
+  it('hides price slots after the last planned slot', () => {
+    const prices = ['00:00', '00:15', '00:30'].map((time) => ({
+      startTime: `2026-09-03T${time}:00`,
+      endTime: '',
+      price: 1,
+      priceIncludingTaxAndSurcharge: 1,
+    }));
+    const plan = [{ startTime: prices[1].startTime }] as DispatchSlot[];
+
+    expect(limitPricesToPlan(prices, plan).map((p) => p.startTime)).toEqual([
+      prices[0].startTime,
+      prices[1].startTime,
+    ]);
+  });
+});
 
 function makePoint(time: string, overrides: Partial<ChartPoint> = {}): ChartPoint {
   return {
@@ -314,6 +332,26 @@ describe('buildChartData', () => {
     expect(points.map((point) => point.socPct)).toEqual([39.1, 46.9]);
     expect(points[0].decision).toBe('hold');
     expect(points[1].decision).toBe('buy');
+  });
+
+  it('uses the supplied historical planned SoC instead of rebuilding it from the live start SoC', () => {
+    const slot = '2026-06-28T00:00:00';
+    const dispatchByTime = { [slot]: makeDispatch(slot, 'idle', { socAfter: 8 }) };
+    const [pt] = buildChartData(
+      [makePrice(slot)],
+      null,
+      profiles,
+      dispatchByTime,
+      BATTERY_KWH,
+      SKATT_OVERFÖRING,
+      BATTERY_MIN_SOC_KWH,
+      {},
+      {},
+      {},
+      12,
+      { [slot]: 6 },
+    );
+    expect(pt.socPct).toBeCloseTo((6 / BATTERY_KWH) * 100, 1);
   });
 
   it('passes the planned battery flows through for the tooltip (null without a plan)', () => {

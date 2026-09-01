@@ -67,8 +67,9 @@ const THREDDS_FETCH_TIMEOUT_MS = 25_000;
 const THREDDS_USER_AGENT = 'solinteg-controller/1.0 (+https://github.com/hspolander/solinteg-controller-oss)';
 const SHORTWAVE_VAR = 'integral_of_surface_downwelling_shortwave_flux_in_air_wrt_time';
 const TEMP_VAR = 'air_temperature_2m';
-// This only needs ~2 days ahead (matching Open-Meteo's forecast_days=2); every metpplatest run
-// observed 2026-09-22 carried 59 forecast hours, so 44 stays well under that with margin.
+// The primary forecast requests three days, but this tier is only used when an upstream source
+// fails. Keep the direct fallback near two days (44 hours), under the ~56–59 h lengths observed
+// in recent MET runs, rather than extending it beyond the reliable published horizon.
 const FORECAST_HOURS = 44;
 // How many HOURLY runs to walk back if the latest expected one isn't published/reachable yet.
 // metpplatest publishes roughly on the hour (observed 2026-09-22: a run's own `history`

@@ -10,6 +10,7 @@ import {
   computePriceMax,
   computePriceMin,
   computeSolarMax,
+  limitPricesToPlan,
 } from '@/lib/chart-utils';
 import type { PriceData } from '@/lib/prices';
 import type { DispatchSlot } from '@/lib/optimizer';
@@ -25,10 +26,16 @@ export function useChartData(
   batteryFloorKwh: number,
   actualSocByTime: Record<string, number> = {},
   pastDispatchSlots: DispatchSlot[] | null | undefined = [],
+  pastPlannedSocKwhByTime: Record<string, number> = {},
   actualFlowsByTime: Record<string, ActualSlotFlows> = {},
   interventionsByTime: Record<string, string[]> = {},
   startSocKwh = batteryKwh / 2,
 ) {
+  const chartPrices = useMemo(
+    () => limitPricesToPlan(data.prices, [...(pastDispatchSlots ?? []), ...(dispatchSchedule ?? [])]),
+    [data.prices, pastDispatchSlots, dispatchSchedule],
+  );
+
   // Past slots first, live schedule second: on the one key both could theoretically share (the
   // live plan's first slot vs a past run's last, which readPastDispatchSlots' cutoff already
   // excludes), the live plan wins — it's the more current view of that slot's decision.
@@ -47,10 +54,20 @@ export function useChartData(
     [pastDispatchSlots, dispatchSchedule, batteryFloorKwh],
   );
 
+  const plannedSocKwhByTime = useMemo(() => {
+    const out = { ...pastPlannedSocKwhByTime };
+    let soc = startSocKwh;
+    for (const dispatch of [...(dispatchSchedule ?? [])].sort((a, b) => a.startTime.localeCompare(b.startTime))) {
+      out[dispatch.startTime] = soc;
+      soc = dispatch.socAfter;
+    }
+    return out;
+  }, [pastPlannedSocKwhByTime, dispatchSchedule, startSocKwh]);
+
   const chartData = useMemo(
     () =>
       buildChartData(
-        data.prices,
+        chartPrices,
         solarForecast,
         solarProfiles,
         dispatchByTime,
@@ -61,9 +78,10 @@ export function useChartData(
         actualFlowsByTime,
         interventionsByTime,
         startSocKwh,
+        plannedSocKwhByTime,
       ),
     [
-      data.prices,
+      chartPrices,
       solarForecast,
       solarProfiles,
       dispatchByTime,
@@ -74,14 +92,15 @@ export function useChartData(
       actualFlowsByTime,
       interventionsByTime,
       startSocKwh,
+      plannedSocKwhByTime,
     ],
   );
 
-  const xTicks = useMemo(() => buildXTicks(data.prices), [data.prices]);
+  const xTicks = useMemo(() => buildXTicks(chartPrices), [chartPrices]);
 
   const tomorrowIdx = useMemo(
-    () => data.prices.findIndex((p) => p.startTime.startsWith(data.tomorrow)),
-    [data.prices, data.tomorrow],
+    () => chartPrices.findIndex((p) => p.startTime.startsWith(data.tomorrow)),
+    [chartPrices, data.tomorrow],
   );
 
   const firstTime = chartData[0]?.time ?? null;

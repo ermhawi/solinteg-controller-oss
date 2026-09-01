@@ -144,6 +144,30 @@ export function readPastDispatchSlots(priceDate: string): DispatchSlot[] {
   });
 }
 
+export function readPastPlannedSocByTime(priceDate: string): Record<string, number> {
+  return readOrFallback({} as Record<string, number>, (handle) => {
+    const rows = handle
+      .prepare(
+        'SELECT start_soc_kwh, dispatch_json FROM optimizer_runs WHERE price_date = ? ORDER BY id ASC',
+      )
+      .all(priceDate) as { start_soc_kwh: number; dispatch_json: string }[];
+    const runs = rows
+      .map((r) => ({ startSocKwh: r.start_soc_kwh, dispatch: JSON.parse(r.dispatch_json) as DispatchSlot[] }))
+      .filter((r) => r.dispatch.length > 0);
+    const out: Record<string, number> = {};
+    for (let i = 0; i < runs.length - 1; i++) {
+      const cutoff = runs[i + 1].dispatch[0].startTime;
+      let soc = runs[i].startSocKwh;
+      for (const slot of runs[i].dispatch) {
+        if (slot.startTime >= cutoff) break;
+        out[slot.startTime] = soc;
+        soc = slot.socAfter;
+      }
+    }
+    return out;
+  });
+}
+
 /** Full optimizer snapshots for reconstructing the plan active at each historical slot. */
 export function readHistoricalOptimizerRuns(priceDate: string): HistoricalOptimizerRun[] {
   return readOrFallback([] as HistoricalOptimizerRun[], (handle) => {

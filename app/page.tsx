@@ -7,6 +7,7 @@ import {
   readTodaySocHistory,
   readTodayFlowRows,
   readPastDispatchSlots,
+  readPastPlannedSocByTime,
   readRecentControlActions,
   readControlActionsForDay,
   readRecentOracleDays,
@@ -74,8 +75,12 @@ export default async function Home() {
   // above only covers what's left of the day from right now, so without this the chart's
   // buy/sell/hold zones vanish the moment they elapse (best-effort).
   let pastDispatchSlots: DispatchSlot[] = [];
+  let pastPlannedSocKwhByTime: Record<string, number> = {};
   try {
-    if (data) pastDispatchSlots = readPastDispatchSlots(data.today);
+    if (data) {
+      pastDispatchSlots = readPastDispatchSlots(data.today);
+      pastPlannedSocKwhByTime = readPastPlannedSocByTime(data.today);
+    }
   } catch {
     // non-fatal — chart renders with only the forward-looking plan's zones
   }
@@ -153,6 +158,7 @@ export default async function Home() {
             solarForecast={solarForecast}
             dispatchSchedule={dispatchSchedule}
             pastDispatchSlots={pastDispatchSlots}
+            pastPlannedSocKwhByTime={pastPlannedSocKwhByTime}
             startSocKwh={startSoc}
             socIsLive={socIsLive}
             actualSocByTime={actualSocByTime}

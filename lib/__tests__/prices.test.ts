@@ -165,6 +165,23 @@ describe('mergePriceHorizon', () => {
     expect(merged.hasTomorrow).toBe(false);
   });
 
+  it('does not let stale forecast slots before the actual horizon shift the optimizer index', () => {
+    const actual = [
+      { startTime: '2026-08-27T00:00:00', endTime: '2026-08-27T00:15:00', price: 100, priceIncludingTaxAndSurcharge: 140, source: 'actual' as const },
+    ];
+    const forecast = [
+      { startTime: '2026-08-26T12:00:00', endTime: '2026-08-26T12:15:00', price: 50, priceIncludingTaxAndSurcharge: 80, source: 'forecast' as const },
+      { startTime: '2026-08-27T00:15:00', endTime: '2026-08-27T00:30:00', price: 60, priceIncludingTaxAndSurcharge: 90, source: 'forecast' as const },
+    ];
+
+    const merged = mergePriceHorizon(actual, forecast, '2026-08-27T00:30:00');
+
+    expect(merged.prices.map((p) => p.startTime)).toEqual([
+      '2026-08-27T00:00:00',
+      '2026-08-27T00:15:00',
+    ]);
+  });
+
   it('reports the actual horizon separately from the forecast extension', () => {
     const actual = Array.from({ length: 96 }, (_, i) => ({
       startTime: `2026-08-27T${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}:00`,
