@@ -64,6 +64,35 @@ export interface DispatchSlot {
   batteryToLoadKwh: number; // battery energy covering house load — default self-use behaviour
   loadFromGridKwh: number; // house load left for the grid to cover
   socAfter: number; // battery SoC in kWh after slot completes
+  batterySaveDriftKwh?: number; // empirical save-policy drift applied to the forecast
+}
+
+const BATTERY_SAVE_HOLD_LOAD_KWH = 0.15;
+const BATTERY_SAVE_HOLD_HEADROOM_KWH = 1;
+
+/**
+ * Apply the measured battery-save drift to the forecast without changing normal optimizer actions.
+ * The Python executor identifies the same planned hold from loadFromGridKwh and SOC headroom.
+ * A zero value is a no-op so oracle and legacy plans remain byte-for-byte compatible.
+ */
+export function applyBatterySaveForecast(dispatch: DispatchSlot[], driftW: number): DispatchSlot[] {
+  if (!(driftW > 0)) return dispatch;
+  const driftKwh = driftW / 4000; // 15 minutes
+  let cumulativeDrift = 0;
+  return dispatch.map((slot) => {
+    const isPlannedHold =
+      slot.action === 'idle' &&
+      slot.loadFromGridKwh >= BATTERY_SAVE_HOLD_LOAD_KWH &&
+      slot.socAfter >= MIN_SOC_KWH + BATTERY_SAVE_HOLD_HEADROOM_KWH;
+    if (isPlannedHold) {
+      const available = Math.max(0, slot.socAfter - cumulativeDrift - MIN_SOC_KWH);
+      const applied = Math.min(driftKwh, available);
+      cumulativeDrift += applied;
+      return { ...slot, socAfter: slot.socAfter - cumulativeDrift, batterySaveDriftKwh: applied };
+    }
+    if (cumulativeDrift === 0) return slot;
+    return { ...slot, socAfter: Math.max(MIN_SOC_KWH, slot.socAfter - cumulativeDrift), batterySaveDriftKwh: 0 };
+  });
 }
 
 interface Flows {

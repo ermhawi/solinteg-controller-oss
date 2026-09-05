@@ -7,6 +7,7 @@ import {
   BATTERY_MAX_KW,
   BATTERY_MIN_SOC_KWH,
   planningPrices,
+  applyBatterySaveForecast,
 } from '../optimizer';
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
 import type { OptimizerSlot } from '../optimizer';
@@ -38,6 +39,38 @@ function uniformDay(buyPrice: number, sellPrice: number): OptimizerSlot[] {
 }
 
 describe('optimizeDispatch', () => {
+  it('adds measured battery-save drift only to planned hold slots', () => {
+    const hold = {
+      startTime: '2026-06-28T01:00:00', action: 'idle' as const,
+      gridKwh: 0.225, solarExportKwh: 0, batteryToGridKwh: 0,
+      gridToBatteryKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0.225,
+      socAfter: 10,
+    };
+    const ordinaryIdle = { ...hold, startTime: '2026-06-28T01:15:00', loadFromGridKwh: 0.05 };
+    const result = applyBatterySaveForecast([hold, ordinaryIdle], 220);
+    expect(result[0].socAfter).toBeCloseTo(9.945, 3);
+    expect(result[0].batterySaveDriftKwh).toBeCloseTo(0.055, 3);
+    expect(result[1].socAfter).toBeCloseTo(9.945, 3);
+    expect(result[1].batterySaveDriftKwh).toBe(0);
+  });
+
+  it('does not drain a hold forecast below the operational SOC floor', () => {
+    const hold = {
+      startTime: '2026-06-28T01:00:00', action: 'idle' as const,
+      gridKwh: 0.225, solarExportKwh: 0, batteryToGridKwh: 0,
+      gridToBatteryKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0.225,
+      socAfter: BATTERY_MIN_SOC_KWH + 1.02,
+    };
+    expect(applyBatterySaveForecast([hold], 5000)[0].socAfter).toBe(BATTERY_MIN_SOC_KWH);
+  });
+
+  it('leaves the dispatch unchanged when battery-save drift is disabled', () => {
+    const slot = { ...makeSlot(1, 0), action: 'idle' as const, gridKwh: 0, solarExportKwh: 0,
+      batteryToGridKwh: 0, gridToBatteryKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0.225,
+      socAfter: 10 };
+    expect(applyBatterySaveForecast([slot], 0)).toEqual([slot]);
+  });
+
   it('applies forecast risk margin only to planning prices', () => {
     const actual = makeSlot(1, 0, { buyPrice: 80, sellPrice: 120, priceSource: 'actual' });
     const forecast = makeSlot(1, 1, { buyPrice: 80, sellPrice: 120, priceSource: 'forecast' });
