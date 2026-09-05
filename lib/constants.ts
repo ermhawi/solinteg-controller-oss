@@ -77,7 +77,10 @@ export const BATTERY_MAX_KW = numEnv('SOLINTEG_BATTERY_MAX_W', 15360) / 1000; //
 export const BATTERY_RT_EFF = numEnv('SOLINTEG_BATTERY_RT_EFF', 0.96); // round-trip efficiency (datasheet: ≥96%)
 
 /** Empirical battery-save discharge used only for forecast correction; 0 disables it. */
-export const BATTERY_SAVE_DRIFT_W = numEnv('SOLINTEG_BATTERY_SAVE_DRIFT_W', 220);
+export const BATTERY_SAVE_DRIFT_W = numEnv(
+  'SOLINTEG_BATTERY_SAVE_DRIFT_W',
+  numEnv('DISPATCH_BATTERY_SAVE_W', 220),
+);
 
 const SOC_FLOOR_PCT = numEnv('SOLINTEG_SOC_FLOOR_PCT', 8);
 export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100); // operational floor (2.048 kWh at 8%)

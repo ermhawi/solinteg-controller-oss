@@ -318,7 +318,10 @@ LIVE_LOAD_DEADBAND_W = int(os.environ.get("DISPATCH_LIVE_LOAD_DEADBAND_W", "250"
 # whose self-use logic would discharge as much as the house can consume. Zero leaves the
 # existing idle -> Auto behaviour unchanged. Use a multiple of 10 W because register 50207
 # has 10 W resolution (see MODBUS.md).
-BATTERY_SAVE_W = max(0, int(os.environ.get("DISPATCH_BATTERY_SAVE_W", "0"))) // 10 * 10
+BATTERY_SAVE_W = max(0, int(os.environ.get(
+    "SOLINTEG_BATTERY_SAVE_DRIFT_W",
+    os.environ.get("DISPATCH_BATTERY_SAVE_W", "220"),
+))) // 10 * 10
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
 # Same env var lib/constants.ts's BATTERY_RT_EFF reads (kept in sync by the cross-language test).
@@ -818,9 +821,24 @@ def is_planned_hold(slot: dict) -> bool:
 
 
 def battery_save_target(action: str, power_w: int, slot: dict | None = None):
-    """Map only a planned hold slot to the optional fixed battery-save target."""
+    """Apply only the optimizer's explicitly selected idle battery-save drift."""
     if action == "idle" and BATTERY_SAVE_W > 0 and slot is not None and is_planned_hold(slot):
-        return "discharge", BATTERY_SAVE_W
+        # The optimizer now decides whether the drift is economically worthwhile. A missing
+        # field is treated as no drift so persisted plans cannot silently diverge from their
+        # recorded economics.
+        try:
+            planned_drift = float(slot.get("batterySaveDriftKwh") or 0)
+        except (TypeError, ValueError):
+            planned_drift = 0
+        if planned_drift <= 0:
+            return action, power_w
+        load_cap = float(slot.get("loadFromGridKwh") or 0) / SLOT_HOURS * 1000
+        soc_cap = max(0.0, float(slot["socAfter"]) - BATTERY_FLOOR_KWH) / SLOT_HOURS * 1000
+        # batterySaveDriftKwh is the optimizer's planned SoC drop. Convert it back to the
+        # inverter-side output target so executor and plan use the same quantized transition.
+        planned_target = planned_drift / SLOT_HOURS * 1000 * ONE_WAY_EFF
+        target = int(min(BATTERY_SAVE_W, planned_target, load_cap, soc_cap) // 10 * 10)
+        return ("discharge", target) if target > 0 else ("idle", 0)
     return action, power_w
 
 

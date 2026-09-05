@@ -244,8 +244,29 @@ class ApplyTargetRouting(unittest.TestCase):
         original = dl.BATTERY_SAVE_W
         dl.BATTERY_SAVE_W = 50
         try:
-            hold_slot = {"loadFromGridKwh": 0.3, "socAfter": dl.BATTERY_FLOOR_KWH + 1.5}
+            hold_slot = {"loadFromGridKwh": 0.3, "socAfter": dl.BATTERY_FLOOR_KWH + 1.5,
+                         "batterySaveDriftKwh": 0.013}
             self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", 50))
+        finally:
+            dl.BATTERY_SAVE_W = original
+
+    def test_battery_save_target_is_capped_by_load_and_headroom(self):
+        original = dl.BATTERY_SAVE_W
+        dl.BATTERY_SAVE_W = 5000
+        try:
+            hold_slot = {"loadFromGridKwh": 0.15, "socAfter": dl.BATTERY_FLOOR_KWH + 1.0,
+                         "batterySaveDriftKwh": 0.15}
+            self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", 580))
+        finally:
+            dl.BATTERY_SAVE_W = original
+
+    def test_battery_save_target_follows_optimizer_drift_decision(self):
+        original = dl.BATTERY_SAVE_W
+        dl.BATTERY_SAVE_W = 220
+        try:
+            hold_without_drift = {"loadFromGridKwh": 0.5, "socAfter": dl.BATTERY_FLOOR_KWH + 1.0,
+                                  "batterySaveDriftKwh": 0}
+            self.assertEqual(dl.battery_save_target("idle", 0, hold_without_drift), ("idle", 0))
         finally:
             dl.BATTERY_SAVE_W = original
 

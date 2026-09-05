@@ -70,6 +70,12 @@ export interface DispatchSlot {
 const BATTERY_SAVE_HOLD_LOAD_KWH = 0.15;
 const BATTERY_SAVE_HOLD_HEADROOM_KWH = 1;
 
+function batterySaveHoldOutputKwh(soc: number, loadRem: number, driftW: number): number {
+  if (!(driftW > 0) || loadRem < BATTERY_SAVE_HOLD_LOAD_KWH) return 0;
+  if (soc < MIN_SOC_KWH + BATTERY_SAVE_HOLD_HEADROOM_KWH) return 0;
+  return Math.min(driftW / 4000, loadRem, Math.max(0, soc - MIN_SOC_KWH) * ONE_WAY_EFF);
+}
+
 /**
  * Apply the measured battery-save drift to the forecast without changing normal optimizer actions.
  * The Python executor identifies the same planned hold from loadFromGridKwh and SOC headroom.
@@ -230,6 +236,7 @@ export function optimizeDispatch(
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
     forecastRiskPremiumOre?: number;
+    batterySaveDriftW?: number;
   },
 ): DispatchSlot[] {
   if ((opts?.deferralRateOrePerKwhHour ?? 0) > 0 && slots.length > 0) {
@@ -258,6 +265,7 @@ function dpCore(
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
     forecastRiskPremiumOre?: number;
+    batterySaveDriftW?: number;
   },
 ): DispatchSlot[] {
   const n = slots.length;
@@ -351,10 +359,12 @@ function dpCore(
     costToGo[target] = 0;
   }
   const choice: Int16Array[] = new Array(n);
+  const driftChoice: Uint8Array[] = new Array(n);
 
   for (let i = n - 1; i >= 0; i--) {
     const cur = new Float64Array(SOC_LEVELS);
     const ch = new Int16Array(SOC_LEVELS);
+    const driftCh = new Uint8Array(SOC_LEVELS);
     const { buy, sell } = planningPrices(slots[i], opts?.forecastRiskPremiumOre ?? 0);
     const sr = solarRem[i];
     const lr = loadRem[i];
@@ -424,10 +434,27 @@ function dpCore(
           bestJ = j;
         }
       }
+      const holdOutput = batterySaveHoldOutputKwh(soc, lr, opts?.batterySaveDriftW ?? 0);
+      if (holdOutput > 0) {
+        const requestedSocAfter = soc - holdOutput / ONE_WAY_EFF;
+        const holdJ = idxOf(requestedSocAfter);
+        const holdSocAfter = socOf(holdJ);
+        const actualHoldOutput = Math.max(0, soc - holdSocAfter) * ONE_WAY_EFF;
+        const holdF = computeFlows(soc, holdSocAfter, sr, lr);
+        const holdCost =
+          holdF.gridImport * buy - holdF.gridExport * sell +
+          BATTERY_WEAR_COST_ORE_PER_KWH * (actualHoldOutput / ONE_WAY_EFF) + costToGo[holdJ];
+        if (holdJ < s && actualHoldOutput > 0 && holdF.feasible && holdCost < best) {
+          best = holdCost;
+          bestJ = holdJ;
+          driftCh[s] = 1;
+        }
+      }
       cur[s] = best;
       ch[s] = bestJ;
     }
     choice[i] = ch;
+    driftChoice[i] = driftCh;
     costToGo = cur;
   }
 
@@ -446,8 +473,12 @@ function dpCore(
     const j = choice[i][s];
     const soc = socOf(s);
     const socNext = socOf(j);
-    const f = computeFlows(soc, socNext, solarRem[i], loadRem[i]);
-    const dE = socNext - soc;
+    const driftOutput = driftChoice[i][s]
+      ? Math.max(0, soc - socNext) * ONE_WAY_EFF
+      : 0;
+    const actualSocNext = socNext;
+    const f = computeFlows(soc, actualSocNext, solarRem[i], loadRem[i]);
+    const dE = actualSocNext - soc;
     // 'idle' means "leave the inverter on auto/self-use" — free, no grid-funded CHARGING,
     // whenever the chosen socNext is reachable from solar alone. Deliberately NOT based on
     // f.gridImport: that also counts grid power drawn purely to cover house load (lr), which
@@ -463,7 +494,9 @@ function dpCore(
     // charge, since a genuine arbitrage import is always much larger than the model's own
     // snap-to-grid noise.
     let action: Action;
-    if (dE < -1e-6) {
+    if (driftOutput > 0) {
+      action = 'idle';
+    } else if (dE < -1e-6) {
       action = 'discharge';
     } else {
       const need = dE / ONE_WAY_EFF;
@@ -485,7 +518,8 @@ function dpCore(
       gridToBatteryKwh: f.gridToBattery,
       batteryToLoadKwh: f.batteryToLoad,
       loadFromGridKwh: f.loadFromGrid,
-      socAfter: socNext,
+      socAfter: actualSocNext,
+      batterySaveDriftKwh: driftOutput > 0 ? driftOutput / ONE_WAY_EFF : undefined,
     };
     s = j;
   }

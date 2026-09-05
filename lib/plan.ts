@@ -5,7 +5,7 @@ import { combineSolarForecasts, fetchSolarForecastSources, fetchDailyMeanTemp } 
 import { fetchSolarForecastDirect, fetchDailyMeanTempDirect } from './metno-thredds';
 import { readFreshSolarForecast, saveSolarForecast } from './solar-forecast-cache';
 import { buildSolarProfiles, buildOptimizerSlots } from './pipeline';
-import { optimizeDispatch, applyBatterySaveForecast } from './optimizer';
+import { optimizeDispatch } from './optimizer';
 import type { DispatchSlot } from './optimizer';
 import { readLiveInverterData, socKwhOrDefault } from './inverter';
 import type { InverterLiveData } from './inverter';
@@ -218,8 +218,8 @@ export async function producePlan(): Promise<PlanResult> {
           process.env.SOLINTEG_HOLD_ENABLED === '1' &&
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
+        batterySaveDriftW: BATTERY_SAVE_DRIFT_W,
       });
-      dispatchSchedule = applyBatterySaveForecast(dispatchSchedule, BATTERY_SAVE_DRIFT_W);
       logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
     } catch (err) {
       // non-fatal — chart renders without dispatch overlay — but logged so a failure here
