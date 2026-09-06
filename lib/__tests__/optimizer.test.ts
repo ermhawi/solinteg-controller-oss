@@ -71,6 +71,32 @@ describe('optimizeDispatch', () => {
     expect(applyBatterySaveForecast([slot], 0)).toEqual([slot]);
   });
 
+  it('applies battery-save drift on forecast-priced hold slots (no forecastRiskPremium suppression)', () => {
+    // Regression: forecast slots with forecastRiskPremiumOre > 0 used to suppress drift because
+    // holdCost used planning prices (buy+premium, sell-premium) which made idle cheaper than drift.
+    // Fix: holdCost and idleRawCost both use raw prices for a fair physical comparison.
+    //
+    // Scenario: a single slot so costToGo difference is zero (terminal value = 0 everywhere).
+    // consumptionKwh=0.3 → loadFromGrid > HOLD_LOAD threshold (0.15) when idle.
+    // Low sell price → DP won't discharge to grid. SoC well above floor (> 3.05 kWh).
+    const slots = [makeSlot(20, 0, {
+      buyPrice: 100,
+      sellPrice: 10,   // extremely low sell → DP never wants to discharge to grid
+      consumptionKwh: 0.3,
+      solarKwh: 0,
+      priceSource: 'forecast' as const,
+    })];
+    const startSoc = 12; // >> MIN_SOC + HOLD_HEADROOM = 3.048
+    const result = optimizeDispatch(slots, startSoc, {
+      batterySaveDriftW: 220,
+      forecastRiskPremiumOre: 10,
+    });
+    // Single slot, terminal value=0 everywhere → costToGo[holdJ]=costToGo[s]=0.
+    // holdCost = (0.3-0.055)*100 + wear ≈ 24.6 < idleRawCost = 0.3*100 = 30 → drift wins.
+    const driftSlots = result.filter(s => (s.batterySaveDriftKwh ?? 0) > 0);
+    expect(driftSlots.length).toBeGreaterThan(0);
+  });
+
   it('applies forecast risk margin only to planning prices', () => {
     const actual = makeSlot(1, 0, { buyPrice: 80, sellPrice: 120, priceSource: 'actual' });
     const forecast = makeSlot(1, 1, { buyPrice: 80, sellPrice: 120, priceSource: 'forecast' });
