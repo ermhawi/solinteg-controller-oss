@@ -23,7 +23,10 @@ export const avgDailyConsumptionByMonth: number[] = [55.2, 54.1, 42.6, 51.4, 22.
  *  and lib/irradiance-data.ts's climatology) once BOTH reflect your own site and you have a real
  *  season of production — see DOMAIN.md's onboarding order. Note: lib/__tests__/forecast.test.ts
  *  mocks distinct per-month values so its month-indexing guard survives this uniform reset. */
-export const solarCalibrationByMonth: number[] = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+// Aug (index 7) and Sep (index 8) calibrated from 2026-08-12–2026-09-05 telemetry (25 days).
+// Systematic panel-model bias on weather-accurate days: ~1.40× both months.
+// Other months left at 1.0 until same-season data exists — see DOMAIN.md.
+export const solarCalibrationByMonth: number[] = [1, 1, 1, 1, 1, 1, 1, 1.4, 1.4, 1, 1, 1];
 
 // ── Weather-aware daily load model ───────────────────────────────────────────
 // Fitted by scripts/tools/build-load-model.mjs over 1342 days (2022-05-19..2026-01-19) of the
