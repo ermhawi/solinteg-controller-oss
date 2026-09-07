@@ -75,7 +75,7 @@ describe('optimizeDispatch', () => {
     const slots = [makeSlot(20, 0, {
       buyPrice: 0,
       sellPrice: 0,
-      consumptionKwh: 0.3,
+      consumptionKwh: 0.13,
       solarKwh: 0,
     })];
     const result = optimizeDispatch(slots, MIN_SOC + 0.5, { batterySaveDriftW: 220 });

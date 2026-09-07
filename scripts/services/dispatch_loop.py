@@ -284,7 +284,7 @@ SOC_FLOOR_PCT = float(os.environ.get("SOLINTEG_SOC_FLOOR_PCT", "8"))
 BATTERY_FLOOR_KWH = BATTERY_KWH * SOC_FLOOR_PCT / 100
 # Keep these aligned with lib/chart-utils.ts's hold-band classification. Missing flow fields
 # deliberately do not qualify: older/partial plans must retain the safe idle -> Auto behaviour.
-HOLD_LOAD_FROM_GRID_KWH = 0.15
+HOLD_LOAD_FROM_GRID_KWH = 0.05
 # The forecast drain is measured inverter behaviour, not a reserve margin. The SoC cap below
 # still prevents the target from crossing the operational floor.
 # How far actual SoC may drift from the plan's assumed starting point for this slot before
@@ -854,7 +854,7 @@ def is_planned_hold(slot: dict) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     return (
-        load_from_grid >= HOLD_LOAD_FROM_GRID_KWH
+        load_from_grid > HOLD_LOAD_FROM_GRID_KWH
         and soc_after > BATTERY_FLOOR_KWH
     )
 

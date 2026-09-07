@@ -67,11 +67,12 @@ export interface DispatchSlot {
   batterySaveDriftKwh?: number; // empirical save-policy drift applied to the forecast
 }
 
-const BATTERY_SAVE_HOLD_LOAD_KWH = 0.15;
+// Even a ~450 W household load is enough to observe the calibrated ~220 W auto drain.
+const BATTERY_SAVE_HOLD_LOAD_KWH = 0.05;
 
 
 function batterySaveHoldOutputKwh(soc: number, loadRem: number, driftW: number): number {
-  if (!(driftW > 0) || loadRem < BATTERY_SAVE_HOLD_LOAD_KWH) return 0;
+  if (!(driftW > 0) || loadRem <= BATTERY_SAVE_HOLD_LOAD_KWH) return 0;
   if (soc <= MIN_SOC_KWH) return 0;
   return Math.min(driftW / 4000, loadRem, Math.max(0, soc - MIN_SOC_KWH) * ONE_WAY_EFF);
 }
@@ -88,7 +89,7 @@ export function applyBatterySaveForecast(dispatch: DispatchSlot[], driftW: numbe
   return dispatch.map((slot) => {
     const isPlannedHold =
       slot.action === 'idle' &&
-      slot.loadFromGridKwh >= BATTERY_SAVE_HOLD_LOAD_KWH &&
+      slot.loadFromGridKwh > BATTERY_SAVE_HOLD_LOAD_KWH &&
       slot.socAfter > MIN_SOC_KWH;
     if (isPlannedHold) {
       const available = Math.max(0, slot.socAfter - cumulativeDrift - MIN_SOC_KWH);
