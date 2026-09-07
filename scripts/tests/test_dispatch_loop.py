@@ -763,6 +763,49 @@ class SocFloorGuardTests(unittest.TestCase):
         self.assertEqual(action, "idle")
         self.assertEqual(power_w, 0)
 
+    def test_soc_floor_recovery_uses_surplus_when_larger_than_minimum(self):
+        # When live PV surplus exceeds SOC_FLOOR_RECOVERY_W, use it as the charge target
+        # (quantised to 10 W), not the minimum.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH + 0.1  # inside the guard band
+        surplus_w = 2000  # clearly larger than SOC_FLOOR_RECOVERY_W (300 W default)
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, low_soc_kwh, surplus_w=surplus_w)
+        self.assertEqual(action, "charge")
+        # Must use surplus (quantised to 10 W) rather than the minimum floor.
+        self.assertGreater(power_w, dl.SOC_FLOOR_RECOVERY_W)
+        # Must be quantised to 10 W and not exceed the inverter cap.
+        self.assertEqual(power_w % 10, 0)
+        from inverter_control import clamp_power_w
+        self.assertLessEqual(power_w, clamp_power_w(surplus_w))
+
+    def test_soc_floor_recovery_falls_back_to_minimum_when_surplus_small(self):
+        # When surplus is below SOC_FLOOR_RECOVERY_W, still use the minimum.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH + 0.1
+        surplus_w = 50  # smaller than SOC_FLOOR_RECOVERY_W
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, low_soc_kwh, surplus_w=surplus_w)
+        self.assertEqual(action, "charge")
+        self.assertEqual(power_w, dl.SOC_FLOOR_RECOVERY_W)
+
+    def test_soc_floor_recovery_without_surplus_uses_minimum(self):
+        # No surplus provided — backward-compatible default: use SOC_FLOOR_RECOVERY_W.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH + 0.1
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, low_soc_kwh)
+        self.assertEqual(action, "charge")
+        self.assertEqual(power_w, dl.SOC_FLOOR_RECOVERY_W)
+
+    def test_soc_floor_recovery_surplus_none_uses_minimum(self):
+        # surplus_w=None (live data unavailable) — use minimum, do not error.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH + 0.1
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, low_soc_kwh, surplus_w=None)
+        self.assertEqual(action, "charge")
+        self.assertEqual(power_w, dl.SOC_FLOOR_RECOVERY_W)
+
+    def test_soc_floor_recovery_surplus_ignored_when_soc_safe(self):
+        # Even with a large surplus, no escalation when SoC is above the guard band.
+        safe_soc_kwh = dl.BATTERY_FLOOR_KWH + dl.SOC_FLOOR_GUARD_HEADROOM_KWH + 0.5
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, safe_soc_kwh, surplus_w=2000)
+        self.assertEqual(action, "idle")
+        self.assertEqual(power_w, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
