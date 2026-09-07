@@ -676,5 +676,93 @@ class CheckSocDivergenceTests(unittest.TestCase):
         self.assertIn("soc_drift_limit_kwh", numbers)
 
 
+class SocFloorGuardTests(unittest.TestCase):
+    """read_live_soc_kwh and soc_floor_recovery_target guard correct SoC-floor recovery.
+
+    The inverter's BMS triggers a forceful charge when SoC reaches its own (lower) hardware
+    floor — bypassing the optimizer completely and buying energy at whatever the current spot
+    price is. Our floor guard catches this earlier: when live SoC from live.json drops below
+    BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH while the plan says idle, escalate to a
+    small recovery charge so the optimizer owns the timing (and can pick a cheaper slot).
+    """
+
+    def setUp(self):
+        self._live_json = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        )
+        self._orig_path = dl.LIVE_JSON_PATH
+        dl.LIVE_JSON_PATH = self._live_json.name
+
+    def tearDown(self):
+        dl.LIVE_JSON_PATH = self._orig_path
+        Path(self._live_json.name).unlink(missing_ok=True)
+
+    def _write_live(self, soc_pct: float) -> None:
+        now = datetime.now(UTC)
+        data = {
+            "timestamp": now.isoformat(),
+            "soc_pct": soc_pct,
+            "pv_w": 0,
+            "house_load_w": 500,
+        }
+        Path(self._live_json.name).write_text(json.dumps(data))
+
+    def test_read_live_soc_kwh_returns_value_from_live_json(self):
+        self._write_live(soc_pct=10.0)
+        now = datetime.now(UTC)
+        soc = dl.read_live_soc_kwh(now)
+        self.assertIsNotNone(soc)
+        expected = round(10.0 / 100 * dl.BATTERY_KWH, 3)
+        self.assertAlmostEqual(soc, expected, places=2)
+
+    def test_read_live_soc_kwh_returns_none_when_file_missing(self):
+        dl.LIVE_JSON_PATH = "/tmp/does_not_exist_xyz.json"
+        self.assertIsNone(dl.read_live_soc_kwh(datetime.now(UTC)))
+
+    def test_read_live_soc_kwh_returns_none_when_stale(self):
+        old_ts = (datetime.now(UTC) - timedelta(seconds=200)).isoformat()
+        Path(self._live_json.name).write_text(
+            json.dumps({"timestamp": old_ts, "soc_pct": 10.0, "pv_w": 0, "house_load_w": 0})
+        )
+        self.assertIsNone(dl.read_live_soc_kwh(datetime.now(UTC)))
+
+    def test_soc_floor_recovery_idle_below_headroom_escalates_to_charge(self):
+        # SoC is at the floor — idle must escalate to a small recovery charge.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH + 0.1  # inside the guard band
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, low_soc_kwh)
+        self.assertEqual(action, "charge")
+        self.assertEqual(power_w, dl.SOC_FLOOR_RECOVERY_W)
+
+    def test_soc_floor_recovery_idle_above_headroom_leaves_idle(self):
+        # SoC comfortably above the guard band — no escalation.
+        safe_soc_kwh = dl.BATTERY_FLOOR_KWH + dl.SOC_FLOOR_GUARD_HEADROOM_KWH + 0.5
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, safe_soc_kwh)
+        self.assertEqual(action, "idle")
+        self.assertEqual(power_w, 0)
+
+    def test_soc_floor_recovery_leaves_non_idle_actions_unchanged(self):
+        # charge/discharge decisions from the optimizer are never touched.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH  # extreme — doesn't matter
+        self.assertEqual(
+            dl.soc_floor_recovery_target("charge", 3000, low_soc_kwh), ("charge", 3000)
+        )
+        self.assertEqual(
+            dl.soc_floor_recovery_target("discharge", 2000, low_soc_kwh), ("discharge", 2000)
+        )
+
+    def test_soc_floor_recovery_with_none_soc_leaves_action_unchanged(self):
+        # live.json missing/stale — cannot read SoC, must not escalate blind.
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, None)
+        self.assertEqual(action, "idle")
+        self.assertEqual(power_w, 0)
+
+    def test_soc_floor_recovery_exactly_at_headroom_boundary_leaves_idle(self):
+        # Boundary: exactly at BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH is safe.
+        boundary_soc_kwh = dl.BATTERY_FLOOR_KWH + dl.SOC_FLOOR_GUARD_HEADROOM_KWH
+        action, power_w = dl.soc_floor_recovery_target("idle", 0, boundary_soc_kwh)
+        self.assertEqual(action, "idle")
+        self.assertEqual(power_w, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

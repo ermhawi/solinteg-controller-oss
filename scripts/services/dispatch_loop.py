@@ -322,6 +322,12 @@ BATTERY_SAVE_W = max(0, int(os.environ.get(
     "SOLINTEG_BATTERY_SAVE_DRIFT_W",
     os.environ.get("DISPATCH_BATTERY_SAVE_W", "220"),
 ))) // 10 * 10
+# SoC-floor guard: when live SoC drops below BATTERY_FLOOR_KWH + this headroom during an
+# idle slot, escalate to a small recovery charge so the optimizer — not the BMS — owns the
+# timing and can avoid buying at peak price. SOC_FLOOR_RECOVERY_W is chosen to raise SoC
+# gently (~0.28 kWh/h) without grid-import spikes. Must be a positive multiple of 10 W.
+SOC_FLOOR_GUARD_HEADROOM_KWH = float(os.environ.get("DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH", "0.5"))
+SOC_FLOOR_RECOVERY_W = max(10, int(os.environ.get("DISPATCH_SOC_FLOOR_RECOVERY_W", "300")) // 10 * 10)
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
 # Same env var lib/constants.ts's BATTERY_RT_EFF reads (kept in sync by the cross-language test).
@@ -594,6 +600,25 @@ def read_live_solar_surplus_w(now: datetime):
     return max(0.0, pv_w - house_load_w)
 
 
+def read_live_soc_kwh(now: datetime):
+    """Live battery SoC in kWh from the poller's live.json, or None if missing/stale.
+
+    Reads soc_pct written by modbus_poller.py and converts to kWh using BATTERY_KWH.
+    Returns None conservatively when live.json is unavailable so callers treat the
+    absence of data as 'unknown' rather than escalating blindly.
+    """
+    data = common.read_json(LIVE_JSON_PATH)
+    if data is None:
+        return None
+    try:
+        age_s = (now - datetime.fromisoformat(data["timestamp"])).total_seconds()
+        if age_s > LIVE_MAX_AGE_S:
+            return None
+        return float(data["soc_pct"]) / 100 * BATTERY_KWH
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def live_discharge_power_w(dispatch: list, idx: int, now: datetime, planned_power_w: int):
     """Battery discharge power that holds this slot's REAL grid exchange at what the plan
     intended (dispatch[idx].gridKwh, +import/−export), given live pv_w/house_load_w —
@@ -739,6 +764,18 @@ def decide(con: sqlite3.Connection, now: datetime):
     planned_power_w = slot_power_w(dispatch, idx, prev_soc) if planned_action != "idle" else 0
     action, power_w = battery_save_target(planned_action, planned_power_w, dispatch[idx])
     save_mode = planned_action == "idle" and action == "discharge"
+    if not save_mode:
+        # SoC-floor guard: when idle and live SoC is near the floor, escalate to a small
+        # recovery charge BEFORE the inverter's BMS triggers its own uncontrolled buy.
+        # battery_save (save_mode) already won the idle comparison — skip so we don't
+        # replace a deliberate drift-discharge with a recovery charge.
+        live_soc_kwh = read_live_soc_kwh(now)
+        action, power_w = soc_floor_recovery_target(action, power_w, live_soc_kwh)
+        if action == "charge" and planned_action == "idle":
+            log.info("soc-floor guard: live SoC %.2f kWh below floor+headroom (%.2f kWh) "
+                     "— escalating idle to %d W recovery charge",
+                     live_soc_kwh, BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH,
+                     power_w)
 
     numbers: dict = {}
     if inputs and idx < len(inputs):
@@ -839,6 +876,27 @@ def battery_save_target(action: str, power_w: int, slot: dict | None = None):
         planned_target = planned_drift / SLOT_HOURS * 1000 * ONE_WAY_EFF
         target = int(min(BATTERY_SAVE_W, planned_target, load_cap, soc_cap) // 10 * 10)
         return ("discharge", target) if target > 0 else ("idle", 0)
+    return action, power_w
+
+
+def soc_floor_recovery_target(action: str, power_w: int, live_soc_kwh):
+    """Escalate an idle action to a small recovery charge when live SoC is near the floor.
+
+    When SoC drifts below BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH while the plan
+    says idle, the inverter's own BMS will eventually trigger a forceful charge at whatever
+    the current spot price is. This guard intercepts earlier: by escalating to a small
+    SOC_FLOOR_RECOVERY_W charge the optimizer (not the BMS) owns the timing.
+
+    Only triggers for idle actions — charge/discharge decisions from the optimizer are
+    never touched. Returns (action, power_w) unchanged when live SoC is unavailable
+    (live.json missing/stale), so the guard never escalates blind.
+    """
+    if action != "idle":
+        return action, power_w
+    if live_soc_kwh is None:
+        return action, power_w
+    if live_soc_kwh < BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH:
+        return "charge", SOC_FLOOR_RECOVERY_W
     return action, power_w
 
 
