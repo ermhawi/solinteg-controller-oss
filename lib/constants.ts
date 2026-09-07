@@ -82,6 +82,9 @@ export const BATTERY_SAVE_DRIFT_W = numEnv(
   numEnv('DISPATCH_BATTERY_SAVE_W', 220),
 );
 
+/** Observed physical discharge during battery-save/auto operation; distinct from the inverter setpoint. */
+export const BATTERY_SAVE_FORECAST_DRAIN_W = numEnv('SOLINTEG_BATTERY_SAVE_FORECAST_DRAIN_W', 220);
+
 const SOC_FLOOR_PCT = numEnv('SOLINTEG_SOC_FLOOR_PCT', 8);
 export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100); // operational floor (2.048 kWh at 8%)
 

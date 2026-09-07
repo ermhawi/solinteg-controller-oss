@@ -68,11 +68,11 @@ export interface DispatchSlot {
 }
 
 const BATTERY_SAVE_HOLD_LOAD_KWH = 0.15;
-const BATTERY_SAVE_HOLD_HEADROOM_KWH = 1;
+
 
 function batterySaveHoldOutputKwh(soc: number, loadRem: number, driftW: number): number {
   if (!(driftW > 0) || loadRem < BATTERY_SAVE_HOLD_LOAD_KWH) return 0;
-  if (soc < MIN_SOC_KWH + BATTERY_SAVE_HOLD_HEADROOM_KWH) return 0;
+  if (soc <= MIN_SOC_KWH) return 0;
   return Math.min(driftW / 4000, loadRem, Math.max(0, soc - MIN_SOC_KWH) * ONE_WAY_EFF);
 }
 
@@ -89,7 +89,7 @@ export function applyBatterySaveForecast(dispatch: DispatchSlot[], driftW: numbe
     const isPlannedHold =
       slot.action === 'idle' &&
       slot.loadFromGridKwh >= BATTERY_SAVE_HOLD_LOAD_KWH &&
-      slot.socAfter >= MIN_SOC_KWH + BATTERY_SAVE_HOLD_HEADROOM_KWH;
+      slot.socAfter > MIN_SOC_KWH;
     if (isPlannedHold) {
       const available = Math.max(0, slot.socAfter - cumulativeDrift - MIN_SOC_KWH);
       const applied = Math.min(driftKwh, available);
@@ -366,11 +366,7 @@ function dpCore(
     const ch = new Int16Array(SOC_LEVELS);
     const driftCh = new Uint8Array(SOC_LEVELS);
     const { buy, sell } = planningPrices(slots[i], opts?.forecastRiskPremiumOre ?? 0);
-    // Raw (unrisk-adjusted) prices for the battery-save hold cost comparison: the hold is an
-    // empirical correction, not a price-driven arbitrage decision, so it should not be
-    // penalised by the forecastRiskPremium that makes speculative trades on forecast slots
-    // more expensive. Using raw prices here ensures holdCost competes fairly against idle.
-    const { buy: rawBuy, sell: rawSell } = planningPrices(slots[i], 0);
+
     const sr = solarRem[i];
     const lr = loadRem[i];
     const autoInput = autoChargeInputKwh[i];
@@ -446,21 +442,15 @@ function dpCore(
         const holdSocAfter = socOf(holdJ);
         const actualHoldOutput = Math.max(0, soc - holdSocAfter) * ONE_WAY_EFF;
         const holdF = computeFlows(soc, holdSocAfter, sr, lr);
-        const holdCost =
-          holdF.gridImport * rawBuy - holdF.gridExport * rawSell +
-          BATTERY_WEAR_COST_ORE_PER_KWH * (actualHoldOutput / ONE_WAY_EFF) + costToGo[holdJ];
-        // The battery-save hold is an empirical correction for a physical inverter behaviour
-        // (the inverter discharges ~220 W during "idle" hold slots regardless of the 50 W setpoint).
-        // It must compete against idle (j===s, dE=0) only — never against a charge or discharge
-        // arbitrage decision. Critically, the comparison uses raw prices (rawBuy/rawSell) on both
-        // sides so that forecastRiskPremium — which inflates planning prices on forecast slots to
-        // discourage speculative trades — does not spuriously suppress the empirical drift.
-        // If the DP already chose a non-idle action (charge or discharge) as best, drift still wins
-        // over idle but loses to a genuinely better arbitrage: we only override bestJ when the
-        // idle-raw cost (same SoC, raw prices) is worse than the drift-hold cost.
-        const idleRawCost = computeFlows(soc, soc, sr, lr).gridImport * rawBuy + costToGo[s];
-        if (holdJ < s && actualHoldOutput > 0 && holdF.feasible && holdCost < idleRawCost) {
-          best = holdCost;
+        // The battery-save hold is an empirical correction for physical inverter behaviour.
+        // It is not an optional arbitrage action: represent it whenever the economic choice is
+        // idle, while a genuinely better active charge/discharge decision still wins.
+        if (holdJ < s && actualHoldOutput > 0 && holdF.feasible && bestJ === s) {
+          best =
+            holdF.gridImport * buy -
+            holdF.gridExport * sell +
+            BATTERY_WEAR_COST_ORE_PER_KWH * (actualHoldOutput / ONE_WAY_EFF) +
+            costToGo[holdJ];
           bestJ = holdJ;
           driftCh[s] = 1;
         }

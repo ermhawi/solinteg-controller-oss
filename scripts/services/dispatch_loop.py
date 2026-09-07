@@ -285,7 +285,8 @@ BATTERY_FLOOR_KWH = BATTERY_KWH * SOC_FLOOR_PCT / 100
 # Keep these aligned with lib/chart-utils.ts's hold-band classification. Missing flow fields
 # deliberately do not qualify: older/partial plans must retain the safe idle -> Auto behaviour.
 HOLD_LOAD_FROM_GRID_KWH = 0.15
-HOLD_SOC_HEADROOM_KWH = 1.0
+# The forecast drain is measured inverter behaviour, not a reserve margin. The SoC cap below
+# still prevents the target from crossing the operational floor.
 # How far actual SoC may drift from the plan's assumed starting point for this slot before
 # we stop trusting the plan's calculated power and fall back to auto instead. The plan is
 # only as fresh as the last optimizer_runs row (recomputed on a dashboard view, or hourly
@@ -854,16 +855,15 @@ def is_planned_hold(slot: dict) -> bool:
         return False
     return (
         load_from_grid >= HOLD_LOAD_FROM_GRID_KWH
-        and soc_after >= BATTERY_FLOOR_KWH + HOLD_SOC_HEADROOM_KWH
+        and soc_after > BATTERY_FLOOR_KWH
     )
 
 
 def battery_save_target(action: str, power_w: int, slot: dict | None = None):
-    """Apply only the optimizer's explicitly selected idle battery-save drift."""
+    """Apply the optimizer's physical battery-save drift on explicitly marked hold slots."""
     if action == "idle" and BATTERY_SAVE_W > 0 and slot is not None and is_planned_hold(slot):
-        # The optimizer now decides whether the drift is economically worthwhile. A missing
-        # field is treated as no drift so persisted plans cannot silently diverge from their
-        # recorded economics.
+        # A missing field is treated as no drift so persisted plans cannot silently diverge from
+        # their recorded physical trajectory.
         try:
             planned_drift = float(slot.get("batterySaveDriftKwh") or 0)
         except (TypeError, ValueError):

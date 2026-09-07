@@ -18,7 +18,7 @@ import {
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
   FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
-  BATTERY_SAVE_DRIFT_W,
+  BATTERY_SAVE_FORECAST_DRAIN_W,
 } from './constants';
 
 export interface PlanResult {
@@ -218,7 +218,7 @@ export async function producePlan(): Promise<PlanResult> {
           process.env.SOLINTEG_HOLD_ENABLED === '1' &&
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
-        batterySaveDriftW: BATTERY_SAVE_DRIFT_W,
+        batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
       });
       logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
     } catch (err) {
