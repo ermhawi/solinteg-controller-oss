@@ -10,7 +10,14 @@ import type { DispatchSlot } from './optimizer';
 import { readLiveInverterData, socKwhOrDefault } from './inverter';
 import type { InverterLiveData } from './inverter';
 import { trimIncompleteTerminalDays } from './horizon';
-import { logPriceSnapshot, logOptimizerRun, logSolarForecasts, readTrailingLoadProfile } from './telemetry';
+import {
+  logPriceSnapshot,
+  logOptimizerRun,
+  logSolarForecasts,
+  readTodayFlowRows,
+  readTrailingLoadProfile,
+} from './telemetry';
+import { applyIntradaySolarNowcast } from './solar-nowcast';
 import {
   LIVE_LOAD_PROFILE_DAYS,
   LOAD_FORECAST_MARGIN,
@@ -149,6 +156,11 @@ export async function producePlan(): Promise<PlanResult> {
 
   const startSoc = socKwhOrDefault(inverterData);
   const socIsLive = inverterData != null;
+  const now = new Date();
+  const nowcast = solarForecast
+    ? applyIntradaySolarNowcast(solarForecast, readTodayFlowRows(now), now)
+    : null;
+  const planningSolarForecast = nowcast?.forecast ?? solarForecast;
   let solarProfiles: Record<number, number[]> = {};
   let dispatchSchedule: DispatchSlot[] | null = null;
 
@@ -159,7 +171,7 @@ export async function producePlan(): Promise<PlanResult> {
     const liveLoad = readTrailingLoadProfile(LIVE_LOAD_PROFILE_DAYS);
     const allSlots = buildOptimizerSlots(
       data,
-      solarForecast,
+      planningSolarForecast,
       solarProfiles,
       tempByDate,
       liveLoad,
@@ -183,7 +195,7 @@ export async function producePlan(): Promise<PlanResult> {
       // the whole array (old behaviour, never worse); past the end (now is beyond
       // the last loaded day) yields an empty slice, which optimizeDispatch and the
       // dispatch loop both already treat as "no plan right now" safely.
-      const nowSlotIdx = Math.max(0, currentSlotIndexInPrices(data.today, new Date()));
+      const nowSlotIdx = Math.max(0, currentSlotIndexInPrices(data.today, now));
       // Do not let a partial future day become the DP's terminal point. The optimizer has zero
       // terminal value, so it would otherwise spend the battery at the end of whatever rolling
       // horizon the price provider happened to return (e.g. 22:30 on the final day).
@@ -228,5 +240,13 @@ export async function producePlan(): Promise<PlanResult> {
     }
   }
 
-  return { data, solarProfiles, solarForecast, dispatchSchedule, startSoc, socIsLive, inverterData };
+  return {
+    data,
+    solarProfiles,
+    solarForecast: planningSolarForecast,
+    dispatchSchedule,
+    startSoc,
+    socIsLive,
+    inverterData,
+  };
 }

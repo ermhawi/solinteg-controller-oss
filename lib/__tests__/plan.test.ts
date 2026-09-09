@@ -56,6 +56,7 @@ vi.mock('../telemetry', () => ({
   logOptimizerRun: vi.fn(),
   logSolarForecasts: vi.fn(),
   readTrailingLoadProfile: vi.fn(),
+  readTodayFlowRows: vi.fn(() => []),
 }));
 
 import { fetchPricesUncached, currentSlotIndexInPrices } from '../prices';
