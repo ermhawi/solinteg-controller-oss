@@ -67,6 +67,14 @@ export interface OptimizerSlot {
   solarSource?: 'forecast' | 'stale' | 'typical';
   loadSource?: 'modeled' | 'baseline' | 'live';
   priceSource?: 'actual' | 'forecast';
+  // The price provider's own uncertainty band for this slot, as a half-width in öre/kWh on the BUY
+  // side (see lib/prices.ts). Logged, NOT read by the DP — same status as the provenance tags
+  // above. It exists so the flat FORECAST_RISK_PREMIUM_ORE can eventually be replaced by a
+  // per-slot, measured figure: the raw band is far too wide to use as a surcharge directly
+  // (PlaneraElen's low/high reaches ±97 öre/kWh three days out), so relating band width to
+  // realised forecast error needs the error distribution this field is here to collect.
+  // See OPTIMIZER-AUDIT.md P1-1 and Phase M.
+  priceUncertaintyOre?: number;
 }
 
 export interface DispatchSlot {
@@ -296,11 +304,33 @@ export function terminalEnergyValueOre(slots: OptimizerSlot[]): number {
   return Math.max(0, minBuy * ONE_WAY_EFF - BATTERY_WEAR_COST_ORE_PER_KWH);
 }
 
-export function planningPrices(slot: Pick<OptimizerSlot, 'buyPrice' | 'sellPrice' | 'priceSource'>, forecastRiskPremiumOre: number) {
-  if (slot.priceSource !== 'forecast' || forecastRiskPremiumOre <= 0) {
-    return { buy: slot.buyPrice, sell: slot.sellPrice };
-  }
-  return { buy: slot.buyPrice + forecastRiskPremiumOre, sell: slot.sellPrice - forecastRiskPremiumOre };
+/**
+ * Per-kWh surcharge on the battery's GRID-FACING energy in a slot whose price is only a forecast.
+ *
+ * This replaced `planningPrices`, which added the premium to `buyPrice` and subtracted it from
+ * `sellPrice` on forecast slots. That looks like the same thing and is not, because the DP uses
+ * `buyPrice` for two different jobs: costing an import, and — through the cost-to-go — valuing the
+ * energy already in the battery, whose worth IS the import it will avoid. Raising `buyPrice` on
+ * forecast days therefore made carrying energy into them look *better* than it is, i.e. the
+ * "conservative" knob was a hoarding incentive. Measured 2026-09-10 on a two-day horizon (day 1
+ * settled, day 2 forecast): with the premium on, the plan parked the battery at 100 % at midnight in
+ * every price variant tried instead of ending at 5.7-7.2 kWh, and the true value came out slightly
+ * WORSE each time. 100 % overnight is also the worst SoC for calendar ageing and leaves no headroom
+ * for the next morning's PV.
+ *
+ * As a surcharge on the transaction it discourages exactly what uncertainty should discourage —
+ * buying and selling on a price nobody has settled yet — while leaving the value of stored energy at
+ * the honest point forecast. Load-covering discharges are untouched, same reasoning as the deferral
+ * bias: their timing is dictated by when the load happens.
+ *
+ * The MAGNITUDE is still a flat constant per forecast slot. `OptimizerSlot.priceUncertaintyOre`
+ * carries the provider's own per-slot band for the refit that should replace it (see
+ * OPTIMIZER-AUDIT.md P1-1 / Phase M); it is logged, not yet consumed, because the raw band is far
+ * too wide to use as a surcharge directly (PlaneraElen's low/high reaches ±97 öre/kWh on a
+ * three-day-out slot) and calibrating it needs the forecast-error distribution, not a guess.
+ */
+function forecastRiskOre(slot: OptimizerSlot, premiumOre: number): number {
+  return slot.priceSource === 'forecast' && premiumOre > 0 ? premiumOre : 0;
 }
 
 export function optimizeDispatch(
@@ -520,7 +550,12 @@ function dpCore(
     const cur = new Float64Array(SOC_LEVELS);
     const ch = new Int16Array(SOC_LEVELS);
     const driftCh = new Uint8Array(SOC_LEVELS);
-    const { buy, sell } = planningPrices(slots[i], opts?.forecastRiskPremiumOre ?? 0);
+    // Honest point forecasts. The forecast-price risk is charged on the TRANSACTION below
+    // (forecastRiskOre), never folded into these — see forecastRiskOre for why the difference is
+    // the whole point.
+    const buy = slots[i].buyPrice;
+    const sell = slots[i].sellPrice;
+    const forecastOre = forecastRiskOre(slots[i], opts?.forecastRiskPremiumOre ?? 0);
 
     const sr = solarRem[i];
     const lr = loadRem[i];
@@ -568,7 +603,7 @@ function dpCore(
           gImp = gridToBattery + lr;
           gExp = sr - fromSolar;
           if (gExp > GRID_SLOT_KWH) gExp = GRID_SLOT_KWH;
-          riskOre = gridToBattery * (deferOre[i] + solarRiskOre);
+          riskOre = gridToBattery * (deferOre[i] + solarRiskOre + forecastOre);
         } else {
           const out = -dE * ONE_WAY_EFF;
           const toLoad = out < lr ? out : lr;
@@ -577,7 +612,7 @@ function dpCore(
           if (gExp > GRID_SLOT_KWH + 1e-9) continue; // over-export infeasible
           // Only the battery-to-grid share is deferral-biased: covering load (toLoad) happens
           // when the load happens — there is no "later" to defer it to.
-          riskOre = (out - toLoad) * deferOre[i];
+          riskOre = (out - toLoad) * (deferOre[i] + forecastOre);
         }
         if (gImp > GRID_SLOT_KWH + 1e-9) continue; // over-import infeasible
         // Wear cost on |dE| (battery throughput this slot) discourages cycling the

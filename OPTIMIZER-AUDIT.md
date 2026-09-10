@@ -61,6 +61,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 5 | P1-3 `evaluateDispatch` priced the wrong problem + P0-3 part 1 terminal value | ✅ done (one commit — the guard fix needs the terminal-value option) |
 | 6 | P1-2 deferral ramp unbounded in horizon length | ✅ done |
 | 7 | P1-4 solar premium saturated over a multi-day horizon + guard covered only deferral | ✅ done |
+| 8 | P1-1 forecast price premium was a hoarding incentive | ✅ done (band captured for the refit, not yet consumed) |
 
 ---
 
@@ -393,6 +394,32 @@ All three are planning-only surcharges set solely by `lib/plan.ts:184-190`. Indi
 a documented rationale; together they are unvalidated, horizon-dependent and partly contradictory.
 
 ## P1-1 `FORECAST_RISK_PREMIUM_ORE` inflates the value of hoarding energy into forecast days
+
+> **Status: ✅ done.** `planningPrices` is gone. The premium is now a per-kWh surcharge on the
+> battery's **grid-facing energy** in a forecast slot (`forecastRiskOre`), charged on
+> `gridToBattery` and on `batteryToGrid` exactly like the deferral bias, while `buyPrice`/`sellPrice`
+> stay at the honest point forecast. Load-covering discharges are untouched — same reasoning as the
+> deferral bias, their timing is dictated by when the load happens.
+>
+> That is the structural fix: the DP uses `buyPrice` for two jobs, costing an import *and* — through
+> the cost-to-go — valuing the energy already stored, whose worth is the import it will avoid. Shifting
+> the price level could not discourage the transaction without simultaneously inflating the state.
+> Re-measured after the change on the same two-day scenario that exposed it: the plan now ends
+> midnight at 5.74 / 7.15 kWh (identical to the honest optimum) instead of being forced to 15.05 kWh
+> (100 %), and true value is identical instead of slightly worse. It still suppresses grid-funded
+> charging inside the forecast day, which is what it is for.
+>
+> **Band captured, not yet consumed.** `PriceSlot.uncertaintyOre` / `OptimizerSlot.priceUncertaintyOre`
+> now carry PlaneraElen's own per-slot `low`/`high` band as a buy-side half-width (VAT-scaled), through
+> `buildOptimizerSlots` and into `optimizer_runs.inputs_json`. The DP does **not** read it, on purpose:
+> the raw band reaches ±97 öre/kWh three days out, so using it directly as a surcharge would forbid
+> every forecast-slot transaction. Relating band width to *realised* forecast error is a Phase M refit,
+> and this field is the data collection for it. A malformed or one-sided band degrades to "unknown"
+> rather than to a negative surcharge.
+>
+> Tests: the premium may not make the plan carry more into a forecast day than the honest optimum, and
+> must still not increase grid-funded charging there; settled-price slots stay bit-identical; and the
+> band derivation covers present/absent/one-sided/inverted.
 
 **What is wrong.** `planningPrices` (`lib/optimizer.ts:211`) adds +10 öre to `buyPrice` and
 subtracts 10 öre from `sellPrice` on every `priceSource === 'forecast'` slot. That is the right

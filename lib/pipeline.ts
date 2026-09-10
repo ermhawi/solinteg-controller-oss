@@ -55,6 +55,7 @@ export function buildOptimizerSlots(
       buyPrice: slot.priceIncludingTaxAndSurcharge + SKATT_OVERFÖRING,
       sellPrice: slot.price,
       priceSource: slot.source,
+      priceUncertaintyOre: slot.uncertaintyOre,
       solarKwh,
       solarSource,
       consumptionKwh: liveLoad

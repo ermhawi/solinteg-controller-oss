@@ -106,6 +106,34 @@ describe('forecastToSlot', () => {
     }, 11.5);
     expect(slot.price).toBeCloseTo(51.1, 2);
   });
+
+  // The provider's own per-slot uncertainty band, carried through for the refit that should replace
+  // the flat FORECAST_RISK_PREMIUM_ORE (OPTIMIZER-AUDIT.md P1-1). Logged, not yet used by the DP.
+  it('derives a buy-side uncertainty half-width from the provider band', () => {
+    const slot = forecastToSlot(
+      { time: '2026-08-28T23:45:00Z', price: 40, source: 'forecast', low: 20, high: 60 },
+      11.5,
+    );
+    // (60 − 20) / 2 EUR/MWh = 20 → 23 öre/kWh spot → ×1.25 VAT on the buy side.
+    expect(slot.uncertaintyOre).toBeCloseTo(20 * 11.5 * 0.1 * (1 + VAT_RATE), 2);
+  });
+
+  it('omits the band when the provider gives none, or gives a malformed one', () => {
+    const none = forecastToSlot({ time: '2026-08-28T23:45:00Z', price: 40, source: 'forecast' }, 11.5);
+    expect(none.uncertaintyOre).toBeUndefined();
+    // Half a band is not a band; and an inverted one must degrade to "unknown", never to a
+    // negative surcharge.
+    const halfBand = forecastToSlot(
+      { time: '2026-08-28T23:45:00Z', price: 40, source: 'forecast', low: 20 },
+      11.5,
+    );
+    expect(halfBand.uncertaintyOre).toBeUndefined();
+    const inverted = forecastToSlot(
+      { time: '2026-08-28T23:45:00Z', price: 40, source: 'forecast', low: 60, high: 20 },
+      11.5,
+    );
+    expect(inverted.uncertaintyOre).toBeUndefined();
+  });
 });
 
 // ─── computeMaxAge ────────────────────────────────────────────────────────────

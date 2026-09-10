@@ -6,7 +6,6 @@ import {
   GRID_KW,
   BATTERY_MAX_KW,
   BATTERY_MIN_SOC_KWH,
-  planningPrices,
   applyBatterySaveForecast,
   terminalEnergyValueOre,
 } from '../optimizer';
@@ -89,11 +88,58 @@ describe('optimizeDispatch', () => {
     expect(result[0].socAfter).toBeLessThan(MIN_SOC + 0.5);
   });
 
-  it('applies forecast risk margin only to planning prices', () => {
-    const actual = makeSlot(1, 0, { buyPrice: 80, sellPrice: 120, priceSource: 'actual' });
-    const forecast = makeSlot(1, 1, { buyPrice: 80, sellPrice: 120, priceSource: 'forecast' });
-    expect(planningPrices(actual, 10)).toEqual({ buy: 80, sell: 120 });
-    expect(planningPrices(forecast, 10)).toEqual({ buy: 90, sell: 110 });
+  it('charges forecast-price risk on the TRANSACTION, never on the price level', () => {
+    // The regression this pins (OPTIMIZER-AUDIT.md P1-1): the premium used to be added to buyPrice
+    // and subtracted from sellPrice on forecast slots. But the DP uses buyPrice both to cost an
+    // import AND — through the cost-to-go — to value the energy already stored, whose worth IS the
+    // import it will avoid. Raising it on forecast days made carrying energy into them look BETTER,
+    // so the "conservative" knob was a hoarding incentive: measured, it parked the battery at 100 %
+    // at midnight in every variant tried, and made true value slightly worse each time.
+    const day1 = Array.from({ length: 96 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, {
+        buyPrice: Math.floor(i / 4) < 5 ? 88 : 130,
+        sellPrice: 20,
+        consumptionKwh: 0.3,
+        priceSource: 'actual',
+      }),
+    );
+    const day2 = Array.from({ length: 96 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, {
+        buyPrice: Math.floor(i / 4) >= 7 && Math.floor(i / 4) < 10 ? 160 : 130,
+        sellPrice: 20,
+        consumptionKwh: 0.3,
+        priceSource: 'forecast',
+      }),
+    );
+    const slots = [...day1, ...day2];
+    const startSoc = MIN_SOC + 1;
+
+    const plain = optimizeDispatch(slots, startSoc, { loadFactor: 1.15 });
+    const cautious = optimizeDispatch(slots, startSoc, {
+      loadFactor: 1.15,
+      forecastRiskPremiumOre: 10,
+    });
+
+    // The premium must not make the plan carry MORE into the forecast day than the honest optimum.
+    expect(cautious[95].socAfter).toBeLessThanOrEqual(plain[95].socAfter + 1e-6);
+    // And it must still discourage transacting on unsettled prices: no grid-funded charging inside
+    // the forecast day, which the plain plan is free to do.
+    const forecastDayBuy = cautious.slice(96).reduce((sum, d) => sum + d.gridToBatteryKwh, 0);
+    const plainForecastDayBuy = plain.slice(96).reduce((sum, d) => sum + d.gridToBatteryKwh, 0);
+    expect(forecastDayBuy).toBeLessThanOrEqual(plainForecastDayBuy + 1e-6);
+  });
+
+  it('leaves settled-price slots untouched by the forecast premium', () => {
+    const slots = Array.from({ length: 48 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, {
+        buyPrice: Math.floor(i / 4) < 3 ? 88 : 200,
+        sellPrice: 20,
+        consumptionKwh: 0.4,
+        priceSource: 'actual',
+      }),
+    );
+    const plain = optimizeDispatch(slots, MIN_SOC + 1);
+    expect(optimizeDispatch(slots, MIN_SOC + 1, { forecastRiskPremiumOre: 10 })).toEqual(plain);
   });
 
   // ── Shape & hard constraints ──────────────────────────────────────────────

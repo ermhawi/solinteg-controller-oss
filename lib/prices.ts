@@ -13,6 +13,11 @@ export interface PriceSlot {
   price: number; // öre/kWh — the SELL price you actually receive: spot + EXPORT_BONUS_ORE
   priceIncludingTaxAndSurcharge: number; // öre/kWh — (spot + surcharge) × VAT (buy price, pre skatt/överföring)
   source?: 'actual' | 'forecast';
+  // Half-width of the provider's own uncertainty band for this slot, in öre/kWh on the BUY side
+  // (i.e. the spot band scaled by VAT, since buy = (spot + surcharge) × (1 + VAT)). Present only for
+  // forecast rows from a provider that publishes one. Carried through to the optimizer inputs and
+  // logged; not yet used in the cost function — see OptimizerSlot.priceUncertaintyOre.
+  uncertaintyOre?: number;
 }
 
 export interface PriceData {
@@ -36,6 +41,11 @@ interface PlaneraPriceSlot {
   // PlaneraElen's payload is EUR/MWh, matching the API metadata.
   price: number;
   source: 'actual' | 'forecast';
+  // Forecast rows also carry an uncertainty band (EUR/MWh). `low`/`high` is the inner band;
+  // `very_low`/`very_high` the outer one, which is wide enough to be useless as a planning input
+  // (one observed three-day-out row spanned −28.48 to +147.46 EUR/MWh). Only the inner band is read.
+  low?: number;
+  high?: number;
 }
 
 interface PlaneraResponse {
@@ -72,12 +82,19 @@ export function forecastToSlot(p: PlaneraPriceSlot, eurSekRate = 1): PriceSlot {
   const localTime = (parts: ReturnType<typeof stockholmParts>) =>
     `${parts.dateStr}T${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}:00`;
   const spot = Math.round(p.price * eurSekRate * 0.1 * 100) / 100; // EUR/MWh → SEK/MWh → öre/kWh
+  // Band half-width in öre/kWh on the buy side. Only when the provider gives both ends and they are
+  // the right way round — a malformed band must degrade to "no band", not to a negative surcharge.
+  const bandOre =
+    p.low != null && p.high != null && p.high >= p.low
+      ? Math.round(((p.high - p.low) / 2) * eurSekRate * 0.1 * (1 + VAT_RATE) * 100) / 100
+      : undefined;
   return {
     startTime: localTime(local),
     endTime: localTime(endLocal),
     price: Math.round((spot + EXPORT_BONUS_ORE) * 100) / 100,
     priceIncludingTaxAndSurcharge: Math.round((spot + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
     source: p.source,
+    ...(bandOre !== undefined ? { uncertaintyOre: bandOre } : {}),
   };
 }
 
