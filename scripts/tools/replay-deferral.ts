@@ -3,7 +3,7 @@
 //
 // Why this exists: `optimizeDispatch` runs the DP twice whenever deferral is on (with and
 // without the earliness bias), prices both trajectories at TRUE prices, and keeps the deferred
-// one only if it gives up at most MAX_DEFERRAL_SACRIFICE_ORE. **Nothing logs that decision.**
+// one only if it gives up at most MAX_RISK_SACRIFICE_ORE. **Nothing logs that decision.**
 // `optimizer_runs` stores the winning plan and no trace of which pass produced it or what the
 // runner-up cost — so "is the deferral bias actually in force right now?" was unanswerable from
 // telemetry, and the "is a deferred buy ratcheting later every replan?" question had to be
@@ -69,7 +69,7 @@ import {
   LOAD_FORECAST_MARGIN,
   DEFERRAL_RATE_ORE_PER_KWH_HOUR,
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
-  MAX_DEFERRAL_SACRIFICE_ORE,
+  MAX_RISK_SACRIFICE_ORE,
 } from '../../lib/constants';
 
 // Baselines from the reference deployment's first review with real grid charging to look at
@@ -165,12 +165,12 @@ function analyse(run: Run): Analysed {
     solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
   };
   const kept = optimizeDispatch(run.slots, run.startSoc, opts);
-  // The two candidates the guard chooses between. maxDeferralSacrificeOre=Infinity forces the
-  // biased trajectory through so it can be priced even when the live guard rejected it.
+  // The two candidates the guard chooses between. maxRiskSacrificeOre=Infinity forces the
+  // cautious trajectory through so it can be priced even when the live guard rejected it.
   const undeferred = optimizeDispatch(run.slots, run.startSoc, { ...opts, deferralRateOrePerKwhHour: 0 });
   const deferred = optimizeDispatch(run.slots, run.startSoc, {
     ...opts,
-    maxDeferralSacrificeOre: Number.POSITIVE_INFINITY,
+    maxRiskSacrificeOre: Number.POSITIVE_INFINITY,
   });
   const sacrificeOre =
     evaluateDispatch(run.slots, undeferred, run.startSoc).valueOre -
@@ -201,7 +201,7 @@ function analyse(run: Run): Analysed {
     diffSlots: diffIdx.length,
     maxDsocOnDiff,
     sacrificeOre,
-    keptDeferred: sacrificeOre <= MAX_DEFERRAL_SACRIFICE_ORE,
+    keptDeferred: sacrificeOre <= MAX_RISK_SACRIFICE_ORE,
     buyKwh: undeferred.reduce((a, s) => a + (s.action === 'charge' ? (s.gridToBatteryKwh ?? 0) : 0), 0),
     firstBuyKept: firstGridBuy(run.slots, kept),
     firstBuyUndeferred: firstGridBuy(run.slots, undeferred),
@@ -227,7 +227,7 @@ function main() {
   );
   console.log(
     `constants in force here: margin ${LOAD_FORECAST_MARGIN}, deferral ${DEFERRAL_RATE_ORE_PER_KWH_HOUR} ` +
-      `öre/kWh/h, solar risk ${SOLAR_RISK_PREMIUM_ORE_PER_KWH} öre/kWh, cap ${MAX_DEFERRAL_SACRIFICE_ORE} öre`,
+      `öre/kWh/h, solar risk ${SOLAR_RISK_PREMIUM_ORE_PER_KWH} öre/kWh, cap ${MAX_RISK_SACRIFICE_ORE} öre`,
   );
 
   // ---- 1. FIDELITY ------------------------------------------------------------------------

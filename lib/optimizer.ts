@@ -6,7 +6,8 @@ import {
   BATTERY_WEAR_COST_ORE_PER_KWH,
   DEFERRAL_HORIZON_HOURS,
   GRID_KW,
-  MAX_DEFERRAL_SACRIFICE_ORE,
+  MAX_RISK_SACRIFICE_ORE,
+  SOLAR_RISK_LOOKAHEAD_HOURS,
   HOLD_MIN_PV_KW,
   HOLD_REFILL_WINDOW_H,
   HOLD_REFILL_MARGIN,
@@ -227,15 +228,18 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
  *   replan. Bounded and measured from NOW rather than from the horizon's end — see
  *   DEFERRAL_HORIZON_HOURS for why that distinction cost the feature its usefulness. When set, the DP
  *   runs twice — with and without the bias — and the deferred plan is kept only if it gives up
- *   at most opts.maxDeferralSacrificeOre (default MAX_DEFERRAL_SACRIFICE_ORE) of TRUE-priced
- *   value vs the undeferred optimum, so a genuinely better early price is never deferred over.
+ *   at most opts.maxRiskSacrificeOre (default MAX_RISK_SACRIFICE_ORE) of TRUE-priced value vs the
+ *   risk-free optimum, so a genuinely better early price is never deferred over. That guard covers
+ *   ALL the risk knobs together, not just this one.
  *   Load-covering discharges are deliberately NOT biased: their timing is dictated by when the
  *   load occurs, and biasing them would fight the reserve logic for no option-value gain.
  * @param opts.solarRiskPremiumOre  risk-aware planning (see SOLAR_RISK_PREMIUM_ORE_PER_KWH):
- *   surcharge grid-funded charging by `premium × min(1, futureRawForecastSolar /
+ *   surcharge grid-funded charging by `premium × min(1, forecastSolarInTheNextFewHours /
  *   batteryHeadroom)` öre/kWh, so a buy that a plausible solar over-delivery would make
  *   redundant must clear a real risk margin, not any thin positive edge. Zero whenever no
- *   forecast solar remains (winter nights), so genuine arbitrage is untouched.
+ *   forecast solar is ahead within the lookahead window (winter nights), so genuine arbitrage is
+ *   untouched. The window (opts.solarRiskLookaheadHours) matters: summed over a multi-day horizon
+ *   the ratio saturates and the premium becomes a flat tax on charging.
  *   Both knobs are planning-only and default OFF: the oracle re-dispatches actual data in
  *   hindsight, where deferral/uncertainty have no meaning — biasing it would poison the
  *   regret-≥0 invariant (lib/oracle.ts). Only lib/plan.ts sets them, for live plans.
@@ -309,9 +313,14 @@ export function optimizeDispatch(
     /** Hours from now over which the deferral bias still discriminates; beyond it the surcharge is
      *  0. Defaults to DEFERRAL_HORIZON_HOURS. */
     deferralHorizonHours?: number;
-    maxDeferralSacrificeOre?: number;
+    /** Cap (öre, whole plan) on the TRUE value all the risk knobs together may give up. Defaults to
+     *  MAX_RISK_SACRIFICE_ORE. */
+    maxRiskSacrificeOre?: number;
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
+    /** Hours ahead over which the solar risk premium counts forecast solar. Defaults to
+     *  SOLAR_RISK_LOOKAHEAD_HOURS. */
+    solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
     /** öre per stored kWh above the floor at the horizon's end (see terminalEnergyValueOre).
@@ -321,26 +330,39 @@ export function optimizeDispatch(
     terminalValueOrePerKwh?: number;
   },
 ): DispatchSlot[] {
-  if ((opts?.deferralRateOrePerKwhHour ?? 0) > 0 && slots.length > 0) {
-    // Two-pass sacrifice guard: the deferral ramp is a planning fiction, so measure what it
-    // really costs — price both trajectories with the DP's own true-price arithmetic
-    // (evaluateDispatch) and refuse the deferred plan beyond the cap. All-or-nothing on
-    // purpose (see MAX_DEFERRAL_SACRIFICE_ORE's rationale).
-    const undeferred = dpCore(slots, startSoc, { ...opts, deferralRateOrePerKwhHour: 0 });
-    const deferred = dpCore(slots, startSoc, opts);
-    const cap = opts?.maxDeferralSacrificeOre ?? MAX_DEFERRAL_SACRIFICE_ORE;
+  // Two-pass sacrifice guard. Every risk knob is a planning fiction — a surcharge or a price
+  // haircut that exists to buy robustness, not because the money is real — so measure what the
+  // whole set of them actually costs: solve once with all of them off, once as configured, price
+  // both with the DP's own true-price arithmetic and refuse the cautious plan beyond the cap.
+  //
+  // It covered the DEFERRAL BIAS ONLY until 2026-09-10, which left the two larger knobs
+  // unmeasured: a 20 öre/kWh solar premium and a 10 öre price haircut could give up any amount of
+  // real value with nothing checking. See MAX_RISK_SACRIFICE_ORE.
+  const riskKnobsActive =
+    (opts?.deferralRateOrePerKwhHour ?? 0) > 0 ||
+    (opts?.solarRiskPremiumOre ?? 0) > 0 ||
+    (opts?.forecastRiskPremiumOre ?? 0) > 0;
+  if (riskKnobsActive && slots.length > 0) {
+    const fearless = dpCore(slots, startSoc, {
+      ...opts,
+      deferralRateOrePerKwhHour: 0,
+      solarRiskPremiumOre: 0,
+      forecastRiskPremiumOre: 0,
+    });
+    const cautious = dpCore(slots, startSoc, opts);
+    const cap = opts?.maxRiskSacrificeOre ?? MAX_RISK_SACRIFICE_ORE;
     // Priced on the problem the two plans were actually SOLVED against — same load margin, same
     // terminal value. Pricing them at unmargined load (as this did until 2026-09-10) meant neither
     // trajectory was optimal under the comparison metric, so the "sacrifice" measured accounting
-    // drift as much as deferral cost, and could even come out negative. See evaluateDispatch.
+    // drift as much as risk cost, and could even come out negative. See evaluateDispatch.
     const pricing = {
       loadFactor: opts?.loadFactor,
       terminalValueOrePerKwh: opts?.terminalValueOrePerKwh,
     };
     const sacrifice =
-      evaluateDispatch(slots, undeferred, startSoc, pricing).valueOre -
-      evaluateDispatch(slots, deferred, startSoc, pricing).valueOre;
-    return sacrifice <= cap ? deferred : undeferred;
+      evaluateDispatch(slots, fearless, startSoc, pricing).valueOre -
+      evaluateDispatch(slots, cautious, startSoc, pricing).valueOre;
+    return sacrifice <= cap ? cautious : fearless;
   }
   return dpCore(slots, startSoc, opts);
 }
@@ -355,6 +377,7 @@ function dpCore(
     deferralHorizonHours?: number;
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
+    solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
     terminalValueOrePerKwh?: number;
@@ -413,6 +436,12 @@ function dpCore(
   const deferralHorizonH = opts?.deferralHorizonHours ?? DEFERRAL_HORIZON_HOURS;
   const solarRiskPremiumOre = opts?.solarRiskPremiumOre ?? 0;
   const deferOre = new Float64Array(n);
+  // Forecast solar strictly AFTER slot i, but only within the lookahead window — not the whole
+  // horizon. Over the entire (now up to 3-day) horizon the ratio below saturates its own min(1, …)
+  // several times over, so the premium degenerated into a flat 20 öre/kWh on every grid-funded
+  // charge from roughly March to October, which is not what "prices forecast error" means. See
+  // SOLAR_RISK_LOOKAHEAD_HOURS.
+  const windowSolarKwh = new Float64Array(n + 1);
   const suffixSolarKwh = new Float64Array(n + 1);
   for (let i = n - 1; i >= 0; i--) {
     // Earliness measured from NOW (slot 0 — lib/plan.ts slices the horizon at the current slot
@@ -424,6 +453,13 @@ function dpCore(
     // DEFERRAL_HORIZON_HOURS in lib/constants.ts.
     deferOre[i] = deferralRate * Math.max(0, deferralHorizonH - 0.25 * i);
     suffixSolarKwh[i] = suffixSolarKwh[i + 1] + slots[i].solarKwh;
+  }
+  const solarWindowSlots = Math.max(
+    1,
+    Math.round((opts?.solarRiskLookaheadHours ?? SOLAR_RISK_LOOKAHEAD_HOURS) * 4),
+  );
+  for (let i = 0; i <= n; i++) {
+    windowSolarKwh[i] = suffixSolarKwh[i] - suffixSolarKwh[Math.min(n, i + solarWindowSlots)];
   }
 
   // Hold gates (opt-in). Precompute per-slot whether the DP MAY freeze SoC and export solar
@@ -514,7 +550,7 @@ function dpCore(
       const solarRiskOre =
         solarRiskPremiumOre > 0
           ? solarRiskPremiumOre *
-            Math.min(1, suffixSolarKwh[i + 1] / Math.max(BATTERY_KWH - soc, step))
+            Math.min(1, windowSolarKwh[i + 1] / Math.max(BATTERY_KWH - soc, step))
           : 0;
       let best = Infinity;
       let bestJ = s;

@@ -986,7 +986,7 @@ describe('risk-aware planning (deferral bias + solar risk premium — the 2026-0
     // Prove the guard was the deciding mechanism: with a loosened cap the same rate flips.
     const loosened = optimizeDispatch(slots, 10, {
       deferralRateOrePerKwhHour: 3,
-      maxDeferralSacrificeOre: 100,
+      maxRiskSacrificeOre: 100,
     });
     expect(soldKwh(loosened, 52, 56)).toBeGreaterThan(6);
   });
@@ -1020,6 +1020,70 @@ describe('risk-aware planning (deferral bias + solar risk premium — the 2026-0
     expect(boughtKwh(withPremium, 0, 12)).toBeLessThan(0.05); // premium: never ahead of the solar
     // the evening sell still happens — only the buy shrank/moved to the tail
     expect(soldKwh(withPremium, 24, 36)).toBeGreaterThan(5);
+  });
+
+  it('only counts solar inside the lookahead window, so a distant sunny day cannot suppress a buy', () => {
+    // The regression (OPTIMIZER-AUDIT.md P1-4): the ratio `futureSolar / headroom` was summed over
+    // the WHOLE horizon. Three days of solar exceeds any battery's headroom several times over, so
+    // min(1, …) saturated and the premium became a flat 20 öre/kWh on every grid-funded charge from
+    // roughly March to October — not "prices forecast error", just a tax on charging.
+    const cheap = Array.from({ length: 12 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, { buyPrice: 86, sellPrice: 6 }),
+    );
+    const peak = Array.from({ length: 12 }, (_, i) =>
+      makeSlot(3 + Math.floor(i / 4), i % 4, { buyPrice: 190, sellPrice: 120 }),
+    );
+    // 12 h of night pushes the sunny days past a 12 h lookahead from the cheap window.
+    const night = Array.from({ length: 48 }, (_, i) =>
+      makeSlot(6 + Math.floor(i / 4), i % 4, { buyPrice: 200, sellPrice: 5 }),
+    );
+    const sunnyDays = Array.from({ length: 192 }, (_, i) =>
+      makeSlot(18 + Math.floor(i / 4), i % 4, { buyPrice: 200, sellPrice: 5, solarKwh: 1.0 }),
+    );
+
+    const near = optimizeDispatch([...cheap, ...peak, ...night], MIN_SOC, {
+      solarRiskPremiumOre: 20,
+    });
+    const withDistantSolar = optimizeDispatch([...cheap, ...peak, ...night, ...sunnyDays], MIN_SOC, {
+      solarRiskPremiumOre: 20,
+    });
+
+    expect(boughtKwh(near, 0, 12)).toBeGreaterThan(1); // the trade is fine when no solar is in view
+    // …and stays fine when solar exists, but two days away: nothing it can do makes THIS buy
+    // redundant before the peak it was bought for.
+    expect(boughtKwh(withDistantSolar, 0, 12)).toBeCloseTo(boughtKwh(near, 0, 12), 1);
+  });
+
+  it('the sacrifice guard covers the solar premium too, not just the deferral bias', () => {
+    // Until 2026-09-10 the two-pass guard only ran for the deferral bias, so the largest knob of the
+    // three (20 öre/kWh) could give up unbounded real value with nothing measuring it.
+    // Raw forecast solar comparable to the battery's headroom drives the premium's ratio to ~1,
+    // while an equal load leaves zero net surplus — the deliberate design (the premium prices
+    // forecast ERROR, and the 2026-07-19 incident's forecast netted to zero surplus yet filled the
+    // battery). So this is a slot the premium hits at full strength.
+    const cheap = Array.from({ length: 12 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, {
+        buyPrice: 86,
+        sellPrice: 6,
+        solarKwh: 2.0,
+        consumptionKwh: 2.0,
+      }),
+    );
+    const peak = Array.from({ length: 12 }, (_, i) =>
+      makeSlot(3 + Math.floor(i / 4), i % 4, { buyPrice: 400, sellPrice: 320 }),
+    );
+    const slots = [...cheap, ...peak];
+
+    // An absurd premium would kill a trade worth far more than the cap; the guard must refuse it.
+    const guarded = optimizeDispatch(slots, MIN_SOC, { solarRiskPremiumOre: 500 });
+    expect(boughtKwh(guarded, 0, 12)).toBeGreaterThan(1);
+
+    // Prove the guard is the deciding mechanism: with the cap lifted, the same premium wins.
+    const loosened = optimizeDispatch(slots, MIN_SOC, {
+      solarRiskPremiumOre: 500,
+      maxRiskSacrificeOre: 1e9,
+    });
+    expect(boughtKwh(loosened, 0, 12)).toBeLessThan(boughtKwh(guarded, 0, 12));
   });
 
   it('premium leaves no-solar (winter night) arbitrage bit-identical to the plain optimum', () => {

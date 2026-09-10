@@ -60,6 +60,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 4 | P0-3 part 2 + G7 horizon robustness (DST days, forecast holes, visibility) | ✅ done |
 | 5 | P1-3 `evaluateDispatch` priced the wrong problem + P0-3 part 1 terminal value | ✅ done (one commit — the guard fix needs the terminal-value option) |
 | 6 | P1-2 deferral ramp unbounded in horizon length | ✅ done |
+| 7 | P1-4 solar premium saturated over a multi-day horizon + guard covered only deferral | ✅ done |
 
 ---
 
@@ -511,6 +512,27 @@ tests stay bit-identical) and have the guard pass the same factor the DP used. A
 value of any other feasible trajectory under the same factor.
 
 ## P1-4 The solar risk premium sums solar over the whole horizon, not the rest of the day
+
+> **Status: ✅ done, both halves.**
+>
+> **Windowed.** The premium's numerator is now forecast solar within `SOLAR_RISK_LOOKAHEAD_HOURS`
+> (env `SOLINTEG_SOLAR_RISK_LOOKAHEAD_H`, default 12 h) after the slot, computed as a difference of
+> the existing suffix sums so it stays O(1) per state. 12 h covers the rest of a daylight day, which
+> is the horizon over which solar can plausibly arrive and make a charge redundant before the stored
+> energy is needed; beyond that the buy is not competing with the same solar any more.
+>
+> **Guarded.** The two-pass sacrifice guard ran for the deferral bias only, which left the largest
+> knob of the three (20 öre/kWh) able to give up unbounded real value with nothing measuring it. It
+> now runs whenever **any** risk knob is active and compares "all knobs off" against "as configured",
+> so one cap bounds the whole set. `MAX_DEFERRAL_SACRIFICE_ORE` → `MAX_RISK_SACRIFICE_ORE`, env
+> `SOLINTEG_RISK_MAX_SACRIFICE_ORE` with the old `SOLINTEG_DEFERRAL_MAX_SACRIFICE_ORE` still read as
+> a fallback so an existing deployment's setting keeps working; the opt is `maxRiskSacrificeOre`.
+>
+> Tests: a distant sunny day (past the lookahead) must not change a buy that no solar can make
+> redundant before its peak — the saturation regression; and an absurd premium killing a
+> far-more-valuable trade must be rejected by the guard, with the cap lifted to prove the guard is
+> what decided. The existing "waits out the forecast solar" and "winter night bit-identical" tests
+> pass unchanged.
 
 **What is wrong.** `suffixSolarKwh[i+1]` (`lib/optimizer.ts:302-305, 351-354`) is the raw forecast
 solar over *all* remaining slots — up to three days — divided by the battery's *current* headroom.

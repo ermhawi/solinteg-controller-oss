@@ -175,17 +175,30 @@ export const DEFERRAL_HORIZON_HOURS = numEnv('SOLINTEG_DEFERRAL_HORIZON_H', 12);
 export const FORECAST_RISK_PREMIUM_ORE = numEnv('SOLINTEG_FORECAST_RISK_PREMIUM_ORE', 10);
 
 /**
- * Hard cap (öre, whole-plan total) on the real value the deferral bias may give up.
- * optimizeDispatch runs the DP twice when deferral is on — with and without the bias —
- * prices both trajectories at TRUE prices (evaluateDispatch), and keeps the deferred plan
- * only if it costs at most this much. So "prefer later" can never silently trade away more
- * than ~0.5 kr per plan: a sell peak tonight that genuinely beats tomorrow's by 10+ öre/kWh
- * stays tonight (10 öre × a battery-scale sell blows this cap), while an
- * evening-vs-next-morning sell at a few öre difference defers. All-or-nothing by design:
- * a plan mixing good deferrals with one expensive one falls back entirely — safety first
- * at öre-scale stakes. Env: SOLINTEG_DEFERRAL_MAX_SACRIFICE_ORE.
+ * Hard cap (öre, whole-plan total) on the real value ALL the planning-risk knobs together may give
+ * up: the deferral bias, the solar risk premium and the forecast price premium.
+ *
+ * optimizeDispatch runs the DP twice whenever any of them is active — once with every risk knob at
+ * zero, once as configured — prices both trajectories at TRUE prices (evaluateDispatch, on the same
+ * load margin and terminal value the plans were solved with) and keeps the risk-aware plan only if
+ * it costs at most this much. So caution can never silently trade away more than ~0.5 kr per plan:
+ * a sell peak tonight that genuinely beats tomorrow's by 10+ öre/kWh stays tonight (10 öre × a
+ * battery-scale sell blows this cap), while an evening-vs-next-morning sell at a few öre difference
+ * defers.
+ *
+ * It covered the deferral bias ONLY until 2026-09-10, which left the solar premium — the largest of
+ * the three at 20 öre/kWh — able to give up unbounded real value with nothing measuring it.
+ *
+ * All-or-nothing by design: a plan mixing good caution with one expensive piece of it falls back
+ * entirely. Safety first at öre-scale stakes, and it keeps the guard a comparison between two real
+ * plans rather than an attribution problem.
+ * Env: SOLINTEG_RISK_MAX_SACRIFICE_ORE (falls back to the older
+ * SOLINTEG_DEFERRAL_MAX_SACRIFICE_ORE so an existing deployment's setting keeps working).
  */
-export const MAX_DEFERRAL_SACRIFICE_ORE = numEnv('SOLINTEG_DEFERRAL_MAX_SACRIFICE_ORE', 50);
+export const MAX_RISK_SACRIFICE_ORE = numEnv(
+  'SOLINTEG_RISK_MAX_SACRIFICE_ORE',
+  numEnv('SOLINTEG_DEFERRAL_MAX_SACRIFICE_ORE', 50),
+);
 
 /**
  * Risk-aware planning knob 2 of 2: uncertainty premium on grid-funded battery charging
@@ -241,6 +254,23 @@ export const HOLD_REFILL_MARGIN = numEnv('SOLINTEG_HOLD_REFILL_MARGIN', 1.1);
  * demand a real profit margin per exported kWh. Env: SOLINTEG_HOLD_PRICE_DROP_ORE.
  */
 export const HOLD_PRICE_DROP_MARGIN_ORE = numEnv('SOLINTEG_HOLD_PRICE_DROP_ORE', 0);
+
+/**
+ * How far ahead the solar risk premium counts forecast solar (hours).
+ *
+ * The premium scales with `futureRawForecastSolar / batteryHeadroom`, capped at 1. That ratio was
+ * computed over the ENTIRE remaining horizon, which was fine while the horizon was one day and
+ * meaningless once it reached three: three days of solar exceeds any battery's headroom several
+ * times over, so `min(1, …)` saturated and the premium became a flat 20 öre/kWh on every
+ * grid-funded charge, at every hour, from roughly March to October. The constant's own docstring
+ * describes "the remaining day's forecast solar" — this is the window that makes that true.
+ *
+ * 12 h covers the rest of a daylight day, which is the horizon over which solar can plausibly
+ * arrive and make a charge redundant before the stored energy is needed. Beyond that the buy is not
+ * competing with the same solar any more; it is competing with tomorrow's plan, which will be
+ * re-decided anyway. Env: SOLINTEG_SOLAR_RISK_LOOKAHEAD_H.
+ */
+export const SOLAR_RISK_LOOKAHEAD_HOURS = numEnv('SOLINTEG_SOLAR_RISK_LOOKAHEAD_H', 12);
 
 /**
  * Multiplier on the DP's terminal energy value (0..1; 0 disables and restores the historical
