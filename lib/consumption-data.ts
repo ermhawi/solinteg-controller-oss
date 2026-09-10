@@ -2,7 +2,14 @@
 // Source: inverter daily data 2022-12 – 2026-01 (~3 years), reference installation
 // All values are averages across all available years for that calendar month.
 
-/** Average kWh produced by the PV system per day, by month (index 0 = January). */
+/** Average kWh produced by the PV system per day, by month (index 0 = January).
+ *
+ *  ⚠️ STILL THE ORIGINAL GÖTEBORG REFERENCE SITE'S DATA — a 14.06 kWp installation. This site is
+ *  5.4 kWp and models ~23.8 kWh/day at midsummer against the 67.8 below, so these numbers are not
+ *  this roof's. Nothing at runtime reads them; the only consumer is
+ *  scripts/tools/build-solar-calibration.ts, which would produce a meaningless ratio from them.
+ *  Regenerate via scripts/tools/process-inverter-data.ts from your own export before running that
+ *  calibration — see DOMAIN.md's onboarding order. */
 export const avgDailyProductionByMonth: number[] = [4, 11.2, 25.5, 50, 68.8, 67.8, 58.8, 47.5, 34.9, 17, 6.6, 2.8];
 
 /** Average kWh consumed by the household per day, by month (index 0 = January).
@@ -23,16 +30,27 @@ export const avgDailyConsumptionByMonth: number[] = [55.2, 54.1, 42.6, 51.4, 22.
  *  and lib/irradiance-data.ts's climatology) once BOTH reflect your own site and you have a real
  *  season of production — see DOMAIN.md's onboarding order. Note: lib/__tests__/forecast.test.ts
  *  mocks distinct per-month values so its month-indexing guard survives this uniform reset. */
-// Aug (index 7) and Sep (index 8) calibrated from 2026-08-12–2026-09-05 telemetry (25 days).
-// Systematic panel-model bias on weather-accurate days: ~1.40× both months.
-// Other months left at 1.0 until same-season data exists — see DOMAIN.md.
 export const solarCalibrationByMonth: number[] = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
-// Uniform 1.0: this site has no production history to calibrate against yet. Aug/Sep
-// carried a hand-set 1.4 until 2026-09-10 — undocumented, contradicting lib/constants.ts's
-// own description, a 40% step at two month boundaries, and applied to the Open-Meteo
-// ensemble members but not to forecast.solar. It was compensating for the azimuth bug
-// (OPTIMIZER-AUDIT.md P0-1), not for a measured seasonal model error. Regenerate honestly
-// with scripts/tools/build-solar-calibration.ts once a season of real production exists.
+// HISTORY, because the values these replaced were real measurements and deserve better than
+// being silently dropped. Aug (7) and Sep (8) held 1.40 from 2026-09-05, calibrated against
+// 25 days of this site's own telemetry (2026-08-12–09-05) on weather-accurate days. That
+// measurement was sound; what it was measuring was not a panel-model bias but the azimuth
+// convention bug (OPTIMIZER-AUDIT.md P0-1), which made the forecast 2.18x low in August and
+// 3.43x low in September.
+//
+// The arithmetic supports that reading, and is the cleanest cross-check available that the
+// azimuth fix is the right MAGNITUDE and not just the right direction: the old stack's total
+// correction on the raw model was SOLAR_FORECAST_BIAS_FACTOR x this = 1.75 x 1.40 = 2.45x,
+// against a geometry fix that supplies 2.18x (Aug) and 3.43x (Sep). Aug lands within 12%;
+// Sep was under-corrected, which is exactly what a flat pair of fudge factors does to a
+// seasonally-varying error — and why a season of real production, not a hand-set constant,
+// is what should set this.
+//
+// So: reset to 1.0 alongside the bias factor, because keeping either on top of the corrected
+// geometry would double-correct. Regenerate with scripts/tools/build-solar-calibration.ts once
+// a real season of production exists — and note that script currently reads
+// avgDailyProductionByMonth, which is still the ORIGINAL Göteborg site's 14 kWp data (see its
+// own warning above), so it must be regenerated first or the ratio is meaningless.
 
 // ── Weather-aware daily load model ───────────────────────────────────────────
 // Fitted by scripts/tools/build-load-model.mjs over 1342 days (2022-05-19..2026-01-19) of the

@@ -153,9 +153,20 @@ so *all five* ensemble members are wrong the same way, and taking the median doe
   (`getSolarProfileByMonth`). A flat 1.75 against a needed 1.5–6.2 is only right in June–July.
 - `solarCalibrationByMonth = [1,1,1,1,1,1,1,1.4,1.4,1,1,1]` (`lib/consumption-data.ts:29`).
   `lib/constants.ts` claims it was "reset to uniform 1.0 (no production history yet)" — it is
-  not; Aug/Sep were hand-set to 1.4. That is a 40 % step on 1 Aug and 1 Oct, and it is applied in
+  not; Aug/Sep carry 1.4. That is a 40 % step on 1 Aug and 1 Oct, and it is applied in
   `parseOpenMeteo`/`parseOpenMeteoMinutely` but **not** in `parseForecastSolar`, so ensemble
   members disagree by 40 % for two months of the year.
+
+  **Correction to this audit (2026-09-10):** the first draft of this entry, and the commit that
+  acted on it, called those two values "undocumented". That was wrong — a comment directly above
+  them recorded that they were calibrated from 25 days of this site's own telemetry
+  (2026-08-12–09-05) on weather-accurate days. The measurement was real; what it measured was the
+  azimuth bug rather than a panel-model bias. Removing them is still right, and the arithmetic is
+  now the best available cross-check that the azimuth fix has the right **magnitude**: the old
+  stack's total correction was `1.75 × 1.40 = 2.45×`, against a geometry fix supplying **2.18×**
+  (Aug) and **3.43×** (Sep). August lands within 12 %; September was under-corrected, which is
+  exactly what a flat pair of constants does to a seasonally-varying error. The history and this
+  arithmetic are now recorded in `lib/consumption-data.ts` instead of being dropped.
 - The intraday nowcast (`lib/solar-nowcast.ts`) is clamped at `MAX_RATIO = 1.5` (line 8). It
   cannot correct a 2–6× under-forecast even when it measures one, and it only touches the current
   day's next 6 h.

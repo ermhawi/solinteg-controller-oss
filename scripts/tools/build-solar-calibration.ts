@@ -48,6 +48,16 @@ const ratios = rawEstimateByMonth.map((raw, i) => {
   return ratio;
 });
 
+// A foreign site's production numbers produce a plausible-looking ratio that means nothing, and
+// this repo shipped exactly that state for a while: the Göteborg reference's 14 kWp figures sitting
+// in a 5.4 kWp install. There is no way to detect it from the numbers alone, so say it out loud.
+console.log(
+  '\nCheck before using this output: avgDailyProductionByMonth must be YOUR OWN measured\n' +
+    'production (regenerate via process-inverter-data.ts), and lib/irradiance-data.ts must be your\n' +
+    'own coordinates and panel geometry (build-irradiance-openmeteo.mjs). A ratio computed from\n' +
+    "another site's numbers is meaningless and looks entirely normal.",
+);
+
 if (avgDailyProductionByMonth.every((v) => v === 0)) {
   console.warn(
     '\nWarning: avgDailyProductionByMonth is all zeros — regenerate it first via ' +
