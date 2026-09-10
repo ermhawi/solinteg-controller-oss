@@ -26,13 +26,15 @@ import {
   GRID_KW,
 } from '../optimizer';
 import type { OptimizerSlot, DispatchSlot } from '../optimizer';
-import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
+import { BATTERY_WEAR_COST_ORE_PER_KWH, EFF_ONE_WAY } from '../constants';
 
 // Mirrors lib/optimizer.ts's two separate caps (P0-2): the grid limit bounds the meter, the
 // battery limit bounds its own throughput. One combined `min(...)` conflated them.
 const GRID_SLOT_KWH = GRID_KW / 4;
 const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4;
-const ETA = Math.sqrt(BATTERY_RT_EFF);
+// Imported, not re-derived from BATTERY_RT_EFF: this harness replicates the DP's geometry, and
+// re-deriving the per-leg efficiency is how the missing inverter conversion losses stayed invisible.
+const ETA = EFF_ONE_WAY;
 const SOC_LEVELS = 193;
 const EPS = 1e-6;
 

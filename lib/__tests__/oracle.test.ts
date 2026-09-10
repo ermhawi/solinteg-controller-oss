@@ -14,13 +14,16 @@ import type { OracleReadingRow, ArmedEventRow, OracleDayInputs } from '../oracle
 import type { HistoricalOptimizerRun } from '../telemetry/dispatch';
 import { BATTERY_KWH, BATTERY_MIN_SOC_KWH, GRID_KW, BATTERY_MAX_KW } from '../optimizer';
 import type { DispatchSlot } from '../optimizer';
-import { BATTERY_RT_EFF, SKATT_OVERFÖRING } from '../constants';
+import { SKATT_OVERFÖRING, EFF_ONE_WAY } from '../constants';
 import type { PriceSlot } from '../prices';
 
 const SLOT_MS = 900_000;
 const SLOT_MAX_KWH = Math.min(GRID_KW, BATTERY_MAX_KW) / 4;
 const MIN_SOC = BATTERY_MIN_SOC_KWH;
-const ONE_WAY_EFF = Math.sqrt(BATTERY_RT_EFF);
+// The METER-to-stored per-leg efficiency the DP uses, imported rather than re-derived: deriving it
+// from BATTERY_RT_EFF alone (the battery-terminal DC figure) is what let the missing inverter
+// conversion losses go unnoticed. See EFF_ONE_WAY in lib/constants.ts.
+const ONE_WAY_EFF = EFF_ONE_WAY;
 
 // Stockholm midnight of 2026-06-29 (CEST, UTC+2). The oracle's bucketing runs on elapsed ms
 // from this instant — the naive startTime strings below are labels/day-filters only.
@@ -143,10 +146,12 @@ describe('windowEnergyBalance', () => {
   });
 
   it('a residual explained by modeled battery losses leaves solar untouched', () => {
-    // Charge 2.45 kWh into the pack from solar at the modeled η: AC side spends 2.45/η = 2.5.
-    // pv 10 → load 4 + export 3.5 + charge 2.5(AC), ΔSoC +2.45 → residual = 0.05 = modeled loss.
-    const b = windowEnergyBalance(actuals(10, 4, 0, 3.5), socRamp(10, 12.45), DAY_MS, 4);
-    expect(b.residualKwh).toBeCloseTo(0.05, 3);
+    // Charge 2.45 kWh into the pack from solar at the modeled AC-side η. Export is chosen so
+    // PV = load + export + AC charge input; the remaining SoC-vs-AC gap is exactly battery loss.
+    const acChargeKwh = 2.45 / ONE_WAY_EFF;
+    const exportKwh = 10 - 4 - acChargeKwh;
+    const b = windowEnergyBalance(actuals(10, 4, 0, exportKwh), socRamp(10, 12.45), DAY_MS, 4);
+    expect(b.residualKwh).toBeCloseTo(2.45 * (1 / ONE_WAY_EFF - 1), 3);
     expect(b.modeledBatteryLossKwh).toBeCloseTo(2.45 * (1 / ONE_WAY_EFF - 1), 3);
     expect(b.unmodeledLossKwh as number).toBeCloseTo(0, 2);
     expect(b.solarDerate).toBeGreaterThan(0.999);
@@ -435,9 +440,17 @@ describe('computeOracleDay', () => {
     ).toBeLessThanOrEqual(0.25);
     // Self-use leaves real money on the table on a price-spread day; the oracle must find it.
     expect(row.regretOre as number).toBeGreaterThan(100);
-    // The simulation books η-losses inside the battery, so the residual reflects only those.
-    const balance = (row.diagnostics as { balance: { residualKwh: number } }).balance;
-    expect(Math.abs(balance.residualKwh)).toBeLessThan(1.5);
+    // The simulation books η-losses inside the battery, so the residual is exactly those losses:
+    // positive (energy disappears into conversion, never appears out of nowhere) and a small
+    // fraction of throughput. Asserted as a FRACTION rather than an absolute kWh because the
+    // absolute figure scales with the per-leg efficiency — the old 1.5 kWh bound was calibrated
+    // against an EFF_ONE_WAY that still omitted the inverter's conversion losses, and moved the
+    // moment that was corrected.
+    const balance = (row.diagnostics as {
+      balance: { residualKwh: number; residualFrac: number | null };
+    }).balance;
+    expect(balance.residualKwh).toBeGreaterThan(0);
+    expect(balance.residualFrac as number).toBeLessThan(1 - EFF_ONE_WAY * EFF_ONE_WAY + 0.05);
     expect(row.oracleDispatchD).toHaveLength(96);
   });
 

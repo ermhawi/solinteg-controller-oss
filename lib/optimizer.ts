@@ -1,10 +1,10 @@
 import {
   BATTERY_KWH,
   BATTERY_MAX_KW,
-  BATTERY_RT_EFF,
   BATTERY_MIN_SOC_KWH,
   BATTERY_WEAR_COST_ORE_PER_KWH,
   DEFERRAL_HORIZON_HOURS,
+  EFF_ONE_WAY,
   GRID_KW,
   MAX_RISK_SACRIFICE_ORE,
   SOLAR_RISK_LOOKAHEAD_HOURS,
@@ -36,7 +36,12 @@ export { BATTERY_KWH, BATTERY_MAX_KW, GRID_KW, BATTERY_MIN_SOC_KWH }; // re-expo
  */
 const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4; // battery charge/discharge throughput per 15-min slot
 const GRID_SLOT_KWH = GRID_KW / 4; // grid import AND export per 15-min slot (house load included)
-const ONE_WAY_EFF = Math.sqrt(BATTERY_RT_EFF); // ≈0.9798 — applied on charge and on discharge
+// The METER-to-stored per-leg efficiency (see EFF_ONE_WAY in lib/constants.ts). This used to be
+// derived from the battery-terminal DC round trip alone, while every use of it here sits between
+// GRID energy and stored energy — so the inverter's own conversion losses were missing entirely:
+// ~0.98 claimed against ~0.95 real per leg, worth roughly 8 öre per stored kWh at a 90 öre buy
+// price, which is more than the wear cost and enough to flip marginal cycling decisions.
+const ONE_WAY_EFF = EFF_ONE_WAY;
 const MIN_SOC_KWH = BATTERY_MIN_SOC_KWH;
 
 const SOC_LEVELS = 193; // SoC discretisation for the DP (≈0.12 kWh resolution over the usable range)

@@ -9,7 +9,7 @@ import {
   applyBatterySaveForecast,
   terminalEnergyValueOre,
 } from '../optimizer';
-import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
+import { BATTERY_WEAR_COST_ORE_PER_KWH, EFF_ONE_WAY } from '../constants';
 import type { OptimizerSlot } from '../optimizer';
 
 // Mirrors the two SEPARATE caps in lib/optimizer.ts (BATTERY_SLOT_KWH / GRID_SLOT_KWH). They
@@ -18,6 +18,12 @@ import type { OptimizerSlot } from '../optimizer';
 const GRID_SLOT_KWH = GRID_KW / 4; // 2.75 kWh/slot at the reference 11 kW connection
 const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4; // 3.84 kWh/slot at the reference 15.36 kW battery
 const MIN_SOC = BATTERY_MIN_SOC_KWH; // operational floor (8% = 2.048 kWh)
+// The DP's SoC discretisation step (193 levels over the usable range). Tolerances below are
+// expressed in it rather than in magic numbers: a chosen socNext snaps to the nearest level, so any
+// "should be zero" flow can carry up to a sub-step sliver of the opposite direction. That residual
+// moves whenever the geometry does — it grew when EFF_ONE_WAY started carrying the inverter's
+// conversion losses — and a tolerance tied to the step tracks it instead of needing a re-tune.
+const SOC_STEP = (BATTERY_KWH - MIN_SOC) / 192;
 
 function makeSlot(
   hour: number,
@@ -293,7 +299,8 @@ describe('optimizeDispatch', () => {
       makeSlot(13, 0, { solarKwh: 0, consumptionKwh: 0, sellPrice: 150, buyPrice: 300 }),
     ];
     const result = optimizeDispatch(slots, MIN_SOC);
-    expect(result[0].gridKwh).toBeLessThanOrEqual(0.01); // solar covers the load → ~no import
+    // Solar covers the load → no meaningful import, bar the snap-to-grid sliver.
+    expect(result[0].gridKwh).toBeLessThanOrEqual(SOC_STEP);
     expect(result[0].socAfter).toBeGreaterThan(MIN_SOC + 1.0); // 1.5 kWh surplus stored
   });
 
@@ -360,7 +367,8 @@ describe('optimizeDispatch', () => {
       makeSlot(13, 0, { solarKwh: 0, consumptionKwh: 0, sellPrice: 80, buyPrice: 200 }),
     ];
     const result = optimizeDispatch(slots, MIN_SOC); // plenty of room to store it
-    expect(result[0].solarExportKwh).toBeCloseTo(0, 1); // not dumped to the grid at a loss
+    // Not dumped to the grid at a loss; the residual is one snap-to-grid step, not a decision.
+    expect(result[0].solarExportKwh).toBeLessThanOrEqual(SOC_STEP);
     expect(result[0].socAfter).toBeGreaterThan(MIN_SOC + 1.5); // stored instead
   });
 
@@ -512,7 +520,7 @@ describe('evaluateDispatch', () => {
     const dispatch = optimizeDispatch(slots, 10);
     const evald = evaluateDispatch(slots, dispatch, 10);
     const dSoc = 10 - dispatch[0].socAfter;
-    const delivered = dSoc * Math.sqrt(BATTERY_RT_EFF);
+    const delivered = dSoc * EFF_ONE_WAY;
     const step = (BATTERY_KWH - MIN_SOC) / 192;
     expect(Math.abs(delivered - 2.0)).toBeLessThanOrEqual(step + 1e-9); // covers the load ± one grid step
     // Cash is the priced residual of that quantisation: an import residual costs ×300, an
@@ -607,7 +615,7 @@ describe('evaluateDispatch pricing options (OPTIMIZER-AUDIT.md P1-3)', () => {
 });
 
 describe('terminalEnergyValueOre + terminal value in the DP (OPTIMIZER-AUDIT.md P0-3)', () => {
-  const eta = Math.sqrt(BATTERY_RT_EFF);
+  const eta = EFF_ONE_WAY;
 
   it('is the cheapest import in view, converted at the discharge leg and net of wear', () => {
     const slots = [
@@ -805,7 +813,7 @@ describe('optimizeDispatch loadFactor (robust-planning margin)', () => {
     // (~0.12 kWh steps) accumulates over 32 constant-load slots and can add ~1 kWh of
     // benign undershoot/overshoot drift on top of the ~0.73 kWh theoretical hold-back.
     const slots = eveningThenExpensiveNight();
-    const eff = Math.sqrt(BATTERY_RT_EFF);
+    const eff = EFF_ONE_WAY;
     const simulateNightImports = (dispatch: ReturnType<typeof optimizeDispatch>) => {
       let soc = dispatch[3].socAfter; // SoC after the evening sale
       let imports = 0;
@@ -1039,8 +1047,8 @@ describe('risk-aware planning (deferral bias + solar risk premium — the 2026-0
 
   // ── Solar risk premium ────────────────────────────────────────────────────
   it('grid-buys wait out the forecast solar instead of pre-buying what it may still deliver', () => {
-    // The incident's exact shape: thin-margin arbitrage (buy 86 → sell 98 evening ≈ +3.5 öre/kWh
-    // after losses + wear) on a gloomy-forecast day whose 6 kWh of RAW forecast solar nets to
+    // The incident's exact shape: thin-margin arbitrage on a gloomy-forecast day whose 6 kWh of RAW
+    // forecast solar nets to
     // ZERO surplus against the concurrent load — so a surplus-based premium would see no risk
     // at all, yet a modest over-delivery creates real surplus from nothing (2026-07-19 delivered
     // 3-5× forecast and filled the battery by 14:30). While meaningful raw solar is still ahead
@@ -1056,8 +1064,15 @@ describe('risk-aware planning (deferral bias + solar risk premium — the 2026-0
         consumptionKwh: 0.25,
       }),
     );
+    // Sell 110 against buy 86 is +9 öre/kWh after real losses and wear: cost 86/EFF ≈ 90.5,
+    // revenue 110×EFF ≈ 104.6, wear ≈ 4.9. It was written as 98 when EFF_ONE_WAY still omitted the
+    // inverter's conversion losses, where the same numbers looked like +3.5 öre — with the corrected
+    // physics that trade is a 2 öre LOSS and the plain DP correctly refuses it, which would have
+    // left this test asserting the premium's behaviour on a trade that no longer exists. The margin
+    // is still deliberately thin enough for the premium (≈10 öre at this solar/headroom ratio) to
+    // drown it, which is the actual subject here.
     const evening = Array.from({ length: 12 }, (_, i) =>
-      makeSlot(18 + Math.floor(i / 4), i % 4, { buyPrice: 190, sellPrice: 98 }),
+      makeSlot(18 + Math.floor(i / 4), i % 4, { buyPrice: 190, sellPrice: 110 }),
     );
     const slots = [...midday, ...evening];
     const plain = optimizeDispatch(slots, 14);

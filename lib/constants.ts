@@ -74,7 +74,48 @@ export const PRICE_ZONE: PriceZone =
 // themselves silently drifting apart.
 export const BATTERY_KWH = numEnv('SOLINTEG_BATTERY_KWH', 25.6); // usable capacity (kWh)
 export const BATTERY_MAX_KW = numEnv('SOLINTEG_BATTERY_MAX_W', 15360) / 1000; // max charge/discharge rate (kW) — env is in W, Python's native unit
-export const BATTERY_RT_EFF = numEnv('SOLINTEG_BATTERY_RT_EFF', 0.96); // round-trip efficiency (datasheet: ≥96%)
+/**
+ * BATTERY-TERMINAL (DC) round-trip efficiency — the datasheet's ≥96 % figure, i.e. energy out of
+ * the cells over energy into them. Env: SOLINTEG_BATTERY_RT_EFF.
+ *
+ * This is NOT what the optimizer needs on its own, and treating it as though it were was a real
+ * modelling error until 2026-09-10. The DP prices GRID (AC) energy in and out, so its per-leg
+ * efficiency has to be the AC-to-AC one — see EFF_ONE_WAY below. `measure-battery-rt-eff.py`
+ * measures this DC figure (it integrates `battery_w`), which is why running it never closed the gap.
+ */
+export const BATTERY_RT_EFF = numEnv('SOLINTEG_BATTERY_RT_EFF', 0.96);
+
+/**
+ * Inverter conversion efficiency for ONE leg (AC→DC on charge, DC→AC on discharge).
+ * Env: SOLINTEG_INVERTER_CONV_EFF.
+ *
+ * Default 0.97 is the datasheet class for this inverter family (peak ~97.5 %, EU-weighted ~97 %) —
+ * a documented hardware figure, not a fitted fudge, and the honest structure to model: the DP's
+ * per-leg efficiency has always been applied between the METER and stored energy, so it needs the
+ * inverter's losses as well as the cells'.
+ *
+ * What the previous omission cost: `√0.96 = 0.9798` per leg claimed a 96 % AC round trip, against a
+ * realistic 88-90 %. At a 90 öre buy price that understates the cost of a stored kWh by roughly
+ * 8 öre — larger than BATTERY_WEAR_COST_ORE_PER_KWH (≈4.2 öre/leg here), so it was enough to flip
+ * marginal arbitrage and marginal solar-storage decisions the wrong way, always in the direction of
+ * cycling more than pays.
+ *
+ * Replace both this and BATTERY_RT_EFF with measured values when you have them:
+ * `scripts/tools/measure-battery-rt-eff.py` now reports the DC round trip AND the AC-to-AC one
+ * (from night-time windows, where the inverter's AC port carries nothing but the battery).
+ */
+export const INVERTER_CONV_EFF = numEnv('SOLINTEG_INVERTER_CONV_EFF', 0.97);
+
+/**
+ * The per-leg efficiency the optimizer actually uses: METER ↔ stored energy, one direction.
+ * `stored = acIn × EFF_ONE_WAY` on charge, `acOut = stored × EFF_ONE_WAY` on discharge, so the
+ * AC-to-AC round trip is `EFF_ONE_WAY²` ≈ 0.903 at the defaults.
+ *
+ * One exported definition rather than `Math.sqrt(BATTERY_RT_EFF)` repeated at each site, because
+ * that repetition is exactly how the DC/AC confusion survived: lib/optimizer.ts, lib/oracle.ts,
+ * dispatch_loop.py and four test files each derived it independently.
+ */
+export const EFF_ONE_WAY = Math.sqrt(BATTERY_RT_EFF) * INVERTER_CONV_EFF;
 
 /** Empirical battery-save discharge used only for forecast correction; 0 disables it. */
 export const BATTERY_SAVE_DRIFT_W = numEnv(

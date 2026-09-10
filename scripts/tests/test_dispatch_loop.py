@@ -246,7 +246,12 @@ class ApplyTargetRouting(unittest.TestCase):
         try:
             hold_slot = {"loadFromGridKwh": 0.3, "socAfter": dl.BATTERY_FLOOR_KWH + 1.5,
                          "batterySaveDriftKwh": 0.013}
-            self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", 50))
+            # Derived, not a literal: the target is the plan's SoC drop converted back to the
+            # inverter's output side, so it moves with ONE_WAY_EFF -- which now carries the
+            # inverter's conversion losses as well as the cells' (see EFF_ONE_WAY in
+            # lib/constants.ts). A literal here would have to be re-tuned every time that changes.
+            expected = int(min(dl.BATTERY_SAVE_W, 0.013 / dl.SLOT_HOURS * 1000 * dl.ONE_WAY_EFF) // 10 * 10)
+            self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", expected))
         finally:
             dl.BATTERY_SAVE_W = original
 
@@ -256,7 +261,12 @@ class ApplyTargetRouting(unittest.TestCase):
         try:
             hold_slot = {"loadFromGridKwh": 0.15, "socAfter": dl.BATTERY_FLOOR_KWH + 1.0,
                          "batterySaveDriftKwh": 0.15}
-            self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", 580))
+            # The load cap (0.15 kWh/slot = 600 W) binds here, not BATTERY_SAVE_W; the planned
+            # target (drift x ONE_WAY_EFF) is what it is compared against, so both track the
+            # constant rather than a re-tuned literal.
+            expected = int(min(0.15 / dl.SLOT_HOURS * 1000,
+                               0.15 / dl.SLOT_HOURS * 1000 * dl.ONE_WAY_EFF) // 10 * 10)
+            self.assertEqual(dl.battery_save_target("idle", 0, hold_slot), ("discharge", expected))
         finally:
             dl.BATTERY_SAVE_W = original
 

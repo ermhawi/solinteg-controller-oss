@@ -348,9 +348,14 @@ SOC_FLOOR_RECOVERY_W = max(10, int(os.environ.get("DISPATCH_SOC_FLOOR_RECOVERY_W
 IMPORT_LIMIT_W = int(os.environ.get("DISPATCH_IMPORT_LIMIT_W", "0"))
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
-# Same env var lib/constants.ts's BATTERY_RT_EFF reads (kept in sync by the cross-language test).
+# Same env vars lib/constants.ts reads (kept in sync by the cross-language test). ONE_WAY_EFF must
+# mirror EFF_ONE_WAY there exactly: it is the METER-to-stored per-leg efficiency, so it carries the
+# inverter's conversion losses as well as the cells'. Using the battery-terminal DC figure alone
+# (which is what SOLINTEG_BATTERY_RT_EFF is) overstated it by ~3 points per leg — see
+# INVERTER_CONV_EFF in lib/constants.ts.
 BATTERY_RT_EFF = float(os.environ.get("SOLINTEG_BATTERY_RT_EFF", "0.96"))
-ONE_WAY_EFF = BATTERY_RT_EFF ** 0.5
+INVERTER_CONV_EFF = float(os.environ.get("SOLINTEG_INVERTER_CONV_EFF", "0.97"))
+ONE_WAY_EFF = BATTERY_RT_EFF ** 0.5 * INVERTER_CONV_EFF
 HEARTBEAT_PATH = os.environ.get("DISPATCH_HEARTBEAT_PATH", "/opt/solinteg/dispatch-heartbeat.json")
 
 

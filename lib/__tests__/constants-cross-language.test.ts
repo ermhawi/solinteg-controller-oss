@@ -8,7 +8,9 @@ import {
   BATTERY_MAX_KW,
   BATTERY_RT_EFF,
   BATTERY_MAX_SOC_KWH,
+  EFF_ONE_WAY,
   GRID_KW,
+  INVERTER_CONV_EFF,
 } from '../constants';
 
 // Since 2026-07-10, TS and the Python control scripts read the SAME env var names for these
@@ -38,6 +40,22 @@ describe('BATTERY_KWH stays in sync across Python scripts', () => {
 describe('BATTERY_RT_EFF stays in sync with dispatch_loop.py', () => {
   it('matches the SOLINTEG_BATTERY_RT_EFF default', () => {
     expect(extractNumber('dispatch_loop.py', /SOLINTEG_BATTERY_RT_EFF",\s*"([\d.]+)"/)).toBe(BATTERY_RT_EFF);
+  });
+
+  // Added with EFF_ONE_WAY: the per-leg efficiency both sides use is METER-to-stored, so it needs
+  // the inverter's conversion losses too. Python derives its own ONE_WAY_EFF, and the two defaults
+  // drifting apart would make the executor's solar-funding and battery-save arithmetic disagree with
+  // the plan it is executing.
+  it('matches the SOLINTEG_INVERTER_CONV_EFF default', () => {
+    expect(extractNumber('dispatch_loop.py', /SOLINTEG_INVERTER_CONV_EFF",\s*"([\d.]+)"/)).toBe(
+      INVERTER_CONV_EFF,
+    );
+  });
+
+  it('the derived per-leg efficiency matches dispatch_loop.py digit for digit', () => {
+    const text = readFileSync(join(scriptsDir, 'dispatch_loop.py'), 'utf-8');
+    expect(text).toContain('ONE_WAY_EFF = BATTERY_RT_EFF ** 0.5 * INVERTER_CONV_EFF');
+    expect(EFF_ONE_WAY).toBeCloseTo(Math.sqrt(BATTERY_RT_EFF) * INVERTER_CONV_EFF, 12);
   });
 });
 

@@ -62,6 +62,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 6 | P1-2 deferral ramp unbounded in horizon length | ✅ done |
 | 7 | P1-4 solar premium saturated over a multi-day horizon + guard covered only deferral | ✅ done |
 | 8 | P1-1 forecast price premium was a hoarding incentive | ✅ done (band captured for the refit, not yet consumed) |
+| 9 | P1-5 DC datasheet efficiency used on the AC path | ✅ done |
 
 ---
 
@@ -577,6 +578,40 @@ configurable `SOLAR_RISK_LOOKAHEAD_H`, default 12), and extend the two-pass true
 guard to cover the premium as well (one guard over the sum of all planning surcharges, one cap).
 
 ## P1-5 Round-trip efficiency is a DC datasheet number used on the AC path
+
+> **Status: ✅ done.** The DP's per-leg efficiency is now `EFF_ONE_WAY = √BATTERY_RT_EFF ×
+> INVERTER_CONV_EFF`, exported from `lib/constants.ts` as the single definition and imported
+> everywhere — `lib/optimizer.ts`, `dispatch_loop.py`'s `ONE_WAY_EFF`, and the four test files that
+> each used to re-derive `Math.sqrt(BATTERY_RT_EFF)` themselves. That repetition is how the DC/AC
+> confusion survived, so removing it is part of the fix.
+>
+> `INVERTER_CONV_EFF` defaults to **0.97** — this inverter family's datasheet class (peak ~97.5 %,
+> EU-weighted ~97 %), a documented hardware figure rather than a fitted fudge — giving an AC-to-AC
+> round trip of ≈0.903 against the 0.96 previously claimed. `BATTERY_RT_EFF` keeps its datasheet
+> meaning (battery-terminal DC) and its docstring now says outright that it is not what the optimizer
+> needs on its own. The cross-language test gained a guard on the new default *and* on the derived
+> expression, since the executor's solar-funding and battery-save arithmetic has to agree with the
+> plan it is executing.
+>
+> `scripts/tools/measure-battery-rt-eff.py` now reports **both** figures: the existing DC round trip
+> from `battery_w`, and an AC-to-AC one from `inverter_ac_w` restricted to samples with
+> `pv_w ≤ --pv-idle-w` (with the sun up, the inverter's AC port carries PV too and the two cannot be
+> separated from this series — night windows are the grid-arbitrage windows anyway). It then backs out
+> the implied per-leg `INVERTER_CONV_EFF = √(η_ac / η_dc)` and refuses to report one when the two
+> figures come out physically impossible. Smoke-tested against a synthetic telemetry DB built with a
+> known 0.94 conversion efficiency: the script recovered 0.942.
+>
+> **The correction has teeth**, which the test suite demonstrated immediately: the risk-premium test's
+> scenario (buy 86 → sell 98) was written as "+3.5 öre/kWh after losses and wear" under the old
+> efficiency and is a **2 öre loss** under the corrected one, so the plain DP now refuses that trade.
+> The scenario was widened (sell 110 → ≈+9 öre) so the test still exercises the premium rather than
+> the arithmetic of a trade that no longer exists. Two "should be zero" flow tolerances were re-tied
+> to the DP's own discretisation step instead of magic numbers, and the oracle's energy-balance
+> assertion re-expressed as a fraction of throughput — that residual *is* the conversion loss, so its
+> absolute size necessarily moved.
+>
+> **Still open:** the 0.97 default is a datasheet figure, not this install's measurement. Run the
+> script once there is night-time cycling in telemetry and set `SOLINTEG_INVERTER_CONV_EFF`.
 
 **What is wrong.** `BATTERY_RT_EFF = 0.96` ("datasheet: ≥96 %"), and the DP uses
 `ONE_WAY_EFF = √0.96` to convert **grid AC kWh** into stored kWh (`need = dE / η`) and back

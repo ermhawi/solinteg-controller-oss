@@ -57,7 +57,7 @@ import {
 import type { OptimizerSlot, DispatchSlot } from './optimizer';
 import type { HistoricalOptimizerRun } from './telemetry/dispatch';
 import type { PriceSlot } from './prices';
-import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH, SKATT_OVERFÖRING } from './constants';
+import { EFF_ONE_WAY, BATTERY_WEAR_COST_ORE_PER_KWH, SKATT_OVERFÖRING } from './constants';
 
 const SLOT_MS = 900_000; // 15 min
 // Same two separate caps the DP uses (see BATTERY_SLOT_KWH/GRID_SLOT_KWH in lib/optimizer.ts):
@@ -314,7 +314,7 @@ export function socSeries(readings: OracleReadingRow[]): { t: number; soc: numbe
 
 // ── Energy-balance closure ──────────────────────────────────────────────────────
 
-const ONE_WAY_EFF = Math.sqrt(BATTERY_RT_EFF);
+const ONE_WAY_EFF = EFF_ONE_WAY;
 /** Below this much window pv there is nothing meaningful to scale — the leftover
  *  (standby-sized) residual stays visible in diagnostics.balance instead. */
 const BALANCE_MIN_PV_KWH = 2;
@@ -586,7 +586,7 @@ export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
   const params: Record<string, number | string> = {
     batteryKwh: BATTERY_KWH,
     minSocKwh: BATTERY_MIN_SOC_KWH,
-    rtEff: BATTERY_RT_EFF,
+    rtEff: EFF_ONE_WAY * EFF_ONE_WAY,
     wearOrePerKwh: Math.round(BATTERY_WEAR_COST_ORE_PER_KWH * 1000) / 1000,
     gridSlotKwh: GRID_SLOT_KWH,
     batterySlotKwh: BATTERY_SLOT_KWH,
