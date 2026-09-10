@@ -115,11 +115,13 @@ import than 50209 allows (inverter input for charging **+** house load) and *les
 50208 allows. Two consequences: (a) the names in this table used to say "grid export/import",
 which is exactly that misreading — renamed 2026-08-05, along with the Python constants
 (`REG_MAX_AC_OUTPUT`/`REG_MAX_AC_INPUT`); (b) **±11 kW here is not a fuse-level guarantee.** The
-real grid-side cap registers are **50007/50009** (below), which this controller does not write —
-it relies on `clamp_power_w` plus the optimizer's own grid-cap feasibility check (`gImp >
-SLOT_MAX_KWH` in `lib/optimizer.ts`, which *does* count charging **+** load against the cap), so
-the planner is grid-cap-aware even though the executor's clamp is on the wrong quantity. Not a
-live risk while the plan sets the power figure; know it before treating 50209 as a fuse guard.
+real grid-side cap registers are **50007/50009** (below), which this controller writes only when
+`DISPATCH_IMPORT_LIMIT_W` is set (off by default, pending an on-device probe — see that table
+entry). Without it, the guard is `clamp_power_w` plus the optimizer's own grid-cap feasibility
+check (`gImp > GRID_SLOT_KWH` in `lib/optimizer.ts`, which *does* count charging **+** load
+against the cap), so the planner is grid-cap-aware even though the executor's clamp is on the
+wrong quantity — against *forecast* load, which a spike can exceed. Know this before treating
+50209 as a fuse guard.
 
 Source: a third-party reverse-engineering doc for this inverter family
 ([sixuniform/YOUEMS](https://github.com/sixuniform/YOUEMS), "Solinteg EMS BattCtrl", MHT firmware
@@ -153,6 +155,18 @@ actual point.
 | 52603 | Battery discharge current limit | U16 | 0.1 A | 0..200 A |
 | 50007 | Import limit switch | U16 | enum | 0=off, 1=on |
 | 50009 | Import limit value | U16 | 0.1 kW | 0..100 kW; enforce ~11 kW fuse cap → 110 |
+
+**50007/50009 are the only site-level (utility-meter) cap available, and the only control
+registers in this table NOT probe-verified on the reference unit.** They are implemented
+(`inverter_control.set_import_limit` / `clear_import_limit`, `inverter_control.py import-limit
+<W|off>`) and wired into `dispatch_loop`'s startup, but **off unless `DISPATCH_IMPORT_LIMIT_W`
+is set**, because the addresses and scale come from the third-party doc rather than from testing
+here. Run `scripts/tools/probe_import_limit.py` on your own unit before relying on them; the
+failure mode to expect is *stored but not enforced*, which is exactly what `50209 = 0` turned out
+to do when written pre-mode. Why it matters at all: during a forced charge the meter sees
+`battery charge power + house load`, `clamp_power_w` bounds only the battery's own power, and the
+optimizer's grid-cap check bounds the *planned* sum against a *forecast* load — charge slots have
+no live-load retargeting the way discharge slots do.
 
 ### Command buttons (write raw command; momentary, no readback)
 | Addr | Command | Effect |

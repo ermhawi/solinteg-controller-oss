@@ -676,6 +676,40 @@ class CheckSocDivergenceTests(unittest.TestCase):
         self.assertIn("soc_drift_limit_kwh", numbers)
 
 
+class ApplyImportLimitTests(unittest.TestCase):
+    """The startup hook for the site-level import limit (registers 50007/50009).
+
+    The bound itself is tested in test_inverter_control.ImportLimitTests; what matters here is
+    that it is OFF unless configured, and that a failure to apply it cannot stop the controller —
+    it is an extra bound on top of clamp_power_w and the planner's own grid-cap check, so losing
+    it must degrade to the protection that already existed, not to no controller at all."""
+
+    def test_does_nothing_when_unconfigured(self):
+        with mock.patch.object(dl, "IMPORT_LIMIT_W", 0), \
+             mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl, "set_import_limit") as setter:
+            dl.apply_import_limit()
+        inverter.assert_not_called()  # not even a connection is opened
+        setter.assert_not_called()
+
+    def test_applies_the_configured_limit_once_and_closes_the_connection(self):
+        inv = mock.MagicMock()
+        with mock.patch.object(dl, "IMPORT_LIMIT_W", 10_000), \
+             mock.patch.object(dl, "Inverter", return_value=inv), \
+             mock.patch.object(dl, "set_import_limit") as setter:
+            dl.apply_import_limit()
+        setter.assert_called_once_with(inv, 10_000)
+        inv.close.assert_called_once()
+
+    def test_a_failure_is_swallowed_so_the_loop_still_starts(self):
+        inv = mock.MagicMock()
+        with mock.patch.object(dl, "IMPORT_LIMIT_W", 10_000), \
+             mock.patch.object(dl, "Inverter", return_value=inv), \
+             mock.patch.object(dl, "set_import_limit", side_effect=RuntimeError("no route to host")):
+            dl.apply_import_limit()  # must not raise
+        inv.close.assert_called_once()
+
+
 class SocFloorGuardTests(unittest.TestCase):
     """read_live_soc_kwh and soc_floor_recovery_target guard correct SoC-floor recovery.
 

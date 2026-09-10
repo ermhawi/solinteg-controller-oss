@@ -56,6 +56,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 |---|---|---|
 | 1 | P0-1 solar azimuth convention (+ the whole fudge stack, + a new P0-1b) | ✅ done |
 | 2 | P0-2 grid capacity vs battery power conflated | ✅ done |
+| 3 | E3 site-level import limit (fuse backstop for P0-2's raised budget) | ✅ implemented, gated on an on-device probe |
 
 ---
 
@@ -492,6 +493,35 @@ bound. Gate it behind its own env kill switch (`DISPATCH_LIVE_LOAD_TRACKING_CHAR
 after validation in shadow mode).
 
 ## E3 No site-level import limit is ever set, although the register exists
+
+> **Status: ✅ implemented, deliberately off by default.** `set_import_limit()` /
+> `clear_import_limit()` in `inverter_control.py` write 50009 (value) **then** 50007 (switch) — that
+> order matters, since enabling first would briefly enforce whatever an earlier session left in the
+> value register. `dispatch_loop.apply_import_limit()` applies it once at startup when
+> `DISPATCH_IMPORT_LIMIT_W` is set, never reverts it on shutdown (a fuse-level bound belongs to the
+> installation, not to one run of the controller), and swallows any failure at ERROR level: it is an
+> *extra* bound on top of `clamp_power_w` and the planner's grid-cap check, so losing it must
+> degrade to the protection that already existed, not to no controller.
+> Also added: a `import-limit <W|off>` CLI verb, and
+> `scripts/tools/probe_import_limit.py` — forces a grid-funded charge, squeezes the limit below what
+> that charge needs, and reports ENFORCED / stored-but-not-enforced / wrong-address by reading the
+> registers back *and* measuring meter power, because those are three different bugs.
+> Tests: `test_inverter_control.ImportLimitTests` (write order, 0.1 kW rounding, range rejection,
+> a value that rounds away to zero, clear-leaves-value, disarmed no-op) and
+> `test_dispatch_loop.ApplyImportLimitTests` (off when unconfigured — not even a connection opened;
+> applied once and closed; a failure cannot stop startup).
+>
+> **Why it ships off:** 50007/50009 are the only control registers in this repo taken from a
+> third-party reverse-engineering doc rather than measured on the reference unit, and the realistic
+> failure mode is *stored but not enforced* — precisely what `50209 = 0` turned out to do when
+> written pre-mode. Enabling it without the probe would install a guard that looks present in the
+> journal and does nothing. `MODBUS.md` and `deploy/solinteg.env.example` now say so, with fuse
+> ratings for the common Swedish service sizes.
+>
+> **Operator action required:** run the probe, then set `DISPATCH_IMPORT_LIMIT_W` to the real
+> main-fuse rating. Until then `SOLINTEG_GRID_CAP_W` should stay conservative, because after P0-2
+> the planner genuinely fills it.
+
 
 `MODBUS.md:154-155` documents `50007` (import-limit switch) and `50009` (import-limit value,
 0.1 kW) with the explicit note *"enforce ~11 kW fuse cap → 110"*, and

@@ -83,6 +83,13 @@ REG_BATTERY_POWER = 30258      # S32 W (read; -ve = charging)
 REG_SOC = 33000                # U16 x0.01 %
 REG_SOC_PROTECT_ENABLE = 52502 # U16 enum: 0=off, 1=on
 REG_SOC_MIN = 52503            # U16, 0.1 %, 5..100 (raw = int(pct/0.1))
+# Site-level (utility-meter) import limit — the ONLY registers here that cap what the meter
+# actually sees. 50208/50209 cap the inverter's own AC exchange, which excludes house load, so
+# they are not a fuse guard (see MODBUS.md). Unlike everything else in this module these two are
+# NOT probe-verified on the reference unit; scripts/tools/probe_import_limit.py exists to do that,
+# and dispatch_loop only applies them when DISPATCH_IMPORT_LIMIT_W is explicitly set.
+REG_IMPORT_LIMIT_ENABLE = 50007 # U16 enum: 0=off, 1=on
+REG_IMPORT_LIMIT = 50009        # U16, 0.1 kW, 0..100 kW (raw = int(W/100))
 
 WORK_MODE_GENERAL = 0x101       # self-use / automatic
 WORK_MODE_EMS_BATTCTRL = 0x303  # lets us command battery power via 50207
@@ -278,6 +285,48 @@ def set_soc_floor(inv: Inverter, floor_pct: float = SOC_FLOOR_PCT) -> None:
     inv.write_u16(REG_SOC_PROTECT_ENABLE, 1)
 
 
+def set_import_limit(inv: Inverter, watts: int) -> None:
+    """Cap what the utility METER may import, at the inverter itself (50007/50009).
+
+    This is the backstop for the one thing the software cannot guarantee on its own: during a
+    forced charge the meter sees `battery charge power + house load`, and nothing in the control
+    path bounds that sum in real time. `clamp_power_w` bounds the battery's own power, and the
+    optimizer's grid-cap feasibility check bounds the PLANNED sum against forecast load — but a
+    load spike above forecast lands on top of the commanded charge, and (unlike a discharge slot)
+    there is no live-load retargeting on the charge side. 50208/50209 do not help: they cap the
+    inverter's own AC exchange, which excludes house load entirely (MODBUS.md).
+
+    Writes the VALUE first, then the switch, so enabling can never briefly enforce a stale limit
+    from an earlier session. Both writes are verified by write_u16, and the whole thing is a no-op
+    when disarmed like every other write here.
+
+    NOT probe-verified on the reference unit — these two addresses come from a third-party
+    reverse-engineering doc, not from this deployment's own on-device testing. Run
+    scripts/tools/probe_import_limit.py on YOUR unit before relying on it, and treat a silent
+    failure (value stored but not enforced) as the expected failure mode: it is what 50209=0
+    turned out to do when written pre-mode.
+    """
+    if not (0 < watts <= 100_000):
+        raise ValueError(f"import limit {watts} W outside 1..100000")
+    raw = int(round(watts / 100))  # 0.1 kW per LSB
+    if raw < 1:
+        raise ValueError(f"import limit {watts} W rounds to 0 at the register's 0.1 kW resolution")
+    log.info("set_import_limit: %d W (raw %d) then switch on", watts, raw)
+    inv.write_u16(REG_IMPORT_LIMIT, raw)
+    inv.write_u16(REG_IMPORT_LIMIT_ENABLE, 1)
+
+
+def clear_import_limit(inv: Inverter) -> None:
+    """Turn the site import limit off again, leaving the value register alone.
+
+    Exists for the probe script and for rolling the feature back without a service restart; the
+    dispatch loop never calls it, because an import limit is a safety bound and should outlive any
+    single run of the controller.
+    """
+    log.info("clear_import_limit: switch off (value register left as-is)")
+    inv.write_u16(REG_IMPORT_LIMIT_ENABLE, 0)
+
+
 def _already_set_for(inv: "Inverter", priority: int) -> bool:
     """True when export/import caps, priority, and work mode already match what
     force_charge/force_discharge would otherwise (re-)write — i.e. we're already in a
@@ -397,7 +446,10 @@ def _install_failsafe(inv: Inverter) -> None:
 def _main(argv: list[str]) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if len(argv) < 2:
-        print("usage: inverter_control.py [status|auto|charge <W>|discharge <W>|set-floor [pct]]")
+        print(
+            "usage: inverter_control.py [status|auto|charge <W>|discharge <W>|set-floor [pct]|"
+            "import-limit <W|off>]"
+        )
         return 2
     inv = Inverter()
     _install_failsafe(inv)
@@ -414,6 +466,11 @@ def _main(argv: list[str]) -> int:
         force_discharge(inv, int(argv[2]))
     elif cmd == "set-floor":
         set_soc_floor(inv, float(argv[2]) if len(argv) > 2 else SOC_FLOOR_PCT)
+    elif cmd == "import-limit":
+        if len(argv) > 2 and argv[2] == "off":
+            clear_import_limit(inv)
+        else:
+            set_import_limit(inv, int(argv[2]) if len(argv) > 2 else GRID_CAP_W)
     else:
         print(f"unknown command: {cmd}")
         return 2

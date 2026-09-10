@@ -206,6 +206,15 @@ Environment variables (beyond inverter_control.py's own SOLINTEG_* / SOLINTEG_CO
                                 this can ever be, independent of this loop's own interval.
   DISPATCH_HEARTBEAT_PATH       liveness file for scripts/services/watchdog.py (default
                                 /opt/solinteg/dispatch-heartbeat.json)
+  DISPATCH_IMPORT_LIMIT_W       site-level utility-meter import cap in watts, written once at
+                                startup to registers 50007/50009 (default 0 = never written).
+                                This is the backstop for a forced charge plus a load spike
+                                exceeding the main fuse: the optimizer's own grid-cap check uses
+                                FORECAST load, and charge slots have no live-load retargeting the
+                                way discharge slots do. Not probe-verified on the reference unit —
+                                run scripts/tools/probe_import_limit.py on yours first. A failure
+                                to apply it is logged and does NOT stop the loop; the pre-existing
+                                software bounds (clamp_power_w, the planner's cap) still apply.
   DISPATCH_REPLAN_TRIGGERS      "1" (default) POSTs to DISPATCH_REPLAN_URL on the five trigger
                                 conditions in the REPLAN TRIGGERS section above; "0" disables
                                 the feature entirely (kill switch — reverts to the pre-feature,
@@ -242,6 +251,7 @@ from inverter_control import (
     force_discharge,
     return_to_auto,
     clamp_power_w,
+    set_import_limit,
     REG_BATT_POWER_TARGET,
     target_raw_for_action,
 )
@@ -329,6 +339,13 @@ BATTERY_SAVE_W = max(0, int(os.environ.get(
 # gently (~0.28 kWh/h) without grid-import spikes. Must be a positive multiple of 10 W.
 SOC_FLOOR_GUARD_HEADROOM_KWH = float(os.environ.get("DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH", "0.5"))
 SOC_FLOOR_RECOVERY_W = max(10, int(os.environ.get("DISPATCH_SOC_FLOOR_RECOVERY_W", "300")) // 10 * 10)
+# Site-level (utility-meter) import limit, applied ONCE at startup via registers 50007/50009 --
+# the only cap that counts house load together with a forced charge. Unset/0 = never written,
+# which is the default because these two registers are not probe-verified on the reference unit
+# (see set_import_limit's docstring and scripts/tools/probe_import_limit.py). Set it to the real
+# main-fuse rating in watts once your own probe confirms the inverter honours it; it is a bound,
+# not a setpoint, so it deliberately outlives this process rather than being reverted on exit.
+IMPORT_LIMIT_W = int(os.environ.get("DISPATCH_IMPORT_LIMIT_W", "0"))
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
 # Same env var lib/constants.ts's BATTERY_RT_EFF reads (kept in sync by the cross-language test).
@@ -1167,6 +1184,35 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
     return outcome, loop_in_auto
 
 
+def apply_import_limit() -> None:
+    """Write the site import limit once at startup, if one is configured. Never raises.
+
+    Deliberately best-effort and non-fatal: this is an EXTRA bound on top of bounds that already
+    exist (clamp_power_w on the battery's own power, the planner's grid-cap feasibility check), so
+    failing to set it must not stop the controller from running with the protection it already had.
+    A failure is logged at ERROR precisely because it is silent otherwise — the registers are not
+    probe-verified on the reference unit, and "stored but not enforced" is a realistic outcome.
+
+    Not reverted on shutdown, unlike the forced setpoint: a fuse-level cap is a property of the
+    installation, not of this process, and clearing it on exit would remove the protection exactly
+    when nothing is left supervising the inverter. Use `inverter_control.py import-limit off` to
+    take it away deliberately.
+    """
+    if IMPORT_LIMIT_W <= 0:
+        return
+    log.info("applying site import limit %d W (registers 50007/50009), armed=%s", IMPORT_LIMIT_W, ARMED)
+    inv = None
+    try:
+        inv = Inverter()
+        set_import_limit(inv, IMPORT_LIMIT_W)
+    except Exception as exc:  # noqa: BLE001 — an advisory extra bound must never block startup
+        log.error("failed to apply site import limit %d W: %s — continuing with the software "
+                  "bounds only (clamp_power_w + the planner's grid cap)", IMPORT_LIMIT_W, exc)
+    finally:
+        if inv is not None:
+            inv.close()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     con = init_db(DB_PATH)
@@ -1176,6 +1222,7 @@ def main() -> None:
         log.warning("Running DISARMED — decisions are computed and logged to "
                      "control_actions, but no register is actually written. "
                      "Safe for shadow-mode validation against the live plan.")
+    apply_import_limit()
 
     last_target = None  # (slot_time, effective_action, effective_power) — post-guard, as applied
     # True when the loop's own last confirmed write/revert left the inverter in auto (or an

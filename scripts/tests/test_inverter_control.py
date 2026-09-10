@@ -199,6 +199,64 @@ class ReturnToAutoCapRestoreTests(InverterControlTestCase):
             ic.ARMED = True
 
 
+class ImportLimitTests(InverterControlTestCase):
+    """Site-level (utility-meter) import limit, 50007/50009 — the only cap that counts house load
+    together with a forced charge. See set_import_limit's docstring and
+    scripts/tools/probe_import_limit.py; the registers are not probe-verified on the reference
+    unit, which is why dispatch_loop leaves the feature off unless DISPATCH_IMPORT_LIMIT_W is set."""
+
+    def test_writes_the_value_before_the_switch(self):
+        # Order is load-bearing: enabling first would briefly enforce whatever value an earlier
+        # session left in 50009, which could be far below the fuse rating.
+        inv = make_inverter()
+        ic.set_import_limit(inv, 10_000)
+
+        writes = inv.client.write_calls()
+        addrs = [addr for addr, _ in writes]
+        self.assertEqual(dict(writes)[ic.REG_IMPORT_LIMIT], 100)  # 10 kW at 0.1 kW/LSB
+        self.assertEqual(dict(writes)[ic.REG_IMPORT_LIMIT_ENABLE], 1)
+        self.assertLess(addrs.index(ic.REG_IMPORT_LIMIT), addrs.index(ic.REG_IMPORT_LIMIT_ENABLE))
+
+    def test_rounds_to_the_registers_tenth_of_a_kilowatt_resolution(self):
+        inv = make_inverter()
+        ic.set_import_limit(inv, 11_449)
+        self.assertEqual(dict(inv.client.write_calls())[ic.REG_IMPORT_LIMIT], 114)
+
+    def test_rejects_values_outside_the_registers_range(self):
+        inv = make_inverter()
+        for watts in (0, -1, 100_001):
+            with self.subTest(watts=watts):
+                with self.assertRaises(ValueError):
+                    ic.set_import_limit(inv, watts)
+        self.assertEqual(inv.client.write_calls(), [])
+
+    def test_rejects_a_value_that_rounds_away_to_no_limit_at_all(self):
+        # 40 W rounds to raw 0, and 0 on this register means "no import allowed" or "off"
+        # depending on firmware — either way not what the caller asked for.
+        inv = make_inverter()
+        with self.assertRaises(ValueError):
+            ic.set_import_limit(inv, 40)
+        self.assertEqual(inv.client.write_calls(), [])
+
+    def test_clear_turns_the_switch_off_and_leaves_the_value_alone(self):
+        inv = make_inverter()
+        ic.set_import_limit(inv, 10_000)
+        inv.client.calls.clear()
+
+        ic.clear_import_limit(inv)
+
+        writes = inv.client.write_calls()
+        self.assertEqual([addr for addr, _ in writes], [ic.REG_IMPORT_LIMIT_ENABLE])
+        self.assertEqual(dict(writes)[ic.REG_IMPORT_LIMIT_ENABLE], 0)
+        self.assertEqual(inv.client.regs[ic.REG_IMPORT_LIMIT], 100)  # value untouched
+
+    def test_writes_nothing_when_disarmed(self):
+        inv = make_inverter()
+        with mock.patch.object(ic, "ARMED", False):
+            ic.set_import_limit(inv, 10_000)
+        self.assertEqual(inv.client.write_calls(), [])
+
+
 class MiscTests(InverterControlTestCase):
     def test_clamp_power_w_respects_battery_and_grid_caps(self):
         self.assertEqual(ic.clamp_power_w(-500), 0)
