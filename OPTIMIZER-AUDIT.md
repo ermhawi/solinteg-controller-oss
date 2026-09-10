@@ -68,6 +68,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 12 | E8 DP ceiling + E6 real freeze | ✅ done, freeze gated on an on-device probe |
 | 13 | G1 curtailment, G3 per-month profiles, G6 dead code, G9 wear basis | ✅ done |
 | 14 | G4 measured per-hour reserve, G5 doc contradictions, G8 FX rate | ✅ done |
+| 15 | Phase M measurement harness (M-1, M-2, M-3) | ✅ done — **built last, not first; see the note** |
 
 ---
 
@@ -1001,6 +1002,38 @@ Order matters: the measurement harness first (nothing here is safely tunable bli
 constants exist only to cancel each other), then the root-cause fixes, then the knobs.
 
 ### Phase M — make the effect of a change measurable (do this first)
+
+> **Status: ✅ all three built — but LAST, not first, which was a deliberate deviation from this
+> plan and is worth being honest about.** The P0 items were unambiguous defects (an azimuth in the
+> wrong convention, one constant serving three physical limits) whose fixes needed no replay evidence
+> to justify, and delaying them behind a harness would have left a 2× solar under-forecast running
+> for no benefit. The P1 knob changes are the ones that genuinely wanted the harness first: each is
+> argued from reasoning plus a synthetic scenario, which is enough to show the OLD behaviour was
+> wrong (a surcharge that scales with the price feed's generosity, a premium that saturates, a guard
+> that prices the wrong problem) but not enough to prove the new magnitudes are right. Those
+> magnitudes remain placed estimates. `replay-plans.ts` is now what settles them.
+>
+> - **M-1 `scripts/tools/replay-plans.ts`** — re-runs each logged plan under one-knob-at-a-time
+>   variants and scores every resulting trajectory against MEASURED solar and load with
+>   `evaluateDispatch`. Not circular: the plan is built from the forecast it saw, the score is
+>   against what happened, so a setting that merely trusts the forecast more scores worse. Takes the
+>   last plan per day (re-solves of the same day are not independent decisions), skips days below
+>   90 % reading coverage rather than scoring interpolation, and reports value, grid-to-battery kWh
+>   and mean end-of-day SoC per variant. Verified on a synthetic 6-day database where actual solar
+>   ran 30 % below forecast and load 10 % above: it correctly priced `LOAD_FORECAST_MARGIN` at
+>   +7.10 kr over the window, which is that constant's own rationale showing up as a number.
+> - **M-2 `scripts/tools/solar-forecast-error.py`** — per source, per month, per hour: bias, MAE and
+>   nMAE from `solar_forecasts` × `readings.pv_w`, scoring the FIRST forecast logged for a date
+>   (the one planning actually used overnight; `--last` scores the near-term end instead). Verified
+>   against a synthetic day with one accurate source and one 40 %-low source: nMAE 0.00 and 0.40.
+>   Documents the two traps in its own docstring — curtailment reads as over-forecast, and `pv_w` is
+>   DC-side while the model is panel-plane, so a uniform bias means `performanceRatio` and a
+>   seasonal one means geometry.
+> - **M-3 `scripts/tools/guard-rates.py`** — per-day and per-hour veto rates, with idle rows excluded
+>   from both numerator and denominator (counting them produced percentages over 100 in the first
+>   cut, and made every rate look tiny on a quiet winter night). Names the two guards that had this
+>   exact failure available before 2026-09-10 (E1, E4) and flags an unclassified outcome rather than
+>   silently counting it as healthy.
 
 - **M-1 Offline replay harness.** New `scripts/tools/replay-plans.ts`: read `optimizer_runs`
   (`inputs_json`, `start_soc_kwh`) plus `readings` for the same days, re-run `optimizeDispatch`

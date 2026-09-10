@@ -215,6 +215,13 @@ lib/__tests__/inverter.test.ts    isValidInverterLiveData rejects malformed/miss
 lib/__tests__/constants-cross-language.test.ts  hardware constants stay in sync with the Python copies
 lib/__tests__/optimizer-property.test.ts  property-based DP checks (optimality vs random trajectories,
                                   emission validity, endSoc mode) over seeded random scenarios
+lib/__tests__/optimizer-caps.test.ts  per-slot caps: the GRID limit and the BATTERY limit are separate
+                                  (both hardware shapes, via env stubbing), and the SoC ceiling bounds
+                                  forced charging without blocking free solar auto-charge
+lib/__tests__/horizon.test.ts     real Stockholm day lengths (92/96/100), full DST days kept, a
+                                  same-count-but-holed day rejected
+lib/__tests__/telemetry-load-profile.integration.test.ts  per-hour high quantile: a reserve where the
+                                  spread is, none where there isn't
 lib/__tests__/dispatch-card.test.ts  Dispatch-card view-model (tone, labels, reason/warning building)
 lib/__tests__/oracle-card.test.ts    Facit-card view-model (ok-day selection, medians, trend rows)
 lib/__tests__/weather-series.test.ts  /api/weather wire form: monthly solar calibration applied
@@ -251,6 +258,36 @@ scripts/tools/process-inverter-data.ts   monthly production/consumption averages
 scripts/tools/build-load-model.mjs        reads solar-data/*.csv + Open-Meteo Archive temps → HDD load-model
                                     constants (parses CSV directly; needs network)
 scripts/tools/build-solar-calibration.ts  measured production ÷ raw GHI-model estimate → solarCalibrationByMonth
+```
+
+### Measurement tools (read telemetry.db, change nothing)
+
+These exist so the tuning constants can be **fitted rather than placed**. Several of them were
+placed estimates, and one stack of them (a flat 1.75 solar bias factor plus hand-set monthly
+calibrations) turned out to be masking a geometry bug rather than correcting a model error — which
+is the failure a standing measurement makes hard to repeat. See OPTIMIZER-AUDIT.md.
+
+```
+scripts/tools/replay-plans.ts             re-run logged plans under alternative planning options and
+                                    score them against MEASURED solar/load. The harness for the
+                                    risk knobs (deferral, solar premium, forecast premium, load
+                                    margin, terminal value). Plans built from the forecast, scored
+                                    against what happened — so trusting the forecast more shows up
+                                    as worse, which is the question the knobs exist to answer.
+scripts/tools/solar-forecast-error.py     per-source, per-month, per-hour bias and MAE from
+                                    solar_forecasts × readings.pv_w. What should set
+                                    performanceRatio / solarCalibrationByMonth / source choice.
+scripts/tools/guard-rates.py              how often each dispatch guard vetoes the plan. A guard
+                                    firing occasionally is insurance; every slot is the controller
+                                    silently not being in control.
+scripts/tools/measure-battery-rt-eff.py   DC round trip AND the AC-to-AC one the optimizer actually
+                                    needs (EFF_ONE_WAY) — the two are different, and conflating
+                                    them was a real modelling error.
+scripts/tools/probe_import_limit.py       on-device: is the site import limit (50007/50009) enforced?
+scripts/tools/probe_freeze.py             on-device, at night: does the documented battery freeze
+                                    actually hold, and does the write order matter? Tests both
+                                    orders — a restrictive cap written pre-mode reads back as
+                                    applied while doing nothing.
 ```
 
 ## Deployment & operations
