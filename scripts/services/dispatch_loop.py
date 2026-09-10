@@ -191,6 +191,15 @@ Environment variables (beyond inverter_control.py's own SOLINTEG_* / SOLINTEG_CO
                                 (default "1" — on). Kill switch, not a tuning knob: flip to
                                 "0" and restart the service if this ever needs to be ruled
                                 out while investigating something else.
+  DISPATCH_LIVE_LOAD_TRACKING_CHARGE
+                                the same correction on CHARGE slots (live_charge_power_w),
+                                which previously had only the binary solar-funding veto:
+                                "shadow" (default) computes and logs the target it would
+                                command without applying it, "1" applies it, "0" disables it.
+                                Shadow by default because this writes a power target during
+                                grid-funded charging — review a few days of control_actions
+                                rows (detail_json.tracked_charge_w vs planned_power_w) before
+                                arming it.
   DISPATCH_LIVE_LOAD_ROUND_W    live-tracked discharge target is rounded to the nearest this
                                 many watts (default 100) — precision of the written setpoint,
                                 not the write-frequency control (that's the deadband below).
@@ -314,6 +323,12 @@ SOLAR_SHORTFALL_KWH = float(os.environ.get("DISPATCH_SOLAR_SHORTFALL_KWH", "0.5"
 # Kill switch for live_discharge_power_w (see module docstring) — "0" reverts discharge
 # slots to the plan's fixed forecast-based power, same as before this existed.
 LIVE_LOAD_TRACKING_ENABLED = os.environ.get("DISPATCH_LIVE_LOAD_TRACKING", "1") != "0"
+# The same idea on the CHARGE side, which had no live correction at all — only the binary
+# solar-funding veto (force at the plan's full power, or fall back to Auto). "shadow" (the default)
+# computes the target and logs it without applying it, "1" applies it, "0" disables it entirely.
+# Shadow by default on purpose: this writes a power target during grid-funded charging, so it should
+# be reviewed against a few days of real control_actions rows before it is allowed to act.
+LIVE_LOAD_TRACKING_CHARGE = os.environ.get("DISPATCH_LIVE_LOAD_TRACKING_CHARGE", "shadow")
 # Round the live-tracked target to the nearest this-many watts — keeps the written
 # setpoint from carrying meaningless single-watt precision. The write-frequency control is
 # the DEADBAND below, not this rounding (first night's data: 100 W rounding alone produced
@@ -744,6 +759,68 @@ def planned_grid_charge_kwh(dispatch_slot: dict, inputs_slot: dict | None, need_
     return need_kwh - min(planned_surplus_kwh, need_kwh), "forecast"
 
 
+def live_charge_power_w(dispatch: list, idx: int, now: datetime, planned_power_w: int):
+    """Charge power that holds this slot's REAL grid exchange at what the plan intended, given live
+    pv_w/house_load_w — the charge-side mirror of live_discharge_power_w.
+
+    Why it exists. Discharge slots have been live-tracked since 2026-07-12; charge slots had only the
+    binary solar-funding veto, so between "the plan's full power" and "Auto" there was nothing. That
+    costs money in both directions:
+      - live solar ABOVE forecast: the fixed setpoint does not rise to absorb it, so the extra
+        surplus exports at spot + nätnytta instead of charging;
+      - live load ABOVE forecast: it lands on top of the commanded charge, so the meter imports more
+        than the plan priced (and more than the fuse assumes — see DISPATCH_IMPORT_LIMIT_W).
+
+    The algebra is the same identity the discharge side uses, solved for the other direction:
+    `grid = house_load + battery_ac_in − pv`, so holding grid at the plan's intended position needs
+    `battery_ac_in = planned_grid_w + pv_w − house_load_w`. That is an AC-side figure and register
+    50207 is battery-side, so the command is `battery_ac_in × ONE_WAY_EFF` (charging: stored = AC ×
+    η — the inverse of the discharge conversion).
+
+    Returns (power_w, detail, numbers). A non-positive requirement means the plan's grid position is
+    already met without charging, and the caller demotes the tick to idle/auto — Auto still absorbs
+    whatever surplus exists, which is strictly better than parking EMS at 0 W.
+
+    This does NOT replace check_solar_funding: the veto is the coarse guard against a forecast bust
+    (fall back to Auto entirely), this is the fine correction within a slot the plan still wants.
+    """
+    if LIVE_LOAD_TRACKING_CHARGE == "0":
+        return planned_power_w, "live charge tracking disabled (DISPATCH_LIVE_LOAD_TRACKING_CHARGE=0)", {}
+
+    live = read_live_reading(now)
+    if live is None:
+        return planned_power_w, "live.json missing/stale — holding plan-only charge target", {}
+
+    pv_w, house_load_w = live
+    grid_kwh = dispatch[idx].get("gridKwh")
+    planned_grid_w = (float(grid_kwh) / SLOT_HOURS * 1000) if grid_kwh is not None else 0.0
+    required_ac_w = planned_grid_w + pv_w - house_load_w
+    required_battery_w = required_ac_w * ONE_WAY_EFF if required_ac_w > 0 else required_ac_w
+    tracked_w = clamp_power_w(round(required_battery_w / LIVE_LOAD_ROUND_W) * LIVE_LOAD_ROUND_W)
+    numbers = {
+        "live_house_load_w": round(house_load_w),
+        "live_pv_w": round(pv_w),
+        "planned_grid_w": round(planned_grid_w),
+        "required_ac_w": round(required_ac_w),
+        "planned_power_w": planned_power_w,
+        "tracked_charge_w": tracked_w,
+    }
+    if LIVE_LOAD_TRACKING_CHARGE != "1":
+        # Shadow: report what it WOULD do, change nothing.
+        detail = (
+            f"live charge tracking (shadow): live load {house_load_w:.0f} W, pv {pv_w:.0f} W, "
+            f"planned grid {planned_grid_w:.0f} W -> would command {tracked_w} W "
+            f"(plan-only {planned_power_w} W)"
+        )
+        return planned_power_w, detail, numbers
+    detail = (
+        f"live load {house_load_w:.0f} W, pv {pv_w:.0f} W, planned grid {planned_grid_w:.0f} W "
+        f"(+import/-export) -> AC need {required_ac_w:.0f} W -> battery {tracked_w} W "
+        f"(plan-only would be {planned_power_w} W)"
+    )
+    return tracked_w, detail, numbers
+
+
 def check_solar_funding(inputs: list, idx: int, charge_kwh: float, surplus_w,
                         dispatch_slot: dict | None = None):
     """Should a forced charge fall back to auto because live solar can't fund it as planned?
@@ -932,6 +1009,21 @@ def decide(con: sqlite3.Connection, now: datetime):
         except Exception as exc:  # noqa: BLE001
             log.warning("solar-funding check failed (%s) — proceeding without it", exc)
             solar_skip, detail = False, f"solar-funding check failed: {exc}"
+        # Fine correction on top of that coarse veto (see live_charge_power_w). Same
+        # degrade-to-the-old-behaviour discipline: a bug here must leave the plan-only figure.
+        try:
+            power_w, charge_detail, charge_numbers = live_charge_power_w(dispatch, idx, now, power_w)
+            numbers.update(charge_numbers)
+            detail = f"{detail}; {charge_detail}" if detail else charge_detail
+        except Exception as exc:  # noqa: BLE001
+            log.warning("live-load charge tracking failed (%s) — using plan-only power", exc)
+        if power_w == 0:
+            # The plan's grid position is already met without charging (e.g. the house is drawing
+            # more than forecast, so the planned import is already happening on its own). Auto still
+            # absorbs any real surplus, which beats parking EMS BattCtrl at 0 W — the anti-pattern
+            # MODBUS.md warns about, and the same demotion the discharge side makes.
+            action = "idle"
+            detail = f"live charge target is 0 W — auto instead of EMS 0 W ({detail})"
     # A fixed save target deliberately deviates from an idle plan's same-SoC trajectory. Do not
     # apply the stale-plan divergence guard to it; the fixed target is the explicit policy here.
     expected_soc_now = (

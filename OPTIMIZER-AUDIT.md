@@ -64,6 +64,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 8 | P1-1 forecast price premium was a hoarding incentive | ✅ done (band captured for the refit, not yet consumed) |
 | 9 | P1-5 DC datasheet efficiency used on the AC path | ✅ done |
 | 10 | E1 + E4 + E5 + E7 executor/plan mismatches | ✅ done (E7 was misdiagnosed in the audit — corrected below) |
+| 11 | E2 live-load tracking on charge slots | ✅ done, shipping in shadow mode |
 
 ---
 
@@ -664,6 +665,22 @@ plans). Keep the conservative `surplus_w is None` branch. Update
 `scripts/tests/test_dispatch_loop.py`.
 
 ## E2 A forced charge has no live-load correction — only an all-or-nothing veto
+
+> **Status: ✅ done, shipping in shadow mode.** `live_charge_power_w` mirrors the discharge side:
+> holding the plan's intended grid position needs `battery_ac_in = planned_grid_w + pv_w −
+> house_load_w`, converted to the battery side (`× ONE_WAY_EFF` — charging is the inverse leg of
+> discharging) before it reaches register 50207. A non-positive requirement demotes the tick to
+> idle/auto rather than parking EMS BattCtrl at 0 W, exactly as the discharge path does.
+>
+> It does **not** replace `check_solar_funding`: the veto stays the coarse guard against a forecast
+> bust (fall back to Auto entirely), this is the fine correction inside a slot the plan still wants.
+>
+> `DISPATCH_LIVE_LOAD_TRACKING_CHARGE` defaults to **`shadow`** — computes the target, logs it as
+> `detail_json.tracked_charge_w`, applies nothing — so upgrading changes no deployment's behaviour
+> until someone has reviewed a few days of real rows against `planned_power_w`. `1` arms it, `0`
+> disables it. Tests cover shadow/off/stale fallbacks and all three live shapes: extra solar absorbed
+> instead of exported, a load spike shrinking the charge instead of importing over plan, and a zero
+> requirement reported so the caller can demote.
 
 Discharge slots get `live_discharge_power_w` (retargeted every tick against real `pv_w` /
 `house_load_w`). Charge slots get only the binary `check_solar_funding` veto: force at the plan's

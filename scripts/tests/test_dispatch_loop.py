@@ -13,6 +13,7 @@ Run: python3 -m unittest scripts.tests.test_dispatch_loop -v   (from the repo ro
      or: python3 -m unittest discover -s scripts/tests
 """
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -275,6 +276,95 @@ class LiveDischargePowerWTests(unittest.TestCase):
         power_w, _detail, numbers = dl.live_discharge_power_w(dispatch, 0, now, planned_power_w=1000)
         self.assertEqual(numbers["required_ac_w"], -3500)
         self.assertEqual(power_w, 0)  # clamp_power_w floors at 0; decide() then demotes to idle
+
+
+class LiveChargePowerWTests(unittest.TestCase):
+    """The charge-side mirror of live-load tracking (OPTIMIZER-AUDIT.md E2).
+
+    Charge slots had only the binary solar-funding veto — the plan's full power, or Auto — so live
+    solar above forecast exported instead of charging, and live load above forecast landed on top of
+    the commanded charge at the meter.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.live_json_path = Path(self.tmpdir.name) / "live.json"
+        self._orig_path = dl.LIVE_JSON_PATH
+        self._orig_mode = dl.LIVE_LOAD_TRACKING_CHARGE
+        dl.LIVE_JSON_PATH = str(self.live_json_path)
+        dl.LIVE_LOAD_TRACKING_CHARGE = "1"
+
+    def tearDown(self):
+        dl.LIVE_JSON_PATH = self._orig_path
+        dl.LIVE_LOAD_TRACKING_CHARGE = self._orig_mode
+        self.tmpdir.cleanup()
+
+    def write_live_json(self, now: datetime, pv_w: float, house_load_w: float):
+        self.live_json_path.write_text(json.dumps({
+            "timestamp": now.isoformat(), "pv_w": pv_w, "house_load_w": house_load_w,
+        }))
+
+    def test_ships_in_shadow_mode_by_default(self):
+        # The default must not change any deployment's behaviour on upgrade: compute, log, apply
+        # nothing.
+        self.assertEqual(
+            os.environ.get("DISPATCH_LIVE_LOAD_TRACKING_CHARGE", "shadow"), "shadow"
+        )
+        dl.LIVE_LOAD_TRACKING_CHARGE = "shadow"
+        now = datetime.now(UTC)
+        self.write_live_json(now, pv_w=0, house_load_w=0)
+        dispatch = [{"gridKwh": 1.0}]  # plan imports 4000 W
+        power_w, detail, numbers = dl.live_charge_power_w(dispatch, 0, now, planned_power_w=1000)
+        self.assertEqual(power_w, 1000)  # unchanged
+        self.assertIn("shadow", detail)
+        self.assertGreater(numbers["tracked_charge_w"], 0)  # but it says what it would have done
+
+    def test_disabled_falls_back_to_planned_power_unchanged(self):
+        dl.LIVE_LOAD_TRACKING_CHARGE = "0"
+        dispatch = [{"gridKwh": 1.0}]
+        power_w, detail, numbers = dl.live_charge_power_w(dispatch, 0, datetime.now(UTC), planned_power_w=1000)
+        self.assertEqual(power_w, 1000)
+        self.assertEqual(numbers, {})
+        self.assertIn("disabled", detail)
+
+    def test_missing_live_json_falls_back_to_planned_power(self):
+        dispatch = [{"gridKwh": 1.0}]
+        power_w, detail, numbers = dl.live_charge_power_w(dispatch, 0, datetime.now(UTC), planned_power_w=1000)
+        self.assertEqual(power_w, 1000)
+        self.assertEqual(numbers, {})
+        self.assertIn("missing/stale", detail)
+
+    def test_extra_solar_is_absorbed_instead_of_exported(self):
+        now = datetime.now(UTC)
+        # Plan intended zero net grid exchange; live PV runs 3000 W above the house. Holding the
+        # plan's grid position means charging with all of it rather than exporting the difference.
+        self.write_live_json(now, pv_w=3500, house_load_w=500)
+        dispatch = [{"gridKwh": 0.0}]
+        power_w, _detail, numbers = dl.live_charge_power_w(dispatch, 0, now, planned_power_w=1000)
+        self.assertEqual(numbers["required_ac_w"], 3000)
+        # Charging: stored = AC x eta, and 50207 is battery-side — the inverse of the discharge leg.
+        expected = round(3000 * dl.ONE_WAY_EFF / dl.LIVE_LOAD_ROUND_W) * dl.LIVE_LOAD_ROUND_W
+        self.assertEqual(power_w, expected)
+        self.assertLess(power_w, 3000)
+
+    def test_a_load_spike_shrinks_the_charge_instead_of_importing_over_plan(self):
+        now = datetime.now(UTC)
+        # Plan intended 4000 W of import (1.0 kWh over the slot) with no PV; the house is suddenly
+        # drawing 3000 W. Charging at the plan's full power would import 7000 W at the meter.
+        self.write_live_json(now, pv_w=0, house_load_w=3000)
+        dispatch = [{"gridKwh": 1.0}]
+        power_w, _detail, numbers = dl.live_charge_power_w(dispatch, 0, now, planned_power_w=4000)
+        self.assertEqual(numbers["required_ac_w"], 1000)
+        self.assertLess(power_w, 4000)
+
+    def test_zero_requirement_reports_zero_so_the_caller_can_demote_to_auto(self):
+        now = datetime.now(UTC)
+        # The house is already drawing exactly the planned import on its own: nothing left to charge
+        # with. EMS BattCtrl parked at 0 W blocks self-consumption, so the caller demotes to Auto.
+        self.write_live_json(now, pv_w=0, house_load_w=4000)
+        dispatch = [{"gridKwh": 1.0}]
+        power_w, _detail, _numbers = dl.live_charge_power_w(dispatch, 0, now, planned_power_w=4000)
+        self.assertEqual(power_w, 0)
 
 
 class ApplyTargetRouting(unittest.TestCase):
