@@ -201,6 +201,21 @@ export async function producePlan(): Promise<PlanResult> {
       // horizon the price provider happened to return (e.g. 22:30 on the final day).
       const optimizerSlots = trimIncompleteTerminalDays(allSlots.slice(nowSlotIdx), data.today);
 
+      // The DP has zero terminal value, so the horizon's LENGTH is itself a policy input: a plan
+      // that only reaches tonight will deliberately spend the battery down to the floor by
+      // midnight (OPTIMIZER-AUDIT.md P0-3). A collapsed horizon used to be invisible — one missing
+      // forecast slot, a PlaneraElen outage or a DST day and the plan silently changed character.
+      // Log it every time, at info level, so the journal answers "how far ahead was it planning?"
+      // without re-deriving it from the published slots.
+      const horizonHours = (optimizerSlots.length * 15) / 60;
+      const horizonEnd = optimizerSlots[optimizerSlots.length - 1]?.startTime ?? 'none';
+      console.info(
+        `plan horizon: ${optimizerSlots.length} slots (${horizonHours.toFixed(1)} h) ` +
+          `from ${optimizerSlots[0]?.startTime ?? 'none'} to ${horizonEnd}, ` +
+          `hasTomorrow=${data.hasTomorrow}` +
+          (horizonHours < 24 ? ' — SHORT: terminal-value-0 will drain the battery at its end' : ''),
+      );
+
       // loadFactor: plan against pessimistic load (LOAD_FORECAST_MARGIN) so the trajectory
       // keeps slack for forecast error — optimizerSlots themselves stay the honest forecast,
       // and that's what gets logged below, so forecast-vs-actual validation against readings

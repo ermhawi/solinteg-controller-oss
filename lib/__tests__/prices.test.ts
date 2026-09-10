@@ -9,6 +9,7 @@ import {
   fetchDay,
   mergePriceHorizon,
   isUsablePlaneraSource,
+  fillPriceGaps,
 } from '../prices';
 import { EXPORT_BONUS_ORE, SUPPLIER_SURCHARGE_ORE, VAT_RATE } from '../constants';
 
@@ -375,5 +376,77 @@ describe('fetchDay', () => {
   it('returns null when the body is not an array', async () => {
     vi.stubGlobal('fetch', ok({ error: 'nope' }));
     await expect(fetchDay('2026-08-10')).resolves.toBeNull();
+  });
+});
+
+describe('fillPriceGaps', () => {
+  const slot = (time: string, spot: number) => ({
+    startTime: time,
+    endTime: time,
+    price: Math.round((spot + EXPORT_BONUS_ORE) * 100) / 100,
+    priceIncludingTaxAndSurcharge:
+      Math.round((spot + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
+    source: 'actual' as const,
+  });
+
+  it('leaves a contiguous series untouched', () => {
+    const prices = [
+      slot('2026-09-02T00:00:00', 10),
+      slot('2026-09-02T00:15:00', 20),
+      slot('2026-09-02T00:30:00', 30),
+    ];
+    const result = fillPriceGaps(prices);
+    expect(result.filled).toBe(0);
+    expect(result.prices).toBe(prices); // same array, not a copy
+  });
+
+  it('interpolates a single missing slot and marks it forecast', () => {
+    // One missing slot used to cost a whole day of optimizer horizon, and a short horizon makes
+    // the DP empty the battery at the end of it — see OPTIMIZER-AUDIT.md P0-3.
+    const result = fillPriceGaps([slot('2026-09-02T00:00:00', 10), slot('2026-09-02T00:30:00', 30)]);
+    expect(result.filled).toBe(1);
+    expect(result.prices).toHaveLength(3);
+    const [, mid] = result.prices;
+    expect(mid.startTime).toBe('2026-09-02T00:15:00');
+    expect(mid.endTime).toBe('2026-09-02T00:30:00');
+    expect(mid.source).toBe('forecast'); // inferred, never presented as settled
+    // Spot 20 interpolated, then BOTH fields re-derived from it so DOMAIN.md's invariants hold.
+    expect(mid.price).toBeCloseTo(20 + EXPORT_BONUS_ORE, 6);
+    expect(mid.priceIncludingTaxAndSurcharge).toBe(
+      Math.round((20 + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
+    );
+  });
+
+  it('fills a run of up to four missing slots', () => {
+    const result = fillPriceGaps([slot('2026-09-02T00:00:00', 0), slot('2026-09-02T01:15:00', 50)]);
+    expect(result.filled).toBe(4);
+    expect(result.prices.map((p) => p.startTime.slice(11, 16))).toEqual([
+      '00:00', '00:15', '00:30', '00:45', '01:00', '01:15',
+    ]);
+    expect(result.prices[1].price - EXPORT_BONUS_ORE).toBeCloseTo(10, 6);
+    expect(result.prices[4].price - EXPORT_BONUS_ORE).toBeCloseTo(40, 6);
+  });
+
+  it('refuses a gap longer than an hour — a real outage must shorten the horizon, not be invented', () => {
+    const result = fillPriceGaps([slot('2026-09-02T00:00:00', 10), slot('2026-09-02T01:30:00', 30)]);
+    expect(result.filled).toBe(0);
+  });
+
+  it('never invents slots across a midnight boundary', () => {
+    const result = fillPriceGaps([slot('2026-09-02T23:30:00', 10), slot('2026-09-03T00:15:00', 30)]);
+    expect(result.filled).toBe(0);
+  });
+
+  it('leaves the DST fall-back repeated hour alone', () => {
+    // The label steps BACKWARDS across the repeat, which is the feed being correct. Any attempt to
+    // interpolate here would manufacture a label whose real hour is ambiguous.
+    const result = fillPriceGaps([slot('2026-10-25T02:45:00', 10), slot('2026-10-25T02:00:00', 30)]);
+    expect(result.filled).toBe(0);
+  });
+
+  it('leaves the DST spring-forward jump alone', () => {
+    // 02:00-03:00 does not exist on that date; the one-hour label jump is not a hole.
+    const result = fillPriceGaps([slot('2026-03-29T01:45:00', 10), slot('2026-03-29T03:00:00', 30)]);
+    expect(result.filled).toBe(0);
   });
 });

@@ -57,6 +57,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 1 | P0-1 solar azimuth convention (+ the whole fudge stack, + a new P0-1b) | ✅ done |
 | 2 | P0-2 grid capacity vs battery power conflated | ✅ done |
 | 3 | E3 site-level import limit (fuse backstop for P0-2's raised budget) | ✅ implemented, gated on an on-device probe |
+| 4 | P0-3 part 2 + G7 horizon robustness (DST days, forecast holes, visibility) | ✅ done |
 
 ---
 
@@ -284,6 +285,43 @@ minus margin, not a guess — with P0-2 fixed this value becomes load-bearing fo
 fuse safety. See E3.
 
 ## P0-3 Terminal value 0 — every plan ends at the SoC floor, and the horizon can silently collapse to today
+
+> **Status: part 2 (horizon robustness, and with it G7) ✅ done. Part 1 (the terminal value function)
+> is still open — Phase B.**
+>
+> `slotsInStockholmDay()` now lives in `lib/prices.ts` (the module that owns
+> `stockholmMidnightUtc`) and derives a date's real slot count from the two midnight instants: 96
+> ordinarily, 92 spring-forward, 100 fall-back. `trimIncompleteTerminalDays` accepts a future day
+> against *that* instead of a hardcoded 96, so the two DST days no longer truncate the horizon twice
+> a year (G7), and it now also checks **contiguity** — a day with the right count but a hole is
+> rejected, because `dispatch_loop.py` indexes the published plan by elapsed time from its first
+> slot and a mid-plan gap would shift the executor's idea of "now" for everything after it. The
+> fall-back day's genuinely repeated label (a −45 min step) is tolerated explicitly.
+>
+> Holes are now filled *upstream* instead of costing a day of horizon: `fillPriceGaps` in
+> `lib/prices.ts` reconstructs runs of up to four missing slots by linear interpolation, but only
+> when both neighbours are on the same ordinary 96-slot date — never across midnight, never on a DST
+> date (01:45 → 03:00 looks exactly like four missing slots to label arithmetic). It interpolates the
+> raw **spot** and re-derives both price fields from it, so DOMAIN.md's
+> `sell = spot + EXPORT_BONUS_ORE` / `buy = (spot + surcharge) × (1 + VAT)` invariants hold exactly
+> for a filled slot, and marks it `source: 'forecast'` — inferred, never presented as settled. A
+> longer gap is deliberately left alone: a real outage should shorten the horizon, not be papered
+> over with invented prices. Filling is logged at warn level.
+>
+> `producePlan` now logs the horizon it actually solved (slot count, hours, first/last slot,
+> `hasTomorrow`) on every plan, with an explicit "SHORT: terminal-value-0 will drain the battery at
+> its end" note below 24 h. Horizon length is a policy input for a DP with no terminal value, and it
+> was previously invisible.
+>
+> Tests: new `lib/__tests__/horizon.test.ts` (day lengths incl. both DST days and month/year
+> boundaries; full 92- and 100-slot days accepted; a same-count-but-holed day rejected; stops at the
+> first incomplete day; today never dropped) and a `fillPriceGaps` block in `prices.test.ts` (single
+> slot, a four-slot run, >1 h refused, midnight refused, both DST label shapes refused, identity
+> when nothing to fill). `plan.test.ts`'s `../prices` mock became a partial mock — it was stubbing
+> away the real date arithmetic `horizon.ts` needs.
+
+### The original finding
+
 
 **What is wrong.** `lib/optimizer.ts:309` starts the backward pass with `costToGo` all zeros:
 stored energy is worth exactly nothing at the horizon end. **[measured]** every scenario run

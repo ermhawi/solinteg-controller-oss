@@ -107,6 +107,103 @@ export function mergePriceHorizon(
 }
 
 /**
+ * How many 15-min slots a given Stockholm calendar date really has: 96 on an ordinary day, 92 on
+ * the spring-forward day (23 h), 100 on the fall-back day (25 h).
+ *
+ * Derived from the two real midnight instants rather than from a DST rule, for the same reason
+ * `currentSlotIndexInPrices` is: the feed's transition days genuinely arrive with 92/100 slots, and
+ * hand-rolled offset arithmetic is one more thing to get wrong twice a year. Lives here because
+ * this is the module that owns `stockholmMidnightUtc`; lib/horizon.ts consumes it.
+ */
+export function slotsInStockholmDay(date: string): number {
+  const [y, m, d] = date.split('-').map(Number);
+  const start = stockholmMidnightUtc(y, m - 1, d);
+  const next = stockholmMidnightUtc(y, m - 1, d + 1); // Date.UTC handles month/year overflow
+  return Math.round((next.getTime() - start.getTime()) / 900_000);
+}
+
+/** Longest run of consecutive missing slots this will reconstruct. One hour: long enough to cover
+ *  the ordinary case (a provider dropping a row or two), short enough that a real outage is
+ *  reported as a shorter horizon instead of being papered over with invented prices. */
+const MAX_FILL_SLOTS = 4;
+
+/**
+ * Reconstruct short gaps in the merged price horizon by linear interpolation.
+ *
+ * Why this exists: `trimIncompleteTerminalDays` (lib/horizon.ts) accepts a future day only if it is
+ * complete and contiguous, and the DP has zero terminal value — so ONE missing forecast slot used
+ * to cost a whole day of horizon, and an artificially short horizon makes the optimizer deliberately
+ * empty the battery at the end of it (OPTIMIZER-AUDIT.md P0-3). Interpolating a 15-minute price
+ * between its two neighbours is a far smaller error than losing a day of look-ahead.
+ *
+ * Filled slots are marked `source: 'forecast'`, never 'actual': they are inferred, and the planner
+ * already prices forecast slots more cautiously than settled ones.
+ *
+ * Deliberately conservative about WHICH gaps it will fill:
+ *   - both neighbours on the same local date, so nothing is invented across a midnight boundary;
+ *   - the label gap must be exactly `(missing + 1) x 15` minutes AND the date must be an ordinary
+ *     96-slot day: on the two DST-transition days the naive labels genuinely jump (01:45 -> 03:00)
+ *     or repeat, and an interpolated label there would be a lie about which hour it is;
+ *   - at most MAX_FILL_SLOTS in a row.
+ * Anything else is left as a gap for the horizon trimmer to shorten the plan at.
+ *
+ * The interpolation runs on the raw SPOT price and re-derives both fields from it, rather than
+ * interpolating the two derived numbers independently — that keeps `sell = spot + EXPORT_BONUS_ORE`
+ * and `buy = (spot + SUPPLIER_SURCHARGE_ORE) x (1 + VAT_RATE)` exactly true for the filled slot, which
+ * is an invariant the rest of the app relies on (see DOMAIN.md).
+ */
+export function fillPriceGaps(prices: PriceSlot[]): { prices: PriceSlot[]; filled: number } {
+  if (prices.length < 2) return { prices, filled: 0 };
+  const spotOf = (p: PriceSlot) => p.price - EXPORT_BONUS_ORE;
+  const out: PriceSlot[] = [prices[0]];
+  let filled = 0;
+
+  for (let i = 1; i < prices.length; i++) {
+    const prev = prices[i - 1];
+    const next = prices[i];
+    const date = prev.startTime.slice(0, 10);
+    const sameDay = date === next.startTime.slice(0, 10);
+    // Never on a DST-transition date. A one-hour label jump there is the clock changing, not a
+    // hole, and 01:45 -> 03:00 looks exactly like four missing slots to plain label arithmetic.
+    const ordinaryDay = sameDay && slotsInStockholmDay(date) === 96;
+    const stepMin = minutesOfDay(next.startTime) - minutesOfDay(prev.startTime);
+    const missing = stepMin / 15 - 1;
+    if (ordinaryDay && Number.isInteger(missing) && missing >= 1 && missing <= MAX_FILL_SLOTS) {
+      const fromSpot = spotOf(prev);
+      const toSpot = spotOf(next);
+      for (let k = 1; k <= missing; k++) {
+        const spot = fromSpot + ((toSpot - fromSpot) * k) / (missing + 1);
+        const startMin = minutesOfDay(prev.startTime) + k * 15;
+        out.push(interpolatedSlot(prev.startTime.slice(0, 10), startMin, spot));
+        filled++;
+      }
+    }
+    out.push(next);
+  }
+  // Identity when nothing was filled: callers can then treat an unchanged array as unchanged,
+  // and the common case allocates nothing.
+  return filled > 0 ? { prices: out, filled } : { prices, filled: 0 };
+}
+
+function minutesOfDay(startTime: string): number {
+  return parseInt(startTime.slice(11, 13), 10) * 60 + parseInt(startTime.slice(14, 16), 10);
+}
+
+function interpolatedSlot(date: string, startMin: number, spot: number): PriceSlot {
+  const label = (min: number) =>
+    `${date}T${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}:00`;
+  const rounded = Math.round(spot * 100) / 100;
+  return {
+    startTime: label(startMin),
+    endTime: label(startMin + 15),
+    price: Math.round((rounded + EXPORT_BONUS_ORE) * 100) / 100,
+    priceIncludingTaxAndSurcharge:
+      Math.round((rounded + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
+    source: 'forecast',
+  };
+}
+
+/**
  * Fetch PlaneraElen without Next's patched fetch implementation. This is deliberately a direct
  * Node HTTPS request: the forecast changes during the day, and the normal fetch cache returned an
  * older forecast even when the route itself was dynamic and marked no-store.
@@ -348,6 +445,16 @@ export async function fetchPricesUncached(): Promise<PriceData> {
     hasTomorrow = merged.hasTomorrow;
   } catch (err) {
     console.warn('PlaneraElen forecast unavailable; using actual prices only:', err);
+  }
+  // A single missing slot used to cost a whole day of optimizer horizon (see fillPriceGaps).
+  // Logged rather than silent: invented prices reaching the DP is worth being able to see in
+  // journalctl, and a persistently gappy provider should be visible as a pattern.
+  const gapFilled = fillPriceGaps(prices);
+  if (gapFilled.filled > 0) {
+    console.warn(
+      `fetchPricesUncached: interpolated ${gapFilled.filled} missing price slot(s) to keep the horizon contiguous`,
+    );
+    prices = gapFilled.prices;
   }
   const maxAge = computeMaxAge(hasTomorrow, now, parts);
 

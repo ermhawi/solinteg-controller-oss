@@ -22,7 +22,11 @@ import type { OptimizerSlot, DispatchSlot } from '../optimizer';
 // SoC and writes telemetry, so it can never be prerendered). Outside a Next request scope that
 // throws, so it is stubbed — this suite is about orchestration, not the runtime.
 vi.mock('next/server', () => ({ connection: vi.fn(async () => undefined) }));
-vi.mock('../prices', () => ({
+// Partial mock: only the two request-time fetches/clock reads are stubbed. stockholmMidnightUtc
+// is real pure date arithmetic that lib/horizon.ts depends on for DST-aware day lengths, and
+// stubbing it away would make trimIncompleteTerminalDays silently accept nothing.
+vi.mock('../prices', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../prices')>()),
   fetchPricesUncached: vi.fn(),
   currentSlotIndexInPrices: vi.fn(),
 }));
@@ -76,7 +80,6 @@ import {
   LIVE_LOAD_PROFILE_DAYS,
 } from '../constants';
 import { producePlan } from '../plan';
-import { trimIncompleteTerminalDays } from '../horizon';
 
 const PRICE_DATA: PriceData = {
   today: '2026-01-15',
@@ -120,22 +123,6 @@ const TEMP_BY_DATE = { '2026-01-15': -2 };
 const PROFILES = { 1: [0.1, 0.2] };
 const LIVE_LOAD = { hourly: [1, 2, 3] } as unknown as ReturnType<typeof readTrailingLoadProfile>;
 const INVERTER_DATA = { soc_kwh: 7.5 } as unknown as Awaited<ReturnType<typeof readLiveInverterData>>;
-
-describe('trimIncompleteTerminalDays', () => {
-  it('keeps today and complete future days but drops a partial terminal day', () => {
-    const today = Array.from({ length: 2 }, (_, i) => ({
-      startTime: `2026-09-01T22:${String(30 + i * 15).padStart(2, '0')}:00`,
-    }));
-    const tomorrow = Array.from({ length: 96 }, (_, i) => ({
-      startTime: `2026-09-02T${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}:00`,
-    }));
-    const partial = Array.from({ length: 4 }, (_, i) => ({
-      startTime: `2026-09-03T00:${String(i * 15).padStart(2, '0')}:00`,
-    }));
-
-    expect(trimIncompleteTerminalDays([...today, ...tomorrow, ...partial], '2026-09-01')).toHaveLength(98);
-  });
-});
 
 function silenceConsoleError() {
   return vi.spyOn(console, 'error').mockImplementation(() => {});
