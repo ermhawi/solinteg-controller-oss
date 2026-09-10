@@ -69,6 +69,18 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 13 | G1 curtailment, G3 per-month profiles, G6 dead code, G9 wear basis | ✅ done |
 | 14 | G4 measured per-hour reserve, G5 doc contradictions, G8 FX rate | ✅ done |
 | 15 | Phase M measurement harness (M-1, M-2, M-3) | ✅ done — **built last, not first; see the note** |
+| 16 | G2 demand/capacity charge | ✅ closed — confirmed not applicable to this tariff |
+
+**Every finding in this audit is now resolved.** What remains is not code but two on-device probes
+and one refit, all of them gated on data that does not exist yet:
+
+| Open | Why it is not code | Gate |
+|---|---|---|
+| `DISPATCH_IMPORT_LIMIT_W` unset | 50007/50009 are the only control registers here taken from a third-party doc rather than measured; "stored but not enforced" is the realistic failure | run `scripts/tools/probe_import_limit.py` |
+| `DISPATCH_FREEZE_HOLDS=0` | the freeze's three-register combination is unverified, and the SoC-floor question below it is open | run `scripts/tools/probe_freeze.py` **at night** |
+| `INVERTER_CONV_EFF = 0.97` is a datasheet class, not this unit | needs night-time cycling in telemetry | `scripts/tools/measure-battery-rt-eff.py` |
+| The risk-knob magnitudes are placed estimates | needs weeks of logged plans and readings | `scripts/tools/replay-plans.ts` |
+| `DISPATCH_LIVE_LOAD_TRACKING_CHARGE=shadow` | deliberately observes before acting | review `detail_json.tracked_charge_w` vs `planned_power_w` |
 
 ---
 
@@ -906,7 +918,20 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
   including at a negative `sellPrice`. Real hardware can curtail (`50208`, or the inverter's
   export-limit registers). `optimizer.test.ts` names this the "curtailment gap". Fix: allow
   `gExp` to be reduced freely (curtailment is free), which strictly dominates paying to export.
-- **G2 No demand/capacity charge.** Buy price is a flat `öre/kWh` (`SKATT_OVERFÖRING = 71.38`).
+- **G2 No demand/capacity charge.** ✅ **closed — does not apply to this installation.** Confirmed
+  with the owner 2026-09-10: Sundsvall Elnät bills this site per kWh (elöverföring 26.38 öre/kWh)
+  plus a fixed annual subscription (~8052 kr), with **no effektavgift**. The subscription is a sunk
+  cost that cannot affect dispatch, and `SKATT_OVERFÖRING` already carries the per-kWh part, so the
+  cost function is complete as it stands. Adding a monthly-peak term would not be a refinement here,
+  it would distort dispatch away from the true optimum.
+
+  **Re-open this if the tariff changes**, and it plausibly will — Swedish DSOs have been introducing
+  effekttariffer, usually for larger fuses first. The exposure is real when it arrives: the DP
+  concentrates charging into the cheapest hour at up to the full grid budget (more so since P0-2
+  removed the artificial cap), which is precisely the behaviour that sets a monthly peak. The shape
+  of the fix would be a soft penalty on `gridImport` above the month-to-date peak, which changes the
+  cost function's state (peak-so-far becomes part of it) and therefore needs its own design pass
+  rather than a constant. Buy price is a flat `öre/kWh` (`SKATT_OVERFÖRING = 71.38`).
   If the DSO tariff has an `effektavgift`/capacity component (the repo already has Ellevio
   history tooling), then concentrating charging into the cheapest hour at up to 7.5–10 kW can buy
   20 öre of energy and create a monthly peak worth far more. Verify the tariff first; if it
