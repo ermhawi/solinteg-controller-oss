@@ -327,6 +327,115 @@ def clear_import_limit(inv: Inverter) -> None:
     inv.write_u16(REG_IMPORT_LIMIT_ENABLE, 0)
 
 
+# How long to wait for the inverter to report EMS BattCtrl before writing restrictive caps, and how
+# long to let the battery settle before checking that it really stopped. Both deliberately generous:
+# a freeze that half-applies is worse than one that takes ten seconds.
+FREEZE_MODE_CONFIRM_TIMEOUT_S = 10.0
+FREEZE_MODE_POLL_S = 0.5
+FREEZE_SETTLE_S = 3.0
+# Battery power (W, |value|) at or below which the battery counts as actually held. 30258 reads in
+# watts; the pack idles with a small BMS draw, so this is not zero.
+FREEZE_IDLE_TOL_W = 60
+
+
+class FreezeNotEnforced(RuntimeError):
+    """A freeze was commanded but the battery is demonstrably still moving.
+
+    Its own exception type because the caller must treat it differently from a Modbus error: the
+    registers took the writes and read back correctly, and the battery moved anyway. That is the
+    documented pre-mode failure shape (MODBUS.md), so it means "this inverter does not support the
+    freeze the way we command it", not "the link glitched".
+    """
+
+
+def freeze_battery(inv: Inverter, min_soc_pct: float = SOC_FLOOR_PCT + 5.0) -> None:
+    """Hold the battery: neither charge nor discharge, grid supplies the house.
+
+    The recipe MODBUS.md documents: `50207 = 0` plus `50208 = 0` plus `50209 = 0`, in EMS BattCtrl.
+    The zero AC limits are what make it a hold rather than the anti-pattern — EMS at `50207 = 0`
+    with the caps OPEN is the state MODBUS.md explicitly says never to enter (it blocks
+    self-consumption without giving the freeze semantics).
+
+    **WRITE ORDER IS THE WHOLE THING, and it is not the order force_charge uses.** Confirmed on the
+    reference deployment 2026-08-07: a restrictive cap written BEFORE mode entry is *stored but never
+    enforced* — `50209 = 0` written pre-mode produced a full 6 kW grid-funded charge, identical to
+    the uncapped control, **while the register read back as 0**. For a freeze that is the worst
+    possible failure shape: it would read back as frozen, not be frozen, and leave the inverter in
+    precisely the EMS-with-open-caps anti-pattern. So:
+
+        1. 50000 = 0x303          enter EMS BattCtrl FIRST
+        2. wait until the inverter REPORTS 0x303 (abort if it never does)
+        3. 50210 = 1              battery priority
+        4. 50208 = 0, 50209 = 0   the restrictive caps, now that they can take effect
+        5. 50207 = 0              neutral target
+        6. verify PHYSICALLY
+
+    **The readback is not proof and is not used as such.** Step 6 reads 30258 (actual battery power)
+    after a settle, because that is the only evidence that distinguishes "enforced" from "stored".
+    A battery still moving raises FreezeNotEnforced, and the caller reverts.
+
+    **Refuses near the SoC floor.** Whether the inverter's own on-grid floor (52502/52503) can still
+    grid-charge with AC input blocked is an OPEN question (MODBUS.md; the 2026-08-07 probe ran at
+    42-44 % SoC and could not answer it). A freeze near the floor could therefore silently defeat the
+    one protection that does not depend on this software, so this refuses rather than finding out in
+    production. `min_soc_pct` defaults to the floor plus 5 points.
+
+    **No solar.** `50208 = 0` blocks AC output, so with the sun up this curtails PV instead of
+    holding the battery. dispatch_loop only reaches for it on a planned hold slot, which is a
+    load-from-grid slot by construction.
+
+    `_forced_active` is set as soon as anything is written, so `return_to_auto`'s
+    `restore_ac_limits` runs on the way out and a zeroed cap cannot leak into the following idle
+    slots — including on the abort paths.
+    """
+    global _forced_active
+    if not ARMED:
+        # Every other write path short-circuits inside write_u16, but this one polls for a mode
+        # change that can never happen when the writes are no-ops — it would spend the confirmation
+        # timeout and then report a freeze failure that never happened. Shadow mode must observe
+        # nothing, not manufacture an error.
+        log.warning("DISARMED: skipping freeze_battery (set SOLINTEG_CONTROL_ARMED=1)")
+        return
+    soc = inv.soc_pct()
+    if soc <= min_soc_pct:
+        log.info("freeze_battery: SoC %.1f%% at/below %.1f%% — returning to auto instead. Whether the "
+                 "inverter's own floor can still act with AC input blocked is unverified (MODBUS.md), "
+                 "so a freeze near the floor is not allowed to be the thing that finds out.",
+                 soc, min_soc_pct)
+        return_to_auto(inv)
+        return
+
+    log.info("freeze_battery: SoC %.1f%% — mode first, then caps (write-order rule), then verify", soc)
+    # Step 1-2: mode BEFORE the restrictive caps, and confirmed before continuing.
+    inv.write_u16(REG_WORK_MODE, WORK_MODE_EMS_BATTCTRL)
+    _forced_active = True  # set immediately: anything below may leave state needing a restore
+    deadline = time.monotonic() + FREEZE_MODE_CONFIRM_TIMEOUT_S
+    while inv.work_mode() != WORK_MODE_EMS_BATTCTRL:
+        if time.monotonic() >= deadline:
+            log.error("freeze_battery: inverter never reported EMS BattCtrl within %.0fs — aborting to "
+                      "auto rather than writing caps that would be stored and not enforced",
+                      FREEZE_MODE_CONFIRM_TIMEOUT_S)
+            return_to_auto(inv)
+            raise FreezeNotEnforced("EMS BattCtrl not confirmed; freeze aborted")
+        time.sleep(FREEZE_MODE_POLL_S)
+
+    # Steps 3-5: now the caps can actually take effect.
+    inv.write_u16(REG_PRIORITY, 1)
+    inv.write_u16(REG_MAX_AC_OUTPUT, 0)
+    inv.write_u16(REG_MAX_AC_INPUT, 0)
+    inv.write_u16(REG_BATT_POWER_TARGET, 0, verify=False)
+
+    # Step 6: physical proof. The registers reading back correctly means nothing here.
+    time.sleep(FREEZE_SETTLE_S)
+    battery_w = inv.battery_power_w()
+    if abs(battery_w) > FREEZE_IDLE_TOL_W:
+        log.error("freeze_battery: commanded a freeze but the battery is at %d W (> %d W) — the caps "
+                  "were stored without being enforced. Reverting to auto.", battery_w, FREEZE_IDLE_TOL_W)
+        return_to_auto(inv)
+        raise FreezeNotEnforced(f"battery still at {battery_w} W after freeze")
+    log.info("freeze_battery: held — battery %d W, SoC %.1f%%", battery_w, soc)
+
+
 def _already_set_for(inv: "Inverter", priority: int) -> bool:
     """True when export/import caps, priority, and work mode already match what
     force_charge/force_discharge would otherwise (re-)write — i.e. we're already in a
@@ -448,7 +557,7 @@ def _main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
             "usage: inverter_control.py [status|auto|charge <W>|discharge <W>|set-floor [pct]|"
-            "import-limit <W|off>]"
+            "import-limit <W|off>|freeze]"
         )
         return 2
     inv = Inverter()
@@ -466,6 +575,8 @@ def _main(argv: list[str]) -> int:
         force_discharge(inv, int(argv[2]))
     elif cmd == "set-floor":
         set_soc_floor(inv, float(argv[2]) if len(argv) > 2 else SOC_FLOOR_PCT)
+    elif cmd == "freeze":
+        freeze_battery(inv)
     elif cmd == "import-limit":
         if len(argv) > 2 and argv[2] == "off":
             clear_import_limit(inv)

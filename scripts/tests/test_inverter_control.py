@@ -199,6 +199,110 @@ class ReturnToAutoCapRestoreTests(InverterControlTestCase):
             ic.ARMED = True
 
 
+class FreezeBatteryTests(InverterControlTestCase):
+    """The real battery freeze (50207/50208/50209 = 0 in EMS BattCtrl).
+
+    The write ORDER is the entire subject. Confirmed on the reference deployment 2026-08-07: a
+    restrictive cap written BEFORE mode entry is stored but never enforced — `50209 = 0` written
+    pre-mode produced a full 6 kW grid-funded charge, identical to the uncapped control, *while the
+    register read back as 0*. For a freeze that is the worst possible failure shape: it reads back as
+    frozen, is not frozen, and leaves the inverter in the EMS-with-open-caps state MODBUS.md says
+    never to enter. See OPTIMIZER-AUDIT.md E6.
+    """
+
+    def freezable(self, soc_pct: float = 50.0, battery_w: int = 0) -> ic.Inverter:
+        inv = make_inverter(soc_pct=soc_pct)
+        # 30258 is an S32 across two registers, so a negative value needs the full 32-bit two's
+        # complement — setting only the low word reads back as a large positive number.
+        raw = battery_w & 0xFFFFFFFF
+        inv.client.regs[ic.REG_BATTERY_POWER] = (raw >> 16) & 0xFFFF
+        inv.client.regs[ic.REG_BATTERY_POWER + 1] = raw & 0xFFFF
+        return inv
+
+    def setUp(self):
+        # The base fixture arms the module, sets the sign convention, and stubs time.sleep (so the
+        # confirmation poll and the 3 s settle cost nothing here). Shadowing it without calling it
+        # left every write a disarmed no-op — which is how these tests first "failed".
+        super().setUp()
+
+    def test_writes_the_mode_before_the_restrictive_caps(self):
+        inv = self.freezable()
+        ic.freeze_battery(inv)
+
+        addrs = [addr for addr, _ in inv.client.write_calls()]
+        self.assertIn(ic.REG_WORK_MODE, addrs)
+        for cap in (ic.REG_MAX_AC_OUTPUT, ic.REG_MAX_AC_INPUT):
+            with self.subTest(cap=cap):
+                self.assertIn(cap, addrs)
+                # THE assertion this class exists for.
+                self.assertLess(addrs.index(ic.REG_WORK_MODE), addrs.index(cap))
+        # …and the neutral target lands after the caps, so the inverter never runs a stale setpoint
+        # with the caps already shut.
+        self.assertLess(addrs.index(ic.REG_MAX_AC_INPUT), addrs.index(ic.REG_BATT_POWER_TARGET))
+
+    def test_commands_the_documented_values(self):
+        inv = self.freezable()
+        ic.freeze_battery(inv)
+        writes = dict(inv.client.write_calls())
+        self.assertEqual(writes[ic.REG_WORK_MODE], ic.WORK_MODE_EMS_BATTCTRL)
+        self.assertEqual(writes[ic.REG_MAX_AC_OUTPUT], 0)
+        self.assertEqual(writes[ic.REG_MAX_AC_INPUT], 0)
+        self.assertEqual(writes[ic.REG_BATT_POWER_TARGET], 0)
+        self.assertEqual(writes[ic.REG_PRIORITY], 1)
+
+    def test_raises_and_reverts_when_the_battery_is_still_moving(self):
+        # The registers took the writes and read back correctly, and the battery moved anyway: that
+        # is "stored but not enforced", and the readback provably cannot detect it. Only the measured
+        # power can.
+        inv = self.freezable(battery_w=-900)
+        with self.assertRaises(ic.FreezeNotEnforced):
+            ic.freeze_battery(inv)
+        # Reverted, not left in a half-applied state: General mode restored and caps reopened.
+        writes = inv.client.write_calls()
+        addrs = [addr for addr, _ in writes]
+        self.assertIn(ic.REG_WORK_MODE, addrs)
+        self.assertEqual(inv.client.regs[ic.REG_WORK_MODE], ic.WORK_MODE_GENERAL)
+        self.assertEqual(inv.client.regs[ic.REG_MAX_AC_OUTPUT], ic.GRID_CAP_RAW)
+
+    def test_a_small_idle_draw_still_counts_as_held(self):
+        # The pack idles with a BMS draw; the tolerance is not zero.
+        inv = self.freezable(battery_w=-20)
+        ic.freeze_battery(inv)  # must not raise
+
+    def test_refuses_near_the_soc_floor_and_returns_to_auto(self):
+        # Whether the inverter's own on-grid floor (52502/52503) can still grid-charge with AC input
+        # blocked is OPEN (MODBUS.md: the 2026-08-07 probe ran at 42-44% SoC and could not answer
+        # it). A freeze near the floor could silently defeat the one protection that does not depend
+        # on this software, so it must refuse rather than find out in production.
+        inv = self.freezable(soc_pct=ic.SOC_FLOOR_PCT + 1.0)
+        ic.freeze_battery(inv)
+        writes = dict(inv.client.write_calls())
+        self.assertEqual(writes.get(ic.REG_WORK_MODE), ic.WORK_MODE_GENERAL)
+        self.assertNotIn(ic.REG_MAX_AC_INPUT, [a for a, _ in inv.client.write_calls()
+                                               if a == ic.REG_MAX_AC_INPUT and writes[a] == 0])
+
+    def test_aborts_to_auto_when_ems_mode_is_never_confirmed(self):
+        inv = self.freezable()
+        # Mode write silently does not stick — the pre-mode-cap hazard in its purest form.
+        with mock.patch.object(ic.Inverter, "work_mode", return_value=ic.WORK_MODE_GENERAL), \
+             mock.patch.object(ic, "FREEZE_MODE_CONFIRM_TIMEOUT_S", 0.05), \
+             mock.patch.object(ic, "FREEZE_MODE_POLL_S", 0.01):
+            with self.assertRaises(ic.FreezeNotEnforced):
+                ic.freeze_battery(inv)
+        # Never wrote a restrictive cap, because they would have been stored and not enforced.
+        self.assertEqual(
+            [addr for addr, val in inv.client.write_calls()
+             if addr in (ic.REG_MAX_AC_OUTPUT, ic.REG_MAX_AC_INPUT) and val == 0],
+            [],
+        )
+
+    def test_writes_nothing_when_disarmed(self):
+        inv = self.freezable()
+        with mock.patch.object(ic, "ARMED", False):
+            ic.freeze_battery(inv)
+        self.assertEqual(inv.client.write_calls(), [])
+
+
 class ImportLimitTests(InverterControlTestCase):
     """Site-level (utility-meter) import limit, 50007/50009 — the only cap that counts house load
     together with a forced charge. See set_import_limit's docstring and

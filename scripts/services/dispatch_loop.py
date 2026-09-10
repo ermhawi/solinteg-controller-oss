@@ -213,6 +213,16 @@ Environment variables (beyond inverter_control.py's own SOLINTEG_* / SOLINTEG_CO
   INVERTER_DATA_PATH            the poller's live.json (default /opt/solinteg/live.json) —
                                 POLL_INTERVAL (modbus_poller.py, default 30) governs how fresh
                                 this can ever be, independent of this loop's own interval.
+  DISPATCH_FREEZE_HOLDS         "1" realises a planned hold as a REAL freeze (50207/50208/50209
+                                = 0) instead of the ~220 W battery-save emulation; anything else
+                                (the default) keeps the emulation. The emulation works but still
+                                moves ~0.055 kWh/slot out of the battery at the CURRENT price when
+                                the point of the hold is to keep it for a dearer one — ~2.6 kWh over
+                                a 12 h overnight hold. Off by default: this register combination is
+                                not probe-verified on the reference unit (MODBUS.md records 50209=0
+                                being stored but not enforced when written pre-mode), and a stale 0
+                                cap would cripple self-consumption for a whole run of idle slots.
+                                Verify with scripts/tools/probe_freeze.py first.
   DISPATCH_HEARTBEAT_PATH       liveness file for scripts/services/watchdog.py (default
                                 /opt/solinteg/dispatch-heartbeat.json)
   DISPATCH_IMPORT_LIMIT_W       site-level utility-meter import cap in watts, written once at
@@ -255,9 +265,11 @@ from zoneinfo import ZoneInfo
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
 from inverter_control import (
     ARMED,
+    FreezeNotEnforced,
     Inverter,
     force_charge,
     force_discharge,
+    freeze_battery,
     return_to_auto,
     clamp_power_w,
     set_import_limit,
@@ -287,14 +299,13 @@ SLOT_HOURS = 0.25
 # the TS union. Adding an action there fails that test until it is either given a branch below
 # or listed in AUTO_ACTIONS as a deliberate auto mapping. See CONTRIBUTING.md.
 FORCED_ACTIONS = ("charge", "discharge")
-# 'hold' (freeze SoC, export the solar surplus) is a DELIBERATE auto mapping, not an oversight:
-# no known register expresses "don't charge, export the surplus" (MODBUS.md warns against the
-# nearest approximation), so there is nothing else apply_target() could do with it. It is also
-# gated to disarmed installs on the TS side (lib/plan.ts's holdEnabled), precisely because
-# auto's real behaviour - charging the surplus - is the opposite of what hold asks for; see that
-# gate's comment for the full reasoning. Declared here so action-contract.test.ts's "every
-# Action is accounted for" check passes on purpose rather than by accident.
-AUTO_ACTIONS = ("idle", "hold")
+AUTO_ACTIONS = ("idle",)
+# 'hold' is an EXECUTOR-ONLY action and deliberately not part of the TS Action union: the optimizer
+# says "idle" and marks the slot with batterySaveDriftKwh, and this loop decides HOW to realise that
+# — Auto, the ~220 W battery-save emulation, or a real freeze (see FREEZE_HOLDS). Keeping it out of
+# the shared vocabulary is what stops lib/__tests__/action-contract.test.ts from demanding a TS
+# counterpart for a purely local execution strategy.
+EXECUTOR_ACTIONS = ("hold",)
 
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
@@ -349,6 +360,20 @@ BATTERY_SAVE_W = max(0, int(os.environ.get(
     "SOLINTEG_BATTERY_SAVE_DRIFT_W",
     os.environ.get("DISPATCH_BATTERY_SAVE_W", "220"),
 ))) // 10 * 10
+# Realise a planned hold as a REAL freeze (50207/50208/50209 = 0, see inverter_control.freeze_battery)
+# instead of the ~220 W battery-save emulation. "1" enables it; anything else (the default) keeps the
+# emulation. Off by default because the three registers' behaviour in this combination is not
+# probe-verified on the reference unit — MODBUS.md records 50209=0 being stored but not enforced when
+# written pre-mode — and because a stale 0 cap would cripple self-consumption for a whole run of idle
+# slots if restore_ac_limits ever failed to run. Verify with scripts/tools/probe_freeze.py first.
+FREEZE_HOLDS = os.environ.get("DISPATCH_FREEZE_HOLDS", "0") == "1"
+# Set once a commanded freeze is measured NOT to be enforced (inverter_control raises
+# FreezeNotEnforced when the battery is still moving after the caps went in). From then on this
+# process falls back to the battery-save emulation instead of re-attempting a freeze every hold slot:
+# the failure is a property of the inverter/firmware, not a transient, so retrying it just churns
+# registers and logs. Cleared only by a restart, which is the right granularity for "someone changed
+# something".
+_freeze_unavailable = False
 # SoC-floor guard: when live SoC drops below BATTERY_FLOOR_KWH + this headroom during an
 # idle slot, escalate to a small recovery charge so the optimizer — not the BMS — owns the
 # timing and can avoid buying at peak price. SOC_FLOOR_RECOVERY_W is chosen to raise SoC
@@ -934,7 +959,7 @@ def decide(con: sqlite3.Connection, now: datetime):
     prev_soc = expected_prev_soc_kwh(dispatch, idx, start_soc_kwh)
     planned_power_w = slot_power_w(dispatch, idx, prev_soc) if planned_action != "idle" else 0
     action, power_w = battery_save_target(planned_action, planned_power_w, dispatch[idx])
-    save_mode = planned_action == "idle" and action == "discharge"
+    save_mode = planned_action == "idle" and action in ("discharge", "hold")
     if not save_mode:
         # SoC-floor guard: when idle and live SoC is near the floor, escalate to a
         # recovery charge BEFORE the inverter's BMS triggers its own uncontrolled buy.
@@ -967,6 +992,13 @@ def decide(con: sqlite3.Connection, now: datetime):
                 break
 
     solar_skip, detail = False, ""
+    if action == "hold":
+        # A real freeze (see inverter_control.freeze_battery). No power target to compute and no
+        # divergence guard: the plan's own trajectory for this slot is "SoC does not move", which is
+        # exactly what the freeze delivers — closer to the plan than the battery-save emulation it
+        # replaces, which deliberately drifts.
+        detail = "planned hold realised as a real freeze (50207/50208/50209 = 0)"
+        numbers["hold_mode"] = "freeze"
     if action == "discharge":
         # The plan's net grid exchange for this slot (+import/−export, DispatchSlot.gridKwh)
         # — lets the dashboard say whether this discharge sells to the grid or just covers
@@ -1056,7 +1088,18 @@ def is_planned_hold(slot: dict) -> bool:
 
 
 def battery_save_target(action: str, power_w: int, slot: dict | None = None):
-    """Apply the optimizer's physical battery-save drift on explicitly marked hold slots."""
+    """Decide HOW to realise a planned hold.
+
+    The optimizer says "idle" and marks the slot (batterySaveDriftKwh); this picks the mechanism:
+      - FREEZE_HOLDS on  -> ("hold", 0): a real freeze, the thing the plan actually means.
+      - otherwise        -> ("discharge", small): the battery-save emulation, which keeps the
+        inverter out of Auto (whose self-use logic would discharge at whatever the house draws) at
+        the cost of moving ~0.055 kWh/slot out of the battery at the CURRENT price.
+      - no marker        -> unchanged idle, i.e. Auto.
+    """
+    if (action == "idle" and FREEZE_HOLDS and not _freeze_unavailable
+            and slot is not None and is_planned_hold(slot)):
+        return "hold", 0
     if action == "idle" and BATTERY_SAVE_W > 0 and slot is not None and is_planned_hold(slot):
         # is_planned_hold already established that this is > 0 (it is the marker it tests), so this
         # only re-reads the magnitude.
@@ -1115,6 +1158,20 @@ def apply_target(inv: Inverter, action: str, power_w: int) -> None:
         force_charge(inv, power_w)
     elif action == "discharge":
         force_discharge(inv, power_w)
+    elif action == "hold":
+        # A freeze that the inverter accepts but does not enforce is not a transient: it is the
+        # documented pre-mode failure shape (MODBUS.md), i.e. this firmware does not do what the
+        # recipe says. freeze_battery has already reverted to auto by the time it raises, so the
+        # inverter is in a safe, known state — latch it off and let the next hold slot use the
+        # battery-save emulation instead of re-attempting every 15 minutes.
+        global _freeze_unavailable
+        try:
+            freeze_battery(inv)
+        except FreezeNotEnforced as exc:
+            _freeze_unavailable = True
+            log.error("freeze not enforced on this inverter (%s) — falling back to the battery-save "
+                      "emulation for the rest of this run; set DISPATCH_FREEZE_HOLDS=0 to stop trying "
+                      "entirely, and see scripts/tools/probe_freeze.py", exc)
     else:
         if action not in AUTO_ACTIONS:
             log.warning(
@@ -1323,7 +1380,11 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             if inv is None:
                 inv = Inverter()
             apply_target(inv, applied_action, applied_power)
-            if applied_action == "discharge" and "battery_save_w" in numbers:
+            # Readback on the two paths whose register behaviour is least certain: the battery-save
+            # emulation, and a freeze (whose three-register combination is not probe-verified — the
+            # expected failure is "stored but not enforced", which only a readback plus the measured
+            # battery power can distinguish).
+            if applied_action == "hold" or (applied_action == "discharge" and "battery_save_w" in numbers):
                 try:
                     log_control_readback(con, slot_time, applied_action, applied_power, inv)
                 except Exception as exc:  # noqa: BLE001

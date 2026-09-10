@@ -127,7 +127,9 @@ describe('optimizeDispatch', () => {
     });
 
     // The premium must not make the plan carry MORE into the forecast day than the honest optimum.
-    expect(cautious[95].socAfter).toBeLessThanOrEqual(plain[95].socAfter + 1e-6);
+    // One discretisation step of tolerance: the two plans snap to the SoC grid independently, and
+    // the bug being pinned here was a 9 kWh difference (a battery parked at 100 %), not a sliver.
+    expect(cautious[95].socAfter).toBeLessThanOrEqual(plain[95].socAfter + SOC_STEP);
     // And it must still discourage transacting on unsettled prices: no grid-funded charging inside
     // the forecast day, which the plain plan is free to do.
     const forecastDayBuy = cautious.slice(96).reduce((sum, d) => sum + d.gridToBatteryKwh, 0);

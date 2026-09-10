@@ -245,7 +245,17 @@ in full.** A freeze that writes `50208=0`/`50209=0` before entering `0x303` woul
 frozen and not be**, which is the worst possible failure shape for a feature whose entire point
 is "the battery does not move". Write the caps after mode entry, and do not trust the readback
 as proof. `50208 = 0` itself is still unprobed — the probe deliberately never wrote it, so
-export stayed open and the blast radius stayed small. The economic-displacement finding under
+export stayed open and the blast radius stayed small.
+
+**Implemented 2026-09-10 (`inverter_control.freeze_battery`), following that rule exactly:**
+mode → *confirm the inverter reports `0x303`, abort to auto if it never does* → priority → caps →
+target → **verify physically** by reading 30258 after a settle, because the readback provably
+cannot tell "enforced" from "stored". A battery still moving raises `FreezeNotEnforced`, which
+reverts to auto and latches the feature off for the rest of the run rather than re-attempting every
+hold slot. It also **refuses below `SOC_FLOOR_PCT + 5`**, so the open floor question below cannot be
+answered the hard way in production. Still gated behind `DISPATCH_FREEZE_HOLDS` (default off) until
+`scripts/tools/probe_freeze.py` has run on the unit — that probe tests BOTH write orders, so it
+confirms the rule here rather than assuming it. The economic-displacement finding under
 the control-register table does **not** transfer to the freeze case: it comes from a nonzero
 charge target outbidding the house for PV, and a freeze commands `50207 = 0`.
 

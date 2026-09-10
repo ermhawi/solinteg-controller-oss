@@ -65,6 +65,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 9 | P1-5 DC datasheet efficiency used on the AC path | ✅ done |
 | 10 | E1 + E4 + E5 + E7 executor/plan mismatches | ✅ done (E7 was misdiagnosed in the audit — corrected below) |
 | 11 | E2 live-load tracking on charge slots | ✅ done, shipping in shadow mode |
+| 12 | E8 DP ceiling + E6 real freeze | ✅ done, freeze gated on an on-device probe |
 
 ---
 
@@ -784,6 +785,42 @@ Add a Python test for the 200–420 W band.
 
 ## E6 A hold is emulated with a 220 W discharge although a real freeze is documented
 
+> **Status: ✅ implemented, off by default and gated on an on-device probe.**
+>
+> **A first implementation of this was wrong, and the correction is the substance of the entry.**
+> It wrote `50208 = 0`/`50209 = 0` *before* entering EMS BattCtrl — copying `force_charge`'s order —
+> against a result MODBUS.md already records from the 2026-08-07 probe: **a restrictive cap written
+> pre-mode is stored but never enforced**, with the register reading back as `0` while a full 6 kW
+> grid-funded charge ran. For a freeze that is the worst possible failure shape: it would read back
+> as frozen, not be frozen, and leave the inverter in the EMS-with-open-caps state MODBUS.md says
+> never to enter. MODBUS.md had even predicted this exact mistake in writing.
+>
+> `freeze_battery` now follows the verified order: mode → **confirm the inverter reports `0x303`,
+> abort to auto if it never does** → priority → caps → target → **verify physically** by reading
+> 30258 after a settle. The readback is deliberately not used as proof anywhere, because it provably
+> cannot distinguish enforced from stored. A battery still moving raises `FreezeNotEnforced`, which
+> reverts to auto; `dispatch_loop` then latches the feature off for the rest of the run instead of
+> re-attempting every hold slot, since that failure is a property of the firmware, not a transient.
+>
+> It also **refuses below `SOC_FLOOR_PCT + 5`**. Whether the inverter's own on-grid floor
+> (52502/52503) can still grid-charge with AC input blocked is an open question that a daylight probe
+> cannot answer, and a freeze near the floor could silently defeat the one protection that does not
+> depend on this software — so the unknown is made unreachable rather than merely documented.
+>
+> `scripts/tools/probe_freeze.py` now exists (earlier commits referenced it before it did). It runs
+> at night, refuses if PV is producing, and tests **both** write orders, so it confirms the rule on
+> the operator's own unit rather than assuming it. Two things it explicitly cannot answer are stated
+> in its docstring: the SoC-floor question, and whether a stale `0` cap is enforced after returning
+> to General.
+>
+> Tests pin the ordering assertion directly (mode index < both cap indices), the documented values,
+> physical-verification failure reverting and raising, the small idle draw still counting as held,
+> the floor refusal, the never-confirmed-mode abort writing no restrictive cap at all, and the
+> disarmed no-op — that last one was a real bug the tests caught: the confirmation poll would spin
+> for the full timeout and report a freeze failure that never happened.
+>
+> **Operator action required:** run the probe at night before setting `DISPATCH_FREEZE_HOLDS=1`.
+
 `BATTERY_SAVE_W = 220` keeps the inverter in EMS BattCtrl at a small discharge because parking at
 0 W blocks self-consumption. But `MODBUS.md:211` documents a genuine freeze:
 `50207 = 0` **plus** `50208 = 0` **plus** `50209 = 0` → battery untouched, grid supplies the
@@ -825,6 +862,14 @@ fix: divide by `ONE_WAY_EFF` on the discharge leg (the live-tracking path alread
 AC-side target and is unaffected).
 
 ## E8 SoC ceiling is not modelled by the DP
+
+> **Status: ✅ done.** The DP no longer plans a FORCED charge above `BATTERY_MAX_SOC_KWH`, which is
+> what `force_charge` refuses to exceed — otherwise the plan and the executor disagree and the
+> divergence guard reports drift no forecast error caused. Free solar auto-charge is deliberately
+> still allowed past it: the inverter's own self-use logic fills the battery from surplus regardless,
+> and the ceiling gates only our own EMS commands, so modelling it as a hard SoC cap would make the
+> plan wrong about the physics in the other direction. At the default 100 % ceiling nothing changes.
+> Both behaviours are pinned in `optimizer-caps.test.ts` with an 80 % ceiling.
 
 `BATTERY_MAX_SOC_KWH` exists in `lib/constants.ts` but the DP plans to full `BATTERY_KWH`
 (acknowledged in that comment), while `force_charge` refuses above `SOC_CEILING_PCT`. Not binding

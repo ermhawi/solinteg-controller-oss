@@ -116,6 +116,58 @@ describe('per-slot caps: the grid limit and the battery limit are separate (P0-2
     expect(stored).toBeLessThanOrEqual(BATTERY_MAX_KW / 4 + 1e-6); // still ≤ 3.84
   });
 
+  it('never plans a FORCED charge above the safety ceiling force_charge would refuse', async () => {
+    // OPTIMIZER-AUDIT.md E8: force_charge returns to auto above SOLINTEG_SOC_CEILING_PCT, so a plan
+    // that assumes the full pack is reachable diverges from what the executor will do — and the
+    // divergence guard then reports drift no forecast error caused.
+    const { optimizeDispatch, BATTERY_KWH, BATTERY_MIN_SOC_KWH } = await loadOptimizer({
+      ...BIG_BATTERY,
+      SOLINTEG_SOC_CEILING_PCT: '80',
+    });
+    const ceiling = BATTERY_KWH * 0.8;
+    // One very cheap slot then an expensive stretch, no solar: the DP would happily fill the pack.
+    const slots = Array.from({ length: 24 }, (_, i) => ({
+      startTime: `2026-01-15T${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}:00`,
+      buyPrice: i < 8 ? 20 : 400,
+      sellPrice: 1,
+      solarKwh: 0,
+      // Load big enough that the CEILING binds rather than the load: 16 x 1.5 kWh is more
+      // than the pack holds, so the DP wants to fill everything it is allowed to.
+      consumptionKwh: i < 8 ? 0 : 1.5,
+    }));
+
+    const result = optimizeDispatch(slots, BATTERY_MIN_SOC_KWH);
+
+    const peak = Math.max(...result.map((d) => d.socAfter));
+    expect(peak).toBeLessThanOrEqual(ceiling + 1e-6);
+    expect(peak).toBeGreaterThan(ceiling - 0.5); // it still charges right up to the ceiling
+  });
+
+  it('lets FREE solar auto-charge run past the ceiling, which gates only our own commands', async () => {
+    // The ceiling gates force_charge, not the inverter's own self-use logic — that fills the battery
+    // from surplus regardless. Modelling it as a hard SoC cap would make the plan wrong about the
+    // physics in the other direction, and the SoC-divergence guard would fire on real solar.
+    const { optimizeDispatch, BATTERY_KWH } = await loadOptimizer({
+      ...BIG_BATTERY,
+      SOLINTEG_SOC_CEILING_PCT: '80',
+    });
+    const ceiling = BATTERY_KWH * 0.8;
+    const slots = [
+      {
+        startTime: '2026-06-15T12:00:00',
+        buyPrice: 110,
+        sellPrice: 5, // exporting is nearly worthless, so storing is clearly right
+        solarKwh: 6,
+        consumptionKwh: 0,
+      },
+    ];
+
+    const result = optimizeDispatch(slots, ceiling - 0.2);
+
+    expect(result[0].action).toBe('idle'); // free solar, not a forced charge
+    expect(result[0].socAfter).toBeGreaterThan(ceiling); // and it is allowed past the ceiling
+  });
+
   it('export stays bounded by the GRID cap even when the battery could deliver more', async () => {
     const { optimizeDispatch, BATTERY_KWH, GRID_KW } = await loadOptimizer(BIG_BATTERY);
     const slots = [

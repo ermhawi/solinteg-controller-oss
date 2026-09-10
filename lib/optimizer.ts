@@ -1,6 +1,7 @@
 import {
   BATTERY_KWH,
   BATTERY_MAX_KW,
+  BATTERY_MAX_SOC_KWH,
   BATTERY_MIN_SOC_KWH,
   BATTERY_WEAR_COST_ORE_PER_KWH,
   DEFERRAL_HORIZON_HOURS,
@@ -43,6 +44,21 @@ const GRID_SLOT_KWH = GRID_KW / 4; // grid import AND export per 15-min slot (ho
 // price, which is more than the wear cost and enough to flip marginal cycling decisions.
 const ONE_WAY_EFF = EFF_ONE_WAY;
 const MIN_SOC_KWH = BATTERY_MIN_SOC_KWH;
+/**
+ * The highest SoC a FORCED charge may plan for. `inverter_control.force_charge` refuses to charge
+ * above `SOLINTEG_SOC_CEILING_PCT` and returns to auto instead, so a plan that assumes the full pack
+ * is reachable silently diverges from what the executor will do — and the divergence guard then sees
+ * drift that no forecast error caused.
+ *
+ * It bounds forced charging only. Solar auto-charge is deliberately still allowed to run past it
+ * (see the naturalFloor logic): the inverter's own self-use logic fills the battery from surplus
+ * regardless of this ceiling, which gates nothing but our own EMS commands. Modelling it as a hard
+ * cap on SoC would make the plan wrong about the physics in the other direction.
+ *
+ * At the default 100 % this is BATTERY_KWH and the constraint never binds, so nothing changes for an
+ * install that has not lowered the ceiling. See OPTIMIZER-AUDIT.md E8.
+ */
+const MAX_FORCED_SOC_KWH = Math.min(BATTERY_MAX_SOC_KWH, BATTERY_KWH);
 
 const SOC_LEVELS = 193; // SoC discretisation for the DP (≈0.12 kWh resolution over the usable range)
 
@@ -597,6 +613,10 @@ function dpCore(
       for (let j = lo; j <= hi; j++) {
         if (j < s && j < minSocLevel) continue; // never discharge below the floor
         if (j >= s && j < naturalFloor && !holdOK) continue; // auto-charge floor; relaxed when hold is gated ON
+        // No FORCED charge above the safety ceiling — force_charge would refuse it and return to
+        // auto. Anything up to naturalFloor is free solar the inverter absorbs on its own, so it is
+        // exempt: this bounds what we command, not what the battery can physically hold.
+        if (j > naturalFloor && socOf(j) > MAX_FORCED_SOC_KWH) continue;
         const dE = socOf(j) - soc;
         let gImp: number;
         let gExp: number;

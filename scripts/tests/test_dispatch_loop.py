@@ -375,13 +375,18 @@ class ApplyTargetRouting(unittest.TestCase):
 
     def setUp(self):
         self.calls = []
-        self._orig = (dl.force_charge, dl.force_discharge, dl.return_to_auto)
+        self._orig = (dl.force_charge, dl.force_discharge, dl.return_to_auto, dl.freeze_battery)
+        self._orig_latch = dl._freeze_unavailable
+        dl._freeze_unavailable = False
         dl.force_charge = lambda inv, w: self.calls.append(("charge", w))
         dl.force_discharge = lambda inv, w: self.calls.append(("discharge", w))
         dl.return_to_auto = lambda inv: self.calls.append(("auto", None))
+        dl.freeze_battery = lambda inv: self.calls.append(("freeze", None))
 
     def tearDown(self):
-        dl.force_charge, dl.force_discharge, dl.return_to_auto = self._orig
+        (dl.force_charge, dl.force_discharge, dl.return_to_auto,
+         dl.freeze_battery) = self._orig
+        dl._freeze_unavailable = self._orig_latch
 
     def test_charge_forces_a_charge_setpoint(self):
         dl.apply_target(object(), "charge", 1500)
@@ -468,26 +473,40 @@ class ApplyTargetRouting(unittest.TestCase):
 
     def test_unknown_action_still_fails_safe_but_warns_loudly(self):
         # The scenario this exists for: the optimizer emits an action this executor does not
-        # implement. Auto is still the right fail-safe, but it must not be silent — auto
-        # CHARGES from surplus, which for a hold-style action would be the opposite of what
-        # was planned. "frobnicate" stands in for any action neither declared nor implemented;
-        # 'hold' itself is now a deliberate AUTO_ACTIONS member (see FORCED_ACTIONS/AUTO_ACTIONS'
-        # own comment) and must NOT warn — that is test_hold_maps_to_auto_without_a_warning below.
+        # implement.
+        # Auto is still the right fail-safe, but it must not be silent — auto CHARGES from
+        # surplus, which for a hold-style action is the opposite of what was planned.
+        # ("hold" used to be the example here; it is now a real executor action, so this uses a
+        # genuinely unimplemented one.)
         with self.assertLogs("solinteg.dispatch", level="WARNING") as caught:
-            dl.apply_target(object(), "frobnicate", 0)
+            dl.apply_target(object(), "curtail", 0)
         self.assertEqual(self.calls, [("auto", None)])
         joined = "\n".join(caught.output)
         self.assertIn("unrecognised dispatch action", joined)
-        self.assertIn("frobnicate", joined)
+        self.assertIn("curtail", joined)
 
-    def test_hold_maps_to_auto_without_a_warning(self):
-        # 'hold' is a DECLARED auto mapping (AUTO_ACTIONS), not an oversight — no register
-        # expresses "don't charge, export the surplus" (MODBUS.md), so auto is genuinely the
-        # only thing apply_target can do with it. It must route exactly like 'idle': to auto,
-        # and quietly, since a warning here would be a false alarm on every hold slot.
-        with self.assertNoLogs("solinteg.dispatch", level="WARNING"):
+    def test_hold_routes_to_a_real_freeze(self):
+        self.assertEqual(dl.apply_target(object(), "hold", 0), None)
+        self.assertEqual(self.calls, [("freeze", None)])
+
+    def test_an_unenforced_freeze_latches_off_and_does_not_retry(self):
+        # A freeze the inverter accepts but does not enforce is the documented pre-mode failure
+        # shape (MODBUS.md) — a property of the firmware, not a transient. freeze_battery has
+        # already reverted to auto by the time it raises, so retrying every hold slot would just
+        # churn registers. It must latch off and let the emulation take over.
+        dl.freeze_battery = lambda inv: (_ for _ in ()).throw(
+            ic.FreezeNotEnforced("battery still at 900 W after freeze"))
+        self.assertFalse(dl._freeze_unavailable)
+        with self.assertLogs("solinteg.dispatch", level="ERROR"):
             dl.apply_target(object(), "hold", 0)
-        self.assertEqual(self.calls, [("auto", None)])
+        self.assertTrue(dl._freeze_unavailable)
+
+        # …and with the latch set, a marked hold slot no longer asks for a freeze.
+        with mock.patch.object(dl, "FREEZE_HOLDS", True), mock.patch.object(dl, "BATTERY_SAVE_W", 220):
+            hold_slot = {"loadFromGridKwh": 0.3, "socAfter": dl.BATTERY_FLOOR_KWH + 1.5,
+                         "batterySaveDriftKwh": 0.013}
+            action, _power = dl.battery_save_target("idle", 0, hold_slot)
+        self.assertEqual(action, "discharge")  # the emulation, not a freeze
 
     def test_declared_vocabularies_are_disjoint(self):
         # An action in both tuples would make the contract test's union check pass while
