@@ -1,21 +1,25 @@
 import { cacheLife } from 'next/cache';
-import { ghiToKwh, calibrateForecastKwh } from './solar';
+import { ghiToKwh, calibrateForecastKwh, apiAzimuth } from './solar';
 import { slotIndex } from './slot-utils';
 import { solarCalibrationByMonth } from './consumption-data';
 import { FETCH_TIMEOUT_MS, SITE_LATITUDE, SITE_LONGITUDE, SOLAR_ARRAYS, SOLAR_FORECAST_MODEL } from './constants';
 
 const SOLAR_ARRAY = SOLAR_ARRAYS[0];
+// Every URL below sends API_AZIMUTH, never the raw array value: Open-Meteo and forecast.solar
+// both use 0 = south, while SOLAR_ARRAYS uses 0 = north. See apiAzimuth in lib/solar.ts for the
+// measured consequence of getting this wrong (the forecast ran 2.13x low for a year).
+const API_AZIMUTH = apiAzimuth(SOLAR_ARRAY.azimuthDeg);
 const SOLAR_FORECAST_MODELS = ['metno_nordic', 'ecmwf_ifs025', 'icon_seamless'] as const;
 export type SolarForecastSource = (typeof SOLAR_FORECAST_MODELS)[number] | 'openmeteo_best_match' | 'forecast_solar';
 export type SolarForecastSources = Partial<Record<SolarForecastSource, Record<string, number[]>>>;
 const FORECAST_URL =
   `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}` +
   (SOLAR_FORECAST_MODEL
-    ? `&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${SOLAR_FORECAST_MODEL}`
-    : `&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}`) +
+    ? `&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${API_AZIMUTH}&models=${SOLAR_FORECAST_MODEL}`
+    : `&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${API_AZIMUTH}`) +
   '&forecast_days=3&timezone=Europe%2FStockholm';
 const FORECAST_SOLAR_URL =
-  `https://api.forecast.solar/estimate/${SITE_LATITUDE}/${SITE_LONGITUDE}/${SOLAR_ARRAY.tiltDeg}/${SOLAR_ARRAY.azimuthDeg}/${SOLAR_ARRAY.kWp}`;
+  `https://api.forecast.solar/estimate/${SITE_LATITUDE}/${SITE_LONGITUDE}/${SOLAR_ARRAY.tiltDeg}/${API_AZIMUTH}/${SOLAR_ARRAY.kWp}`;
 
 const TEMP_URL =
   `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}` +
@@ -41,7 +45,21 @@ function parseOpenMeteo(data: { hourly?: { time: string[]; global_tilted_irradia
   return result;
 }
 
-/** Forecast.Solar returns hourly watt-hours for the preceding interval. */
+/**
+ * Forecast.Solar returns hourly watt-hours for the preceding interval.
+ *
+ * Deliberately NOT multiplied by solarCalibrationByMonth, unlike the Open-Meteo parsers above.
+ * That factor is measured production / OUR OWN GHI-model estimate (see
+ * scripts/tools/build-solar-calibration.ts) — it corrects `ghiToKwh` + `performanceRatio`, which
+ * this source never goes through: forecast.solar returns a finished production estimate from its
+ * own model and its own loss assumptions. Applying our model's correction to their model would
+ * double-correct. The site-wide SOLAR_FORECAST_BIAS_FACTOR still applies, because that one is
+ * about the site, not the model. (It is 1.0 by default — see its docstring.)
+ *
+ * The real answer is a per-source bias correction fitted from the `solar_forecasts` table, which
+ * already logs every source's raw forecast for exactly this purpose; until that exists, no
+ * correction beats a wrong one.
+ */
 function parseForecastSolar(data: { result?: { watt_hours_period?: Record<string, number> } }): Record<string, number[]> {
   const result: Record<string, number[]> = {};
   for (const [time, wattHours] of Object.entries(data.result?.watt_hours_period ?? {})) {
@@ -95,13 +113,13 @@ export async function fetchSolarForecastSources(): Promise<SolarForecastSources>
   cacheLife({ revalidate: 3600, expire: 8 * 3600 });
   const requests = [
     ...SOLAR_FORECAST_MODELS.map(async (model) => {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&models=${model}&forecast_days=3&timezone=Europe%2FStockholm`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&hourly=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${API_AZIMUTH}&models=${model}&forecast_days=3&timezone=Europe%2FStockholm`;
       const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`Open-Meteo ${model} failed: ${res.status}`);
       return [model, parseOpenMeteo(await res.json())] as const;
     }),
     (async () => {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${SOLAR_ARRAY.azimuthDeg}&forecast_days=3&timezone=Europe%2FStockholm`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${SITE_LATITUDE}&longitude=${SITE_LONGITUDE}&minutely_15=global_tilted_irradiance&tilt=${SOLAR_ARRAY.tiltDeg}&azimuth=${API_AZIMUTH}&forecast_days=3&timezone=Europe%2FStockholm`;
       const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`Open-Meteo best_match failed: ${res.status}`);
       return ['openmeteo_best_match', parseOpenMeteoMinutely(await res.json())] as const;

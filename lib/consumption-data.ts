@@ -26,7 +26,13 @@ export const avgDailyConsumptionByMonth: number[] = [55.2, 54.1, 42.6, 51.4, 22.
 // Aug (index 7) and Sep (index 8) calibrated from 2026-08-12–2026-09-05 telemetry (25 days).
 // Systematic panel-model bias on weather-accurate days: ~1.40× both months.
 // Other months left at 1.0 until same-season data exists — see DOMAIN.md.
-export const solarCalibrationByMonth: number[] = [1, 1, 1, 1, 1, 1, 1, 1.4, 1.4, 1, 1, 1];
+export const solarCalibrationByMonth: number[] = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+// Uniform 1.0: this site has no production history to calibrate against yet. Aug/Sep
+// carried a hand-set 1.4 until 2026-09-10 — undocumented, contradicting lib/constants.ts's
+// own description, a 40% step at two month boundaries, and applied to the Open-Meteo
+// ensemble members but not to forecast.solar. It was compensating for the azimuth bug
+// (OPTIMIZER-AUDIT.md P0-1), not for a measured seasonal model error. Regenerate honestly
+// with scripts/tools/build-solar-calibration.ts once a season of real production exists.
 
 // ── Weather-aware daily load model ───────────────────────────────────────────
 // Fitted by scripts/tools/build-load-model.mjs over 1342 days (2022-05-19..2026-01-19) of the

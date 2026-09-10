@@ -276,8 +276,23 @@ export const SITE_LONGITUDE = numEnv('SITE_LONGITUDE', 11.78);
  */
 export const SOLAR_FORECAST_MODEL = process.env.SOLAR_FORECAST_MODEL ?? 'metno_nordic';
 
-/** Conservative multiplier for live solar forecasts, calibrated from recent site telemetry. */
-export const SOLAR_FORECAST_BIAS_FACTOR = numEnv('SOLAR_FORECAST_BIAS_FACTOR', 1.75);
+/**
+ * Flat multiplier on every LIVE solar forecast (lib/solar.ts `calibrateForecastKwh`), 1 = off.
+ *
+ * Now 1.0. It shipped at 1.75 as an undocumented "conservative multiplier calibrated from recent
+ * site telemetry" — in reality it was compensating for the azimuth-convention bug fixed
+ * 2026-09-10 (see `apiAzimuth` in lib/solar.ts and OPTIMIZER-AUDIT.md P0-1), which forecast this
+ * SSE array as if it faced north. That error needed 1.5x in June and 6.2x in December, so a flat
+ * 1.75 was only ever right for two months of the year, and it applied to the live forecast but
+ * not to the climatology fallback, putting the two on different scales.
+ *
+ * If your own forecast-vs-actual telemetry shows a residual site-wide bias after the geometry is
+ * right, fix it where it belongs — `performanceRatio` (a level error, all year) or
+ * `solarCalibrationByMonth` (a seasonal error) — both of which have generator scripts behind
+ * them. Reach for this only for a genuinely flat, all-season correction you can point at data
+ * for. Env: SOLAR_FORECAST_BIAS_FACTOR.
+ */
+export const SOLAR_FORECAST_BIAS_FACTOR = numEnv('SOLAR_FORECAST_BIAS_FACTOR', 1.0);
 
 // ---- Solar installation ----
 // tiltDeg/azimuthDeg are sent to Open-Meteo's global_tilted_irradiance forecast. They are also
@@ -291,6 +306,12 @@ export const SOLAR_FORECAST_BIAS_FACTOR = numEnv('SOLAR_FORECAST_BIAS_FACTOR', 1
 // To adapt for a different site: replace this array with your own — kWp is nameplate power
 // per string/array (from your panel spec sheet), tiltDeg/azimuthDeg from your install's own
 // documentation (0° azimuth = north, 180° = south).
+//
+// IMPORTANT — azimuthDeg is stored in THIS convention (0 = north) and must be converted before
+// it reaches any irradiance API: Open-Meteo's `azimuth=` and forecast.solar's `:az` both use
+// 0 = south. `apiAzimuth()` in lib/solar.ts is the one place that conversion happens; never pass
+// azimuthDeg to an API directly. Passing it raw is exactly the bug fixed 2026-09-10, which put
+// the annual solar forecast 2.13x low for a year (OPTIMIZER-AUDIT.md P0-1).
 export interface SolarArray {
   label: string;
   kWp: number;
@@ -309,9 +330,11 @@ export interface SolarArray {
 //     coordinates (scripts/tools/build-irradiance-openmeteo.mjs, 20-yr climatology); modelled
 //     reanalysis rather than a measured station, since the nearest SMHI irradiance station is
 //     170+ km away.
-//   • lib/consumption-data.ts solarCalibrationByMonth — reset to uniform 1.0 (no production
-//     history yet), so the raw GHI×kWp×PR level is still uncorrected. Regenerate it with
-//     build-solar-calibration.ts once you have a season of your own production.
+//   • lib/consumption-data.ts solarCalibrationByMonth — uniform 1.0 (no production history
+//     yet), so the raw GHI×kWp×PR level is still uncorrected. Regenerate it with
+//     build-solar-calibration.ts once you have a season of your own production. (It briefly
+//     carried hand-set 1.4s for Aug/Sep while this comment still claimed uniform 1.0; both the
+//     values and the claim were reconciled 2026-09-10 — see OPTIMIZER-AUDIT.md P0-1.)
 // See DOMAIN.md "Adapting to a new site".
 export const SOLAR_ARRAYS: SolarArray[] = [
   { label: 'Single plane: SSE (153°), 45° tilt', kWp: 5.4, tiltDeg: 45, azimuthDeg: 153, performanceRatio: 0.78 },

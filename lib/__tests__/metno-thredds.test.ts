@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ghiToKwh } from '../solar';
+import { ghiToKwh, calibrateForecastKwh } from '../solar';
 import { slotIndex } from '../slot-utils';
 import { solarCalibrationByMonth } from '../consumption-data';
+import { poaOverGhiByMonth } from '../irradiance-data';
 
 // The second-tier fallback used when Open-Meteo itself errors while SOLAR_FORECAST_MODEL is
 // 'metno_nordic' (see DOMAIN.md §5 / lib/plan.ts). Untested until now. 'next/cache' is mocked
@@ -38,9 +39,15 @@ function opendapAscii(shortwaveCumulative: number[], tempKelvin: number[]): stri
   ].join('\n\n');
 }
 
+// Mirrors fetchSolarForecastDirect's own arithmetic, including the horizontal -> panel-plane
+// transposition: MET Nordic publishes horizontal shortwave radiation, ghiToKwh() takes
+// panel-plane irradiance, so the monthly poaOverGhiByMonth ratio sits between them. Omitting it
+// (as this path did before 2026-09-10) under-forecasts by the plane's tilt gain — ~2.7x in
+// January at this site. See OPTIMIZER-AUDIT.md P0-1.
 function expectedKwhPerSlot(avgWm2: number, month: number): number {
   const cal = solarCalibrationByMonth[month - 1];
-  return Math.round(((ghiToKwh(avgWm2) * cal) / 4) * 100) / 100;
+  const planeWm2 = avgWm2 * poaOverGhiByMonth[month - 1];
+  return Math.round((calibrateForecastKwh(ghiToKwh(planeWm2) * cal) / 4) * 100) / 100;
 }
 
 beforeEach(() => {
@@ -74,6 +81,11 @@ describe('fetchSolarForecastDirect', () => {
     expect(result['2026-01-15'][slotIndex(3, 0)]).toBe(expectedKwhPerSlot(100, 1));
     // hour i=1 -> UTC 03:00-04:00 -> Stockholm hour 4, avg 200 W/m²
     expect(result['2026-01-15'][slotIndex(4, 0)]).toBe(expectedKwhPerSlot(200, 1));
+    // Pinned explicitly, not just via the helper: the transposition is the whole point of the
+    // 2026-09-10 fix, and a helper both sides share could silently drop it again.
+    expect(result['2026-01-15'][slotIndex(3, 0)]).toBeGreaterThan(
+      Math.round((ghiToKwh(100) / 4) * 100) / 100,
+    );
   });
 
   it('repeats each hour’s value across all four 15-min slots', async () => {

@@ -1,7 +1,8 @@
 import { cacheLife } from 'next/cache';
-import { ghiToKwh } from './solar';
+import { ghiToKwh, calibrateForecastKwh } from './solar';
 import { slotIndex } from './slot-utils';
 import { solarCalibrationByMonth } from './consumption-data';
+import { poaOverGhiByMonth } from './irradiance-data';
 import { SITE_LATITUDE, SITE_LONGITUDE } from './constants';
 
 // Second-tier fallback for fetchSolarForecast/fetchDailyMeanTemp (lib/forecast.ts): when
@@ -236,7 +237,17 @@ export async function fetchSolarForecastDirect(): Promise<Record<string, number[
     const { date, hour } = stockholmDateHour(hourStartUtcMs);
     const month = parseInt(date.slice(5, 7), 10);
     const cal = solarCalibrationByMonth[month - 1];
-    const kwhPerSlot = Math.round(((ghiToKwh(avgWm2) * cal) / 4) * 100) / 100;
+    // MET Nordic publishes HORIZONTAL shortwave radiation, but ghiToKwh() (and every other
+    // forecast path here) works in panel-plane terms, so the raw value has to be transposed
+    // first — otherwise this fallback under-forecasts by the plane's own tilt gain, which at
+    // 62 N / 45 deg is ~1.0x in June but ~3.3x in December (poaOverGhiByMonth, generated from
+    // the same ERA5 window as the climatology). Before 2026-09-10 it was fed in untransposed.
+    // The monthly resolution is deliberate: this is a second-tier fallback for a full Open-Meteo
+    // outage, and an hour-of-day ratio would be false precision against a cumulative-integral
+    // source.
+    const planeWm2 = avgWm2 * (poaOverGhiByMonth[month - 1] ?? 1);
+    const kwhPerSlot =
+      Math.round((calibrateForecastKwh(ghiToKwh(planeWm2) * cal) / 4) * 100) / 100;
     if (!result[date]) result[date] = new Array(96).fill(0);
     for (let minute = 0; minute < 60; minute += 15) {
       result[date][slotIndex(hour, minute)] = kwhPerSlot;

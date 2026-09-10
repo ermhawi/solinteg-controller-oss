@@ -1,11 +1,47 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ghiToKwh, calibrateForecastKwh } from '../solar';
+import { ghiToKwh, calibrateForecastKwh, apiAzimuth } from '../solar';
+import { SOLAR_FORECAST_BIAS_FACTOR } from '../constants';
 import { slotIndex } from '../slot-utils';
 import { solarCalibrationByMonth } from '../consumption-data';
 
 describe('solar forecast calibration', () => {
-  it('applies the configured conservative bias correction', () => {
-    expect(calibrateForecastKwh(1)).toBeCloseTo(1.75, 6);
+  it('applies the configured flat bias factor', () => {
+    expect(calibrateForecastKwh(1)).toBeCloseTo(SOLAR_FORECAST_BIAS_FACTOR, 6);
+  });
+
+  // The factor shipped at 1.75 purely to mask the azimuth-convention bug (see apiAzimuth and
+  // OPTIMIZER-AUDIT.md P0-1). With the geometry right there is nothing left for a flat,
+  // all-season multiplier to correct, so 1 is the honest default — pinned here so a future
+  // "calibration" cannot quietly reintroduce an unexplained site-wide fudge.
+  it('defaults to no correction now that the forecast geometry is right', () => {
+    expect(SOLAR_FORECAST_BIAS_FACTOR).toBe(1);
+  });
+});
+
+describe('apiAzimuth (0 = north stored -> 0 = south as every irradiance API wants)', () => {
+  it('converts this site\'s SSE plane to the API convention', () => {
+    expect(apiAzimuth(153)).toBe(-27);
+  });
+
+  it('maps the cardinal directions', () => {
+    expect(apiAzimuth(180)).toBe(0); // south
+    expect(apiAzimuth(90)).toBe(-90); // east
+    expect(apiAzimuth(270)).toBe(90); // west
+    expect(apiAzimuth(0)).toBe(-180); // north
+  });
+
+  it('converts the original reference site\'s three arrays', () => {
+    expect(apiAzimuth(123)).toBe(-57); // array A, SE
+    expect(apiAzimuth(303)).toBe(123); // array B, NW
+    expect(apiAzimuth(214)).toBe(34); // array C, SW
+  });
+
+  it('always lands in the API\'s (-180, 180] range', () => {
+    for (let a = 0; a < 360; a++) {
+      const converted = apiAzimuth(a);
+      expect(converted).toBeGreaterThan(-181);
+      expect(converted).toBeLessThanOrEqual(180);
+    }
   });
 });
 
@@ -84,8 +120,24 @@ describe('fetchSolarForecast — hourly model (default SOLAR_FORECAST_MODEL=metn
       expect.stringContaining('hourly=global_tilted_irradiance'),
       expect.objectContaining({ signal: expect.anything() }),
     );
+    // -27, NOT the stored 153: Open-Meteo's azimuth is 0 = south. Sending 153 raw pointed the
+    // model 27 degrees east of NORTH and put the annual forecast 2.13x low (OPTIMIZER-AUDIT.md P0-1).
     expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('tilt=45&azimuth=153'),
+      expect.stringContaining('tilt=45&azimuth=-27'),
+      expect.anything(),
+    );
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('azimuth=153'),
+      expect.anything(),
+    );
+    // forecast.solar takes the azimuth as a PATH segment in the same 0 = south convention, so it
+    // was wrong the same way and is easy to miss when only the query-string form is asserted.
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('api.forecast.solar/estimate/'),
+      expect.anything(),
+    );
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/45/153/'),
       expect.anything(),
     );
   });

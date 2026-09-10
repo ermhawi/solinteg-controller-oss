@@ -4,8 +4,14 @@ const DEFAULT_HORIZON_SLOTS = 24;
 const MIN_FORECAST_KWH = 0.05;
 const MIN_SAMPLES_PER_SLOT = 2;
 const MIN_RATIO_SAMPLES = 2;
+// Sanity band on the measured/forecast PV ratio, deliberately asymmetric. A genuinely overcast
+// day really does produce a few percent of a sunny forecast, so a very low ratio is weather; a
+// day producing more than ~2x its forecast is a broken forecast, not weather, and clamping there
+// keeps one bad reading from inflating the plan's expected solar. MAX_RATIO was 1.5 while the
+// azimuth bug (OPTIMIZER-AUDIT.md P0-1) made the forecast 2-6x low all winter — the clamp was
+// silently absorbing part of that error and hiding it from this nowcast's own output.
 const MIN_RATIO = 0.05;
-const MAX_RATIO = 1.5;
+const MAX_RATIO = 2.0;
 
 export interface SolarNowcastResult {
   forecast: Record<string, number[]>;
