@@ -60,7 +60,12 @@ import type { PriceSlot } from './prices';
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH, SKATT_OVERFÖRING } from './constants';
 
 const SLOT_MS = 900_000; // 15 min
-const SLOT_MAX_KWH = Math.min(GRID_KW, BATTERY_MAX_KW) / 4; // 2.75 kWh — same binding cap as the DP
+// Same two separate caps the DP uses (see BATTERY_SLOT_KWH/GRID_SLOT_KWH in lib/optimizer.ts):
+// the grid limit bounds what the meter can pass, the battery limit bounds its own throughput.
+// They were one `min(...)` value here too, which capped the no-battery baseline's SOLAR export at
+// the battery's rating — a quantity the battery has nothing to do with.
+const GRID_SLOT_KWH = GRID_KW / 4;
+const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4;
 /** Poller gaps up to this many consecutive empty slots are linearly interpolated; longer runs
  *  are filled with 0 and the day is flagged degraded instead of silently trusted. */
 const MAX_INTERP_SLOTS = 4;
@@ -476,7 +481,7 @@ export function baselineCashOre(slots: OptimizerSlot[]): number {
   for (const s of slots) {
     const net = (s.consumptionKwh ?? 0) - s.solarKwh;
     if (net >= 0) cash -= net * s.buyPrice;
-    else cash += Math.min(-net, SLOT_MAX_KWH) * s.sellPrice;
+    else cash += Math.min(-net, GRID_SLOT_KWH) * s.sellPrice;
   }
   return cash;
 }
@@ -583,7 +588,8 @@ export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
     minSocKwh: BATTERY_MIN_SOC_KWH,
     rtEff: BATTERY_RT_EFF,
     wearOrePerKwh: Math.round(BATTERY_WEAR_COST_ORE_PER_KWH * 1000) / 1000,
-    slotMaxKwh: SLOT_MAX_KWH,
+    gridSlotKwh: GRID_SLOT_KWH,
+    batterySlotKwh: BATTERY_SLOT_KWH,
     skattOverforing: SKATT_OVERFÖRING,
     windowHours: ((nD + priceSlotsCont.length) * SLOT_MS) / 3_600_000,
     pvDerate: 1,

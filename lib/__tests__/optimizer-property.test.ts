@@ -28,7 +28,10 @@ import {
 import type { OptimizerSlot, DispatchSlot } from '../optimizer';
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
 
-const SLOT_MAX_KWH = Math.min(GRID_KW, BATTERY_MAX_KW) / 4;
+// Mirrors lib/optimizer.ts's two separate caps (P0-2): the grid limit bounds the meter, the
+// battery limit bounds its own throughput. One combined `min(...)` conflated them.
+const GRID_SLOT_KWH = GRID_KW / 4;
+const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4;
 const ETA = Math.sqrt(BATTERY_RT_EFF);
 const SOC_LEVELS = 193;
 const EPS = 1e-6;
@@ -49,7 +52,7 @@ function genSlots(rand: () => number, n: number): OptimizerSlot[] {
   const out: OptimizerSlot[] = [];
   for (let i = 0; i < n; i++) {
     const spot = -50 + rand() * 300;
-    const solarPeak = rand() < 0.5 ? rand() * 2.8 : 0; // bursts, sometimes above the 2.75 cap
+    const solarPeak = rand() < 0.5 ? rand() * 4.2 : 0; // bursts, sometimes above both slot caps
     out.push({
       startTime: `2026-07-01T${String(Math.floor((i * 15) / 60) % 24).padStart(2, '0')}:${String((i * 15) % 60).padStart(2, '0')}:00`,
       buyPrice: (spot + 11.5) * 1.25 + 71,
@@ -69,7 +72,7 @@ function makeModel(slots: OptimizerSlot[], startSoc: number) {
   const idxOf = (soc: number) =>
     Math.max(0, Math.min(SOC_LEVELS - 1, Math.round((soc - floorSoc) / step)));
   const minSocLevel = Math.ceil((BATTERY_MIN_SOC_KWH - floorSoc) / step - 1e-9);
-  const maxDelta = Math.max(1, Math.floor(SLOT_MAX_KWH / step));
+  const maxDelta = Math.max(1, Math.floor(BATTERY_SLOT_KWH / step));
   const n = slots.length;
   const solarRem = new Float64Array(n);
   const loadRem = new Float64Array(n);
@@ -79,7 +82,7 @@ function makeModel(slots: OptimizerSlot[], startSoc: number) {
     const s2l = Math.min(slots[i].solarKwh, load);
     solarRem[i] = slots[i].solarKwh - s2l;
     loadRem[i] = load - s2l;
-    autoIn[i] = Math.min(solarRem[i], SLOT_MAX_KWH);
+    autoIn[i] = Math.min(solarRem[i], BATTERY_SLOT_KWH);
   }
   const flows = (soc: number, socNext: number, i: number) => {
     const dE = socNext - soc;
@@ -90,9 +93,9 @@ function makeModel(slots: OptimizerSlot[], startSoc: number) {
       gImp = need - fromSolar + loadRem[i];
       solarExport = solarRem[i] - fromSolar;
       gExp = solarExport;
-      if (gExp > SLOT_MAX_KWH) {
-        solarExport = SLOT_MAX_KWH;
-        gExp = SLOT_MAX_KWH;
+      if (gExp > GRID_SLOT_KWH) {
+        solarExport = GRID_SLOT_KWH;
+        gExp = GRID_SLOT_KWH;
       }
     } else {
       const out = -dE * ETA;
@@ -101,7 +104,7 @@ function makeModel(slots: OptimizerSlot[], startSoc: number) {
       solarExport = solarRem[i];
       gExp = solarRem[i] + (out - toLoad);
     }
-    const feasible = gImp <= SLOT_MAX_KWH + 1e-9 && gExp <= SLOT_MAX_KWH + 1e-9;
+    const feasible = gImp <= GRID_SLOT_KWH + 1e-9 && gExp <= GRID_SLOT_KWH + 1e-9;
     return { gImp, gExp, solarExport, feasible };
   };
   const admissibleJs = (s: number, i: number): number[] => {

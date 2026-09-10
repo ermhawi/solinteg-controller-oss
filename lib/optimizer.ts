@@ -14,8 +14,26 @@ import {
 
 export { BATTERY_KWH, BATTERY_MAX_KW, GRID_KW, BATTERY_MIN_SOC_KWH }; // re-export for tests and external callers
 
-const SLOT_MAX_KW = Math.min(GRID_KW, BATTERY_MAX_KW); // 11 kW — grid is binding
-const SLOT_MAX_KWH = SLOT_MAX_KW / 4; // 2.75 kWh per 15-min slot
+/**
+ * Two DIFFERENT physical limits, deliberately separate. They used to be a single
+ * `min(GRID_KW, BATTERY_MAX_KW) / 4`, used simultaneously as the battery's throughput cap, the
+ * grid import cap and the grid export cap — which is only harmless while the two ratings happen
+ * to be equal.
+ *
+ * Grid import is `battery charge + house load`, so whenever the battery is the smaller of the two
+ * (7.5 kW battery behind a 10 kW connection, this site) every kW the house consumed was subtracted
+ * from the charging budget even though the connection had room. Measured 2026-09-10: with a flat
+ * 4 kW house load and three genuinely cheap hours, the DP banked 10.16 kWh where 13.55 kWh was
+ * physically available — the missing 3.39 kWh then bought at 233 instead of 85 öre, ≈5 kr on one
+ * winter day. Mirror image on the reference install (15.36 kW battery, 11 kW grid): the battery
+ * was throttled to the grid's 11 kW for its own throughput.
+ *
+ * GRID_SLOT_KWH is the meter-level limit and must stay the real main-fuse rating (env
+ * SOLINTEG_GRID_CAP_W) — the inverter enforces nothing at the meter on its own; see
+ * OPTIMIZER-AUDIT.md E3.
+ */
+const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4; // battery charge/discharge throughput per 15-min slot
+const GRID_SLOT_KWH = GRID_KW / 4; // grid import AND export per 15-min slot (house load included)
 const ONE_WAY_EFF = Math.sqrt(BATTERY_RT_EFF); // ≈0.9798 — applied on charge and on discharge
 const MIN_SOC_KWH = BATTERY_MIN_SOC_KWH;
 
@@ -140,10 +158,10 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
     gridImport = gridToBattery + loadRem;
     solarExport = solarRem - fromSolar;
     gridExport = solarExport;
-    if (gridExport > SLOT_MAX_KWH) {
+    if (gridExport > GRID_SLOT_KWH) {
       // curtail solar we can neither store nor export within the grid cap
-      solarExport = SLOT_MAX_KWH;
-      gridExport = SLOT_MAX_KWH;
+      solarExport = GRID_SLOT_KWH;
+      gridExport = GRID_SLOT_KWH;
     }
   } else {
     // discharge: deliver (−dE)·η out of the battery — to load first, then export
@@ -158,7 +176,7 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
     gridExport = solarRem + batteryToGrid;
   }
 
-  const feasible = gridImport <= SLOT_MAX_KWH + 1e-9 && gridExport <= SLOT_MAX_KWH + 1e-9;
+  const feasible = gridImport <= GRID_SLOT_KWH + 1e-9 && gridExport <= GRID_SLOT_KWH + 1e-9;
   return { gridImport, gridExport, solarExport, batteryToGrid, gridToBattery, batteryToLoad, loadFromGrid, feasible };
 }
 
@@ -278,14 +296,23 @@ function dpCore(
   const idxOf = (soc: number) =>
     Math.max(0, Math.min(SOC_LEVELS - 1, Math.round((soc - floorSoc) / step)));
   const minSocLevel = Math.ceil((MIN_SOC_KWH - floorSoc) / step - 1e-9); // lowest level that is ≥ MIN_SOC
-  const maxDelta = Math.max(1, Math.floor(SLOT_MAX_KWH / step)); // reachable SoC levels per slot
+  const maxDelta = Math.max(1, Math.floor(BATTERY_SLOT_KWH / step)); // reachable SoC levels per slot
+  // The auto-charge floor below rounds `soc + autoInput·η` to the nearest level, which must stay
+  // within maxDelta of `soc` or the search would find NO legal j ≥ s on a bright slot and be
+  // forced into a discharge it never wanted. η < 1 guarantees it for any sane constants; assert
+  // rather than trust, since both sides move with BATTERY_MAX_KW and SOC_LEVELS.
+  if (Math.round((BATTERY_SLOT_KWH * ONE_WAY_EFF) / step) > maxDelta) {
+    throw new Error(
+      `optimizeDispatch: auto-charge floor (${BATTERY_SLOT_KWH} kWh/slot at eff ${ONE_WAY_EFF}) is unreachable within maxDelta=${maxDelta} at step ${step} kWh`,
+    );
+  }
 
   // Solar-first netting per slot, plus the energy input the battery gets for free from
   // solar surplus whenever the inverter is left on auto/self-use (i.e. NOT actively
   // forced into a discharge) — a real hybrid inverter always prioritizes charging the
   // battery from surplus over exporting it, so "idle" cannot mean "zero charge, export
   // everything" the way the DP used to assume. autoChargeInputKwh is capped the same way
-  // any other charge/discharge flow is (SLOT_MAX_KWH) — the battery/inverter can't absorb
+  // any other charge/discharge flow is (BATTERY_SLOT_KWH) — the battery/inverter can't absorb
   // faster than its own throughput limit regardless of how much solar is available.
   const loadFactor = opts?.loadFactor ?? 1;
   const solarRem = new Float64Array(n);
@@ -296,7 +323,7 @@ function dpCore(
     const s2l = Math.min(slots[i].solarKwh, load);
     solarRem[i] = slots[i].solarKwh - s2l;
     loadRem[i] = load - s2l;
-    autoChargeInputKwh[i] = Math.min(solarRem[i], SLOT_MAX_KWH);
+    autoChargeInputKwh[i] = Math.min(solarRem[i], BATTERY_SLOT_KWH);
   }
 
   // Risk-aware planning surcharges (see optimizeDispatch's opts docs; both default 0 = off,
@@ -413,19 +440,19 @@ function dpCore(
           const gridToBattery = need - fromSolar;
           gImp = gridToBattery + lr;
           gExp = sr - fromSolar;
-          if (gExp > SLOT_MAX_KWH) gExp = SLOT_MAX_KWH;
+          if (gExp > GRID_SLOT_KWH) gExp = GRID_SLOT_KWH;
           riskOre = gridToBattery * (deferOre[i] + solarRiskOre);
         } else {
           const out = -dE * ONE_WAY_EFF;
           const toLoad = out < lr ? out : lr;
           gImp = lr - toLoad;
           gExp = sr + (out - toLoad);
-          if (gExp > SLOT_MAX_KWH + 1e-9) continue; // over-export infeasible
+          if (gExp > GRID_SLOT_KWH + 1e-9) continue; // over-export infeasible
           // Only the battery-to-grid share is deferral-biased: covering load (toLoad) happens
           // when the load happens — there is no "later" to defer it to.
           riskOre = (out - toLoad) * deferOre[i];
         }
-        if (gImp > SLOT_MAX_KWH + 1e-9) continue; // over-import infeasible
+        if (gImp > GRID_SLOT_KWH + 1e-9) continue; // over-import infeasible
         // Wear cost on |dE| (battery throughput this slot) discourages cycling the
         // battery for a marginal gain smaller than what it costs in degradation —
         // see BATTERY_WEAR_COST_ORE_PER_KWH. Zero when j === s (idle, dE = 0).

@@ -12,7 +12,11 @@ import {
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
 import type { OptimizerSlot } from '../optimizer';
 
-const SLOT_MAX_KWH = Math.min(GRID_KW, BATTERY_MAX_KW) / 4; // 2.75 kWh/slot
+// Mirrors the two SEPARATE caps in lib/optimizer.ts (BATTERY_SLOT_KWH / GRID_SLOT_KWH). They
+// were one `min(...)` value until 2026-09-10, which silently charged house load against the
+// battery's rating and throttled the battery to the grid's — see OPTIMIZER-AUDIT.md P0-2.
+const GRID_SLOT_KWH = GRID_KW / 4; // 2.75 kWh/slot at the reference 11 kW connection
+const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4; // 3.84 kWh/slot at the reference 15.36 kW battery
 const MIN_SOC = BATTERY_MIN_SOC_KWH; // operational floor (8% = 2.048 kWh)
 
 function makeSlot(
@@ -113,9 +117,9 @@ describe('optimizeDispatch', () => {
     result.forEach(({ socAfter }) => expect(socAfter).toBeGreaterThanOrEqual(MIN_SOC - 0.001));
   });
 
-  it('|gridKwh| never exceeds SLOT_MAX_KWH per slot', () => {
+  it('|gridKwh| never exceeds the GRID cap per slot', () => {
     const result = optimizeDispatch(uniformDay(100, 150), BATTERY_KWH / 2);
-    result.forEach(({ gridKwh }) => expect(Math.abs(gridKwh)).toBeLessThanOrEqual(SLOT_MAX_KWH + 0.001));
+    result.forEach(({ gridKwh }) => expect(Math.abs(gridKwh)).toBeLessThanOrEqual(GRID_SLOT_KWH + 0.001));
   });
 
   it('respects SoC and grid bounds with mixed solar + consumption', () => {
@@ -130,7 +134,7 @@ describe('optimizeDispatch', () => {
     optimizeDispatch(slots, BATTERY_KWH / 2).forEach(({ socAfter, gridKwh }) => {
       expect(socAfter).toBeGreaterThanOrEqual(MIN_SOC - 0.001);
       expect(socAfter).toBeLessThanOrEqual(BATTERY_KWH + 0.001);
-      expect(Math.abs(gridKwh)).toBeLessThanOrEqual(SLOT_MAX_KWH + 0.001);
+      expect(Math.abs(gridKwh)).toBeLessThanOrEqual(GRID_SLOT_KWH + 0.001);
     });
   });
 
@@ -213,7 +217,7 @@ describe('optimizeDispatch', () => {
     expect(result.slice(48).some((s) => s.action === 'discharge')).toBe(true);
   });
 
-  it('discharges at a meaningful rate — a full-power discharge slot moves SoC by ~SLOT_MAX', () => {
+  it('discharges at a meaningful rate — a full-power discharge slot moves SoC by ~the battery cap', () => {
     // A single very expensive load slot the battery must fully serve: SoC should drop by close to
     // the slot's throughput cap (≈10.7% of capacity), not a tiny fraction. Guards the "super low
     // discharge rate" symptom.
@@ -223,7 +227,7 @@ describe('optimizeDispatch', () => {
     ];
     const result = optimizeDispatch(slots, BATTERY_KWH);
     const drop = BATTERY_KWH - result[0].socAfter;
-    expect(drop).toBeGreaterThan(SLOT_MAX_KWH * 0.9); // ~full-power discharge, several % of the pack
+    expect(drop).toBeGreaterThan(GRID_SLOT_KWH * 0.9); // ~full-power discharge, several % of the pack
   });
 
   it('covers load from the battery on the priciest deficit slot instead of importing', () => {
@@ -266,9 +270,9 @@ describe('optimizeDispatch', () => {
     expect(result[0].solarExportKwh).toBeCloseTo(2.0, 1); // can't store → solar exported
   });
 
-  it('caps solar export at SLOT_MAX_KWH', () => {
+  it('caps solar export at the GRID cap', () => {
     const result = optimizeDispatch([makeSlot(12, 0, { solarKwh: 5.0, sellPrice: 80, buyPrice: 200 })], BATTERY_KWH);
-    expect(result[0].solarExportKwh).toBeLessThanOrEqual(SLOT_MAX_KWH + 0.001);
+    expect(result[0].solarExportKwh).toBeLessThanOrEqual(GRID_SLOT_KWH + 0.001);
   });
 
   it('does NOT grid-charge overnight when solar will refill for a load-only evening', () => {
@@ -350,7 +354,7 @@ describe('optimizeDispatch', () => {
     // policy) instead of isolating just the auto-charge fix.
     //
     // Two things need to stay true for this to isolate ONLY the auto-charge behavior:
-    //  - Net solar surplus stays well under SLOT_MAX_KWH (2.75) per slot AND in total, so the
+    //  - Net solar surplus stays well under the per-slot caps AND in total, so the
     //    single high-price slot can actually sell everything accumulated — otherwise the model
     //    correctly (not a bug) dumps the un-sellable excess early rather than waste it at the
     //    terminal slot's zero leftover-SoC value, which is a real behavior but not this one.
@@ -386,10 +390,12 @@ describe('optimizeDispatch', () => {
   it('idle auto-charge still respects the per-slot throughput cap when solar exceeds it', () => {
     const result = optimizeDispatch(
       [makeSlot(12, 0, { solarKwh: 10.0, consumptionKwh: 0, sellPrice: 25, buyPrice: 110 })],
-      MIN_SOC, // plenty of headroom — the binding limit here is SLOT_MAX_KWH, not capacity
+      MIN_SOC, // plenty of headroom — the binding limit here is the BATTERY cap, not capacity
     );
     expect(result[0].action).toBe('idle');
-    expect(result[0].socAfter - MIN_SOC).toBeLessThanOrEqual(SLOT_MAX_KWH + 0.01);
+    // The battery's own rating, NOT the grid's: auto-charging from solar surplus never touches
+    // the meter, so the grid cap has no business bounding it.
+    expect(result[0].socAfter - MIN_SOC).toBeLessThanOrEqual(BATTERY_SLOT_KWH + 0.01);
     expect(result[0].solarExportKwh).toBeGreaterThan(0); // the excess beyond the cap is exported
   });
 
@@ -398,10 +404,10 @@ describe('optimizeDispatch', () => {
     // incentive to discharge — exporting would cost money — isolating just "does the free
     // auto-charge stop exactly at capacity" from the near-full battery's much larger unrelated
     // question of whether to liquidate its existing charge (which, started already near-full,
-    // holds far more energy than any single slot could ever sell anyway; see SLOT_MAX_KWH).
+    // holds far more energy than any single slot could ever sell anyway; see the slot caps).
     const result = optimizeDispatch(
       [makeSlot(12, 0, { solarKwh: 2.0, consumptionKwh: 0, sellPrice: -50, buyPrice: 200 })],
-      BATTERY_KWH - 0.1, // almost full — headroom is the binding limit, not SLOT_MAX_KWH
+      BATTERY_KWH - 0.1, // almost full — headroom is the binding limit, not the battery cap
     );
     expect(result[0].action).toBe('idle');
     expect(result[0].socAfter).toBeCloseTo(BATTERY_KWH, 2);
@@ -519,7 +525,7 @@ describe('optimizeDispatch with endSoc (terminal constraint)', () => {
   });
 
   it('throws when the target is physically unreachable in the given slots', () => {
-    // One slot can move SoC by at most SLOT_MAX_KWH/√η ≈ 2.8 kWh — full from the floor is fantasy.
+    // One slot can move SoC by at most BATTERY_SLOT_KWH ≈ 3.8 kWh — full from the floor is fantasy.
     const slots = [makeSlot(12, 0, {})];
     expect(() => optimizeDispatch(slots, MIN_SOC, { endSoc: BATTERY_KWH })).toThrow(/unreachable/);
   });

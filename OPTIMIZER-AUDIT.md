@@ -55,6 +55,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | # | Finding | Status |
 |---|---|---|
 | 1 | P0-1 solar azimuth convention (+ the whole fudge stack, + a new P0-1b) | ✅ done |
+| 2 | P0-2 grid capacity vs battery power conflated | ✅ done |
 
 ---
 
@@ -206,6 +207,32 @@ mirrors the transposition, plus a standalone assertion that the result exceeds t
 value so a future refactor can't drop it again.
 
 ## P0-2 The DP conflates grid capacity with battery power, so house load steals charging headroom
+
+> **Status: ✅ done.** `SLOT_MAX_KWH` is now two constants: `BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4`
+> (throughput: `maxDelta`, `autoChargeInputKwh`) and `GRID_SLOT_KWH = GRID_KW / 4` (import and
+> export feasibility, and the export curtailment clamp) — in `lib/optimizer.ts`, and the same split
+> in `lib/oracle.ts`, where the combined value had been capping the **no-battery baseline's solar
+> export** at the battery's rating, a quantity that baseline has no battery for. `oracle_days`'s
+> `params_json` now records `gridSlotKwh` + `batterySlotKwh` instead of one `slotMaxKwh` (nothing
+> reads it; it is diagnostic metadata).
+>
+> Added the guard the plan asked for: `dpCore` throws if `round(BATTERY_SLOT_KWH · η / step)`
+> exceeds `maxDelta`, which is the condition under which a bright slot would have no legal
+> non-discharging successor state and the DP would be forced into a discharge it never chose.
+>
+> New file `lib/__tests__/optimizer-caps.test.ts` covers both hardware shapes — neither is
+> observable with the shipped defaults, where the two ratings coincide for grid flows, so each case
+> stubs the env and dynamically re-imports (same pattern `forecast.test.ts` uses). It pins: house
+> load no longer eating the charging budget (2.4+ kWh imported in the cheap slot vs ~1.86 before,
+> 1.4+ kWh of it into the battery vs ~0.86); the battery's own rating still binding when the grid
+> has room; the mirror case (a 15.36 kW battery behind an 11 kW connection now absorbs solar at
+> 3.84 kWh/slot instead of being throttled to 2.75 and exporting the difference); and export still
+> bounded by the grid. `optimizer.test.ts` and `optimizer-property.test.ts` updated to assert
+> against whichever of the two caps each property actually belongs to.
+>
+> **Note for E3:** `GRID_SLOT_KWH` is now load-bearing for fuse safety, not just cost — the DP will
+> genuinely plan to fill the connection. `SOLINTEG_GRID_CAP_W=10000` must be verified against the
+> real main fuse before this runs armed, and E3's inverter-side import limit is the backstop.
 
 **What is wrong.** `lib/optimizer.ts:13-14`:
 
