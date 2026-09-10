@@ -6,7 +6,6 @@ import {
   GRID_KW,
   BATTERY_MAX_KW,
   BATTERY_MIN_SOC_KWH,
-  applyBatterySaveForecast,
   terminalEnergyValueOre,
 } from '../optimizer';
 import { BATTERY_WEAR_COST_ORE_PER_KWH, EFF_ONE_WAY } from '../constants';
@@ -49,38 +48,6 @@ function uniformDay(buyPrice: number, sellPrice: number): OptimizerSlot[] {
 }
 
 describe('optimizeDispatch', () => {
-  it('adds measured battery-save drift only to planned hold slots', () => {
-    const hold = {
-      startTime: '2026-06-28T01:00:00', action: 'idle' as const,
-      gridKwh: 0.225, solarExportKwh: 0, batteryToGridKwh: 0,
-      gridToBatteryKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0.225,
-      socAfter: 10,
-    };
-    const ordinaryIdle = { ...hold, startTime: '2026-06-28T01:15:00', loadFromGridKwh: 0.05 };
-    const result = applyBatterySaveForecast([hold, ordinaryIdle], 220);
-    expect(result[0].socAfter).toBeCloseTo(9.945, 3);
-    expect(result[0].batterySaveDriftKwh).toBeCloseTo(0.055, 3);
-    expect(result[1].socAfter).toBeCloseTo(9.945, 3);
-    expect(result[1].batterySaveDriftKwh).toBe(0);
-  });
-
-  it('does not drain a hold forecast below the operational SOC floor', () => {
-    const hold = {
-      startTime: '2026-06-28T01:00:00', action: 'idle' as const,
-      gridKwh: 0.225, solarExportKwh: 0, batteryToGridKwh: 0,
-      gridToBatteryKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0.225,
-      socAfter: BATTERY_MIN_SOC_KWH + 1.02,
-    };
-    expect(applyBatterySaveForecast([hold], 5000)[0].socAfter).toBe(BATTERY_MIN_SOC_KWH);
-  });
-
-  it('leaves the dispatch unchanged when battery-save drift is disabled', () => {
-    const slot = { ...makeSlot(1, 0), action: 'idle' as const, gridKwh: 0, solarExportKwh: 0,
-      batteryToGridKwh: 0, gridToBatteryKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0.225,
-      socAfter: 10 };
-    expect(applyBatterySaveForecast([slot], 0)).toEqual([slot]);
-  });
-
   it('models physical battery-save drain even when the battery is close to the floor', () => {
     const slots = [makeSlot(20, 0, {
       buyPrice: 0,
@@ -94,47 +61,101 @@ describe('optimizeDispatch', () => {
     expect(result[0].socAfter).toBeLessThan(MIN_SOC + 0.5);
   });
 
-  it('charges forecast-price risk on the TRANSACTION, never on the price level', () => {
-    // The regression this pins (OPTIMIZER-AUDIT.md P1-1): the premium used to be added to buyPrice
-    // and subtracted from sellPrice on forecast slots. But the DP uses buyPrice both to cost an
-    // import AND — through the cost-to-go — to value the energy already stored, whose worth IS the
-    // import it will avoid. Raising it on forecast days made carrying energy into them look BETTER,
-    // so the "conservative" knob was a hoarding incentive: measured, it parked the battery at 100 %
-    // at midnight in every variant tried, and made true value slightly worse each time.
-    const day1 = Array.from({ length: 96 }, (_, i) =>
+  // The premium's two jobs are separable, and the original test conflated them — which is why it
+  // started failing on an unrelated change. Deterring a TRANSACTION in an unsettled slot legitimately
+  // makes the plan carry more from settled slots instead (it is avoiding the penalised action). What
+  // must never happen is the premium raising the VALUE OF STORED ENERGY, which is what folding it
+  // into buyPrice did: measured, that parked the battery at 100 % at midnight in every price variant
+  // tried and made true value slightly worse. See OPTIMIZER-AUDIT.md P1-1.
+  const forecastDay = (peakBuy: number) => [
+    ...Array.from({ length: 96 }, (_, i) =>
       makeSlot(Math.floor(i / 4), i % 4, {
         buyPrice: Math.floor(i / 4) < 5 ? 88 : 130,
         sellPrice: 20,
         consumptionKwh: 0.3,
-        priceSource: 'actual',
+        priceSource: 'actual' as const,
       }),
-    );
-    const day2 = Array.from({ length: 96 }, (_, i) =>
+    ),
+    ...Array.from({ length: 96 }, (_, i) =>
       makeSlot(Math.floor(i / 4), i % 4, {
-        buyPrice: Math.floor(i / 4) >= 7 && Math.floor(i / 4) < 10 ? 160 : 130,
+        buyPrice: Math.floor(i / 4) >= 7 && Math.floor(i / 4) < 10 ? peakBuy : 130,
         sellPrice: 20,
         consumptionKwh: 0.3,
-        priceSource: 'forecast',
+        priceSource: 'forecast' as const,
       }),
-    );
-    const slots = [...day1, ...day2];
-    const startSoc = MIN_SOC + 1;
+    ),
+  ];
 
+  it('does not inflate the value of stored energy: with nothing to transact on, carry is unchanged', () => {
+    // Day 2 is uniformly priced, so there is no day-2 battery charge for the premium to deter and
+    // the ONLY thing it could still change is how much the plan hoards. It must change nothing.
+    const slots = forecastDay(130);
+    const startSoc = MIN_SOC + 1;
     const plain = optimizeDispatch(slots, startSoc, { loadFactor: 1.15 });
     const cautious = optimizeDispatch(slots, startSoc, {
       loadFactor: 1.15,
       forecastRiskPremiumOre: 10,
     });
+    expect(cautious[95].socAfter).toBeCloseTo(plain[95].socAfter, 6);
+  });
 
-    // The premium must not make the plan carry MORE into the forecast day than the honest optimum.
-    // One discretisation step of tolerance: the two plans snap to the SoC grid independently, and
-    // the bug being pinned here was a 9 kWh difference (a battery parked at 100 %), not a sliver.
-    expect(cautious[95].socAfter).toBeLessThanOrEqual(plain[95].socAfter + SOC_STEP);
-    // And it must still discourage transacting on unsettled prices: no grid-funded charging inside
-    // the forecast day, which the plain plan is free to do.
-    const forecastDayBuy = cautious.slice(96).reduce((sum, d) => sum + d.gridToBatteryKwh, 0);
-    const plainForecastDayBuy = plain.slice(96).reduce((sum, d) => sum + d.gridToBatteryKwh, 0);
-    expect(forecastDayBuy).toBeLessThanOrEqual(plainForecastDayBuy + 1e-6);
+  it('still deters grid-funded charging inside a forecast day', () => {
+    // Two things this scenario has to get right, both learned the hard way:
+    //  * the arbitrage must live ENTIRELY inside day 2, or there is nothing to deter — with only a
+    //    day-1 cheap window, carrying from day 1 already beats any day-2 purchase and both plans
+    //    grid-charge exactly zero on day 2;
+    //  * the margin must be THIN, because the premium is a modest risk margin and not a veto. At a
+    //    fat 85 ore/kWh spread 10 ore changes nothing, which is correct behaviour.
+    // The sacrifice cap is lifted deliberately: at a thin margin the premium's whole point is to
+    // decline a trade, and declining one worth more than the cap is exactly what the guard exists to
+    // veto (it has its own tests). Leaving the cap in would test the guard, not the premium.
+    const slots = [
+      ...Array.from({ length: 96 }, (_, i) =>
+        makeSlot(Math.floor(i / 4), i % 4, {
+          buyPrice: 200,
+          sellPrice: 20,
+          consumptionKwh: 0.3,
+          priceSource: 'actual' as const,
+        }),
+      ),
+      ...Array.from({ length: 96 }, (_, i) => {
+        const hour = Math.floor(i / 4);
+        return makeSlot(hour, i % 4, {
+          buyPrice: hour < 5 ? 90 : 200,
+          sellPrice: hour >= 17 && hour < 21 ? 110 : 20, // ~5 ore/kWh after losses and wear
+          // No day-2 load, deliberately: buying at 90 to avoid a 200 ore import is a ~100 ore/kWh
+          // trade that SHOULD happen and that no sane premium would deter, and it swamps the thin
+          // sell-peak trade this test is about.
+          consumptionKwh: 0,
+          priceSource: 'forecast' as const,
+        });
+      }),
+    ];
+    const startSoc = MIN_SOC + 1;
+    const bought = (d: ReturnType<typeof optimizeDispatch>) =>
+      d.slice(96).reduce((sum, x) => sum + x.gridToBatteryKwh, 0);
+
+    const plain = optimizeDispatch(slots, startSoc, { loadFactor: 1.15 });
+    const cautious = optimizeDispatch(slots, startSoc, {
+      loadFactor: 1.15,
+      forecastRiskPremiumOre: 10,
+      maxRiskSacrificeOre: 1e9,
+    });
+
+    expect(bought(plain)).toBeGreaterThan(1); // the thin trade the premium is meant to weigh
+    expect(bought(cautious)).toBeLessThan(bought(plain));
+  });
+
+  it('never parks the battery at capacity overnight, which is what the old form did', () => {
+    // The measured pathology: 100 % at midnight in every variant — the worst SoC for calendar
+    // ageing, and no headroom for the next morning's PV.
+    for (const peak of [40, 60, 90, 160]) {
+      const cautious = optimizeDispatch(forecastDay(peak), MIN_SOC + 1, {
+        loadFactor: 1.15,
+        forecastRiskPremiumOre: 10,
+      });
+      expect(cautious[95].socAfter).toBeLessThan(BATTERY_KWH - 1);
+    }
   });
 
   it('leaves settled-price slots untouched by the forecast premium', () => {
@@ -385,15 +406,44 @@ describe('optimizeDispatch', () => {
     result.forEach(({ action }) => expect(action).not.toBe('charge'));
   });
 
-  it('curtailment gap: still forced to export at a loss if the battery is already full and cannot absorb more solar', () => {
-    // Documents a real hardware/control limitation: the software has no lever to curtail PV
-    // production, so once the battery has zero headroom, unstoppable solar surplus goes to the
-    // grid regardless of price. Not a bug — there is no software-only alternative today.
+  it('curtails rather than paying to export, when the battery is full and the price is negative', () => {
+    // This used to assert the OPPOSITE, as a documented "curtailment gap": with the battery full and
+    // no software lever to reduce PV, surplus was exported at whatever the price was — including a
+    // negative one, i.e. paying to give energy away. But curtailment is free and always available
+    // (an inverter can simply produce less), so that was a missing option in the model rather than a
+    // real constraint. See OPTIMIZER-AUDIT.md G1.
     const result = optimizeDispatch(
       [makeSlot(12, 0, { solarKwh: 5.0, consumptionKwh: 0, sellPrice: -50, buyPrice: 200 })],
       BATTERY_KWH, // already full — no room to store any of the surplus
     );
-    expect(result[0].solarExportKwh).toBeGreaterThan(0);
+    expect(result[0].solarExportKwh).toBe(0);
+    expect(result[0].gridKwh).toBe(0); // nothing exported, nothing imported
+  });
+
+  it('still exports freely when the price is positive, however small', () => {
+    // Curtailment must not become a general reluctance to export: at any non-negative price,
+    // exporting is free money and dumping it would be a straight loss.
+    const result = optimizeDispatch(
+      [makeSlot(12, 0, { solarKwh: 5.0, consumptionKwh: 0, sellPrice: 0.5, buyPrice: 200 })],
+      BATTERY_KWH,
+    );
+    // Everything the grid will take: 5 kWh in one slot exceeds the connection, so the residual is
+    // curtailed by the cap — which is the pre-existing curtailment, not the new price-driven one.
+    expect(result[0].solarExportKwh).toBeCloseTo(GRID_SLOT_KWH, 6);
+  });
+
+  it('prefers storing over curtailing when there is room, and curtails only the remainder', () => {
+    // Ordering matters: at a negative price the surplus is worth storing first (it displaces a
+    // future import), and only what the battery cannot absorb is curtailed.
+    const result = optimizeDispatch(
+      [
+        makeSlot(12, 0, { solarKwh: 5.0, consumptionKwh: 0, sellPrice: -50, buyPrice: 200 }),
+        makeSlot(19, 0, { solarKwh: 0, consumptionKwh: 2.0, sellPrice: 10, buyPrice: 300 }),
+      ],
+      MIN_SOC,
+    );
+    expect(result[0].socAfter).toBeGreaterThan(MIN_SOC + 1); // stored what it could
+    expect(result[0].solarExportKwh).toBe(0); // and dumped none of the rest
   });
 
   // ── Idle vs auto-charge (fixed 2026-07-03) ──────────────────────────────────
@@ -529,7 +579,9 @@ describe('evaluateDispatch', () => {
     // export residual earns ×1 — either way bounded by one step's worth of energy.
     expect(evald.cashOre).toBeGreaterThanOrEqual(-step * 300 - 1e-9);
     expect(evald.cashOre).toBeLessThanOrEqual(step * 1 + 1e-9);
-    expect(evald.wearOre).toBeCloseTo(dSoc * BATTERY_WEAR_COST_ORE_PER_KWH, 1);
+    // Discharging yields dSoc x eta out of the cells, which is the energy that actually wore them
+    // — not the stored delta. See wearOreFor / OPTIMIZER-AUDIT.md G9.
+    expect(evald.wearOre).toBeCloseTo(dSoc * EFF_ONE_WAY * BATTERY_WEAR_COST_ORE_PER_KWH, 1);
     expect(evald.valueOre).toBeCloseTo(evald.cashOre - evald.wearOre, 6);
   });
 

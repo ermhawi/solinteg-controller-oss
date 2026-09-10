@@ -88,12 +88,14 @@ function makeModel(slots: OptimizerSlot[], startSoc: number) {
   }
   const flows = (soc: number, socNext: number, i: number) => {
     const dE = socNext - soc;
+    // Curtailment is free, so solar is exported only when exporting pays — mirrors the DP (G1).
+    const curtail = slots[i].sellPrice < 0;
     let gImp: number, gExp: number, solarExport: number;
     if (dE >= 0) {
       const need = dE / ETA;
       const fromSolar = Math.min(solarRem[i], need);
       gImp = need - fromSolar + loadRem[i];
-      solarExport = solarRem[i] - fromSolar;
+      solarExport = curtail ? 0 : solarRem[i] - fromSolar;
       gExp = solarExport;
       if (gExp > GRID_SLOT_KWH) {
         solarExport = GRID_SLOT_KWH;
@@ -103,8 +105,8 @@ function makeModel(slots: OptimizerSlot[], startSoc: number) {
       const out = -dE * ETA;
       const toLoad = Math.min(out, loadRem[i]);
       gImp = loadRem[i] - toLoad;
-      solarExport = solarRem[i];
-      gExp = solarRem[i] + (out - toLoad);
+      solarExport = curtail ? 0 : solarRem[i];
+      gExp = solarExport + (out - toLoad);
     }
     const feasible = gImp <= GRID_SLOT_KWH + 1e-9 && gExp <= GRID_SLOT_KWH + 1e-9;
     return { gImp, gExp, solarExport, feasible };
@@ -244,16 +246,27 @@ describe('optimizer property review harness', () => {
     expect(d[0].socAfter).toBeGreaterThanOrEqual(BATTERY_MIN_SOC_KWH - 1e-9);
   });
 
-  it('wear accounting matches |ΔSoC| on the emitted trajectory', () => {
+  it('wear accounting matches real cell throughput on the emitted trajectory', () => {
+    // Mirrors wearOreFor in lib/optimizer.ts: charging pushes dE/eta through the cells, discharging
+    // yields dE*eta, and the free solar the inverter absorbs on its own is exempt — it is not a
+    // decision the DP can decline, so charging wear for it taxes an action the model does not
+    // control. |dSoC| is neither of those quantities. See OPTIMIZER-AUDIT.md G9.
     const rand = mulberry32(7);
     const slots = genSlots(rand, 24);
     const startSoc = 12;
     const d = optimizeDispatch(slots, startSoc);
     let expectedWear = 0;
     let soc = startSoc;
-    for (const slot of d) {
-      expectedWear += BATTERY_WEAR_COST_ORE_PER_KWH * Math.abs(slot.socAfter - soc);
-      soc = slot.socAfter;
+    for (let i = 0; i < d.length; i++) {
+      const load = slots[i].consumptionKwh ?? 0;
+      const s2l = Math.min(slots[i].solarKwh, load);
+      const freeSolar = Math.min(slots[i].solarKwh - s2l, BATTERY_SLOT_KWH) * ETA;
+      const dE = d[i].socAfter - soc;
+      expectedWear +=
+        dE >= 0
+          ? (BATTERY_WEAR_COST_ORE_PER_KWH * Math.max(0, dE - freeSolar)) / ETA
+          : BATTERY_WEAR_COST_ORE_PER_KWH * -dE * ETA;
+      soc = d[i].socAfter;
     }
     expect(evaluateDispatch(slots, d, startSoc).wearOre).toBeCloseTo(expectedWear, 9);
   });

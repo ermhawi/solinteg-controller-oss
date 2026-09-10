@@ -66,6 +66,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 10 | E1 + E4 + E5 + E7 executor/plan mismatches | ✅ done (E7 was misdiagnosed in the audit — corrected below) |
 | 11 | E2 live-load tracking on charge slots | ✅ done, shipping in shadow mode |
 | 12 | E8 DP ceiling + E6 real freeze | ✅ done, freeze gated on an on-device probe |
+| 13 | G1 curtailment, G3 per-month profiles, G6 dead code, G9 wear basis | ✅ done |
 
 ---
 
@@ -881,7 +882,13 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
 
 # P3 — Modelling gaps and hygiene
 
-- **G1 No curtailment option.** In `computeFlows`' charge branch surplus above the export cap is
+- **G1 No curtailment option.** ✅ **done.** `computeFlows` takes a `curtailSolar` flag (default
+  false, so the oracle and every existing caller are untouched) and the DP sets it whenever
+  `sellPrice < 0`. Curtailment is free and always available — an inverter can simply produce less —
+  so being *forced* to pay to export was a missing option in the model, not a real constraint. The
+  test that pinned the old behaviour as a documented "curtailment gap" now asserts the opposite, plus
+  two guards: export still happens freely at any non-negative price (curtailment must not become a
+  general reluctance to export), and storing is preferred over curtailing when there is room. In `computeFlows`' charge branch surplus above the export cap is
   silently curtailed, but *below* the cap the DP is forced to export everything it cannot store —
   including at a negative `sellPrice`. Real hardware can curtail (`50208`, or the inverter's
   export-limit registers). `optimizer.test.ts` names this the "curtailment gap". Fix: allow
@@ -892,7 +899,11 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
   20 öre of energy and create a monthly peak worth far more. Verify the tariff first; if it
   applies, add a monthly-peak term (e.g. a soft penalty on `gridImport` above a rolling
   month-to-date peak) — this changes the DP's cost function, so it needs its own design pass.
-- **G3 `buildSolarProfiles` covers only today's and tomorrow's month** (`lib/pipeline.ts:16-24`),
+- **G3 `buildSolarProfiles` covers only today's and tomorrow's month** ✅ **done.** It now derives
+  the month set from `data.prices` itself, so it cannot drift from the horizon again. Previously the
+  third horizon day on a month boundary found `profiles[month] === undefined` and fell back to
+  **zero** solar for that whole day whenever the live forecast was missing — a silent, once-a-month,
+  worst-case input. (`lib/pipeline.ts:16-24`),
   so on a month boundary the third horizon day falls back to `profiles[month] === undefined` ⇒
   **zero** solar whenever the live forecast is missing. Build profiles for every date present in
   `data.prices`.
@@ -907,7 +918,8 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
   only selects the Thredds fallback); `lib/constants.ts` claims
   `solarCalibrationByMonth` is uniform 1.0 (it is not); `lib/irradiance-data.ts` is documented as
   regenerated for this site (it is not — see P0-1).
-- **G6 Dead code.** `applyBatterySaveForecast` (`lib/optimizer.ts:74`) is exported and tested but
+- **G6 Dead code.** ✅ **done.** `applyBatterySaveForecast` and its three tests are gone; the drift
+  is modelled inside `dpCore`, and keeping both stories invited someone to wire the wrong one. `applyBatterySaveForecast` (`lib/optimizer.ts:74`) is exported and tested but
   never called; the drift is modelled inside `dpCore` instead. Delete it or wire it, don't keep
   both stories.
 - **G7 `trimIncompleteTerminalDays` rejects DST days** (92/100 slots) as "incomplete", truncating
@@ -917,7 +929,24 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
   elprisetjustnu does not yet have, but it is a few percent of price error in the near horizon
   and it silently degrades to a hardcoded 11.5. Prefer the previous day's ECB fixing, and log
   when the fallback is used.
-- **G9 Wear cost is charged on `|ΔSoC|`**, i.e. on the *stored* delta, not on the throughput
+- **G9 Wear cost is charged on `|ΔSoC|`** ✅ **done.** One `wearOreFor(dE, freeSolarKwh)` helper,
+  used by the DP, the hold path and `evaluateDispatch` alike so they cannot drift: charging costs
+  `dE / η` through the cells, discharging `dE · η`, and the free solar the inverter absorbs on its own
+  is exempt — pricing that as wear taxes an action the model cannot decline, which biased the DP
+  against holding a battery free solar was filling anyway. Both are ~2 % effects on a ≈4.2 öre/leg
+  charge, so no headline behaviour moved; it is fixed because a cost function that charges for what
+  the model cannot choose is a trap for whoever tunes the constant next.
+
+  Fixing it also exposed a test that had **conflated two different properties** of the forecast-risk
+  premium (P1-1) and would have failed on any unrelated change: deterring a *transaction* in an
+  unsettled slot legitimately makes the plan carry more from settled slots instead, which is not the
+  same as inflating the *value of stored energy* — the actual bug. It is now three tests: carry
+  unchanged when day 2 offers nothing to transact on; grid-charging still deterred inside a forecast
+  day; and never parked at capacity overnight, which is what the old form measurably did. The
+  deterrence case needed care to be meaningful at all — the motive has to be a genuinely marginal
+  trade, since a fat spread (buying at 90 to avoid a 200 öre import) both swamps the effect and
+  *should* not be deterred, and a trade worth more than the sacrifice cap is vetoed by the guard
+  rather than by the premium., i.e. on the *stored* delta, not on the throughput
   actually passing through the cells (`dE/η` charging, `dE·η` discharging), and it is also charged
   on the unavoidable free solar auto-charge. Both are ≈2 % effects on a ≈4.2 öre/leg charge; fix while
   touching the cost function, not before.

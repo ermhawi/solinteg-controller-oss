@@ -50,6 +50,25 @@ describe('buildSolarProfiles', () => {
     expect(profiles[6]).toBeDefined();
     expect(profiles[7]).toBeDefined();
   });
+
+  it('covers every month present in the loaded horizon, not just today and tomorrow', () => {
+    // The horizon reaches three days, so on a month boundary the THIRD day used to find no profile
+    // and fall back to zero solar for that whole day whenever the live forecast was missing — a
+    // silent, once-a-month, worst-case input. See OPTIMIZER-AUDIT.md G3.
+    const data = makeData({
+      today: '2026-06-29',
+      tomorrow: '2026-06-30',
+      prices: [
+        { startTime: '2026-06-29T12:00:00', endTime: '2026-06-29T12:15:00', price: 80, priceIncludingTaxAndSurcharge: 110 },
+        { startTime: '2026-06-30T12:00:00', endTime: '2026-06-30T12:15:00', price: 80, priceIncludingTaxAndSurcharge: 110 },
+        { startTime: '2026-07-01T12:00:00', endTime: '2026-07-01T12:15:00', price: 80, priceIncludingTaxAndSurcharge: 110 },
+      ],
+    });
+    const profiles = buildSolarProfiles(data);
+    expect(profiles[6]).toBeDefined();
+    expect(profiles[7]).toBeDefined(); // the third day's month, which nothing else names
+    expect(profiles[7]).toHaveLength(24);
+  });
 });
 
 describe('buildOptimizerSlots', () => {

@@ -127,28 +127,29 @@ function batterySaveHoldOutputKwh(soc: number, loadRem: number, driftW: number):
 }
 
 /**
- * Apply the measured battery-save drift to the forecast without changing normal optimizer actions.
- * The Python executor identifies the same planned hold from loadFromGridKwh and SOC headroom.
- * A zero value is a no-op so oracle and legacy plans remain byte-for-byte compatible.
+ * Wear cost (öre) for moving SoC by `dE` this slot, charged on the energy that actually passes
+ * through the CELLS.
+ *
+ * Two corrections over the previous `wear × |dE|`:
+ *
+ *  1. **Throughput, not stored delta.** Charging `dE` into the pack pushes `dE / η` through the
+ *     conversion path and discharging it yields `dE · η`, so |dE| is the one quantity that is
+ *     neither. Charging was undercharged and discharging overcharged, each by the per-leg loss.
+ *  2. **`freeSolarKwh` is exempt.** Solar the inverter absorbs on its own (the auto-charge floor)
+ *     is not a decision the DP can decline, so pricing it as wear taxes an action the model does not
+ *     control — which biased the DP against holding a battery that free solar was filling anyway.
+ *     Only the portion above that floor is a real choice.
+ *
+ * Both are ~2 % effects on a ≈4.2 öre/leg charge, so this changes no headline behaviour; it is here
+ * because a cost function that charges for what the model cannot choose is a trap for whoever tunes
+ * BATTERY_WEAR_COST_ORE_PER_KWH next. See OPTIMIZER-AUDIT.md G9.
  */
-export function applyBatterySaveForecast(dispatch: DispatchSlot[], driftW: number): DispatchSlot[] {
-  if (!(driftW > 0)) return dispatch;
-  const driftKwh = driftW / 4000; // 15 minutes
-  let cumulativeDrift = 0;
-  return dispatch.map((slot) => {
-    const isPlannedHold =
-      slot.action === 'idle' &&
-      slot.loadFromGridKwh > BATTERY_SAVE_HOLD_LOAD_KWH &&
-      slot.socAfter > MIN_SOC_KWH;
-    if (isPlannedHold) {
-      const available = Math.max(0, slot.socAfter - cumulativeDrift - MIN_SOC_KWH);
-      const applied = Math.min(driftKwh, available);
-      cumulativeDrift += applied;
-      return { ...slot, socAfter: slot.socAfter - cumulativeDrift, batterySaveDriftKwh: applied };
-    }
-    if (cumulativeDrift === 0) return slot;
-    return { ...slot, socAfter: Math.max(MIN_SOC_KWH, slot.socAfter - cumulativeDrift), batterySaveDriftKwh: 0 };
-  });
+function wearOreFor(dE: number, freeSolarKwh = 0): number {
+  if (dE >= 0) {
+    const chargeable = Math.max(0, dE - freeSolarKwh);
+    return BATTERY_WEAR_COST_ORE_PER_KWH * (chargeable / ONE_WAY_EFF);
+  }
+  return BATTERY_WEAR_COST_ORE_PER_KWH * -dE * ONE_WAY_EFF;
 }
 
 interface Flows {
@@ -168,7 +169,15 @@ interface Flows {
  * balance. Excess solar that neither fits the battery nor the export cap is curtailed. The battery
  * may discharge to cover load AND export surplus to the grid (up to the grid cap).
  */
-function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: number): Flows {
+function computeFlows(
+  soc: number,
+  socNext: number,
+  solarRem: number,
+  loadRem: number,
+  /** Curtail solar rather than export it — see the `sellPrice < 0` note in dpCore. Defaults to
+   *  false so every existing caller and the oracle keep their exact behaviour. */
+  curtailSolar = false,
+): Flows {
   const dE = socNext - soc;
   let gridImport: number;
   let gridExport: number;
@@ -188,6 +197,12 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
     batteryToLoad = 0;
     gridImport = gridToBattery + loadRem;
     solarExport = solarRem - fromSolar;
+    // Curtailment is FREE and always available: an inverter can simply produce less. So surplus the
+    // battery cannot absorb is exported only when exporting actually pays — at a negative sell price
+    // the DP used to be forced to pay to dump it, which is not a real constraint, just a missing
+    // option. (The cap branch below was already a curtailment; this generalises it from "more than
+    // the grid can take" to "more than it is worth exporting".)
+    if (curtailSolar) solarExport = 0;
     gridExport = solarExport;
     if (gridExport > GRID_SLOT_KWH) {
       // curtail solar we can neither store nor export within the grid cap
@@ -203,8 +218,10 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
     gridToBattery = 0;
     loadFromGrid = loadRem - toLoad;
     gridImport = loadFromGrid;
-    solarExport = solarRem;
-    gridExport = solarRem + batteryToGrid;
+    // Same option on the discharge side: the SOLAR share is curtailable, the battery's is not (that
+    // is a deliberate sell the DP chose, and it would not choose it at a price worth curtailing).
+    solarExport = curtailSolar ? 0 : solarRem;
+    gridExport = solarExport + batteryToGrid;
   }
 
   const feasible = gridImport <= GRID_SLOT_KWH + 1e-9 && gridExport <= GRID_SLOT_KWH + 1e-9;
@@ -581,6 +598,11 @@ function dpCore(
     const sr = solarRem[i];
     const lr = loadRem[i];
     const autoInput = autoChargeInputKwh[i];
+    // Exporting at a negative price costs money, and curtailing is free, so the surplus is simply
+    // not exported. Without this the DP had no way to decline: `optimizer.test.ts` called it "the
+    // curtailment gap" and pinned the old, forced-loss behaviour. Only solar is curtailable — a
+    // battery-to-grid flow is a deliberate sell the DP would not choose at a negative price anyway.
+    const curtail = sell < 0;
 
     for (let s = 0; s < SOC_LEVELS; s++) {
       const soc = socOf(s);
@@ -626,24 +648,23 @@ function dpCore(
           const fromSolar = need < sr ? need : sr;
           const gridToBattery = need - fromSolar;
           gImp = gridToBattery + lr;
-          gExp = sr - fromSolar;
+          gExp = curtail ? 0 : sr - fromSolar;
           if (gExp > GRID_SLOT_KWH) gExp = GRID_SLOT_KWH;
           riskOre = gridToBattery * (deferOre[i] + solarRiskOre + forecastOre);
         } else {
           const out = -dE * ONE_WAY_EFF;
           const toLoad = out < lr ? out : lr;
           gImp = lr - toLoad;
-          gExp = sr + (out - toLoad);
+          gExp = (curtail ? 0 : sr) + (out - toLoad);
           if (gExp > GRID_SLOT_KWH + 1e-9) continue; // over-export infeasible
           // Only the battery-to-grid share is deferral-biased: covering load (toLoad) happens
           // when the load happens — there is no "later" to defer it to.
           riskOre = (out - toLoad) * (deferOre[i] + forecastOre);
         }
         if (gImp > GRID_SLOT_KWH + 1e-9) continue; // over-import infeasible
-        // Wear cost on |dE| (battery throughput this slot) discourages cycling the
-        // battery for a marginal gain smaller than what it costs in degradation —
-        // see BATTERY_WEAR_COST_ORE_PER_KWH. Zero when j === s (idle, dE = 0).
-        const wear = BATTERY_WEAR_COST_ORE_PER_KWH * Math.abs(dE);
+        // Wear on the energy that really passes through the cells, exempting the free solar the
+        // inverter absorbs regardless — see wearOreFor. Zero when j === s (idle, dE = 0).
+        const wear = wearOreFor(dE, autoInput * ONE_WAY_EFF);
         const cost = gImp * buy - gExp * sell + wear + riskOre + costToGo[j];
         if (cost < best) {
           best = cost;
@@ -656,7 +677,7 @@ function dpCore(
         const holdJ = Math.max(0, Math.floor((requestedSocAfter - floorSoc) / step));
         const holdSocAfter = socOf(holdJ);
         const actualHoldOutput = Math.max(0, soc - holdSocAfter) * ONE_WAY_EFF;
-        const holdF = computeFlows(soc, holdSocAfter, sr, lr);
+        const holdF = computeFlows(soc, holdSocAfter, sr, lr, curtail);
         // The battery-save hold is an empirical correction for physical inverter behaviour.
         // It is not an optional arbitrage action: represent it whenever the economic choice is
         // idle, while a genuinely better active charge/discharge decision still wins.
@@ -664,7 +685,7 @@ function dpCore(
           best =
             holdF.gridImport * buy -
             holdF.gridExport * sell +
-            BATTERY_WEAR_COST_ORE_PER_KWH * (actualHoldOutput / ONE_WAY_EFF) +
+            wearOreFor(holdSocAfter - soc) +
             costToGo[holdJ];
           bestJ = holdJ;
           driftCh[s] = 1;
@@ -697,7 +718,7 @@ function dpCore(
       ? Math.max(0, soc - socNext) * ONE_WAY_EFF
       : 0;
     const actualSocNext = socNext;
-    const f = computeFlows(soc, actualSocNext, solarRem[i], loadRem[i]);
+    const f = computeFlows(soc, actualSocNext, solarRem[i], loadRem[i], slots[i].sellPrice < 0);
     const dE = actualSocNext - soc;
     // 'idle' means "leave the inverter on auto/self-use" — free, no grid-funded CHARGING,
     // whenever the chosen socNext is reachable from solar alone. Deliberately NOT based on
@@ -803,9 +824,14 @@ export function evaluateDispatch(
   for (let i = 0; i < dispatch.length; i++) {
     const load = (slots[i].consumptionKwh ?? 0) * loadFactor;
     const s2l = Math.min(slots[i].solarKwh, load);
-    const f = computeFlows(soc, dispatch[i].socAfter, slots[i].solarKwh - s2l, load - s2l);
+    const solarRem = slots[i].solarKwh - s2l;
+    const f = computeFlows(soc, dispatch[i].socAfter, solarRem, load - s2l, slots[i].sellPrice < 0);
     cashOre += f.gridExport * slots[i].sellPrice - f.gridImport * slots[i].buyPrice;
-    wearOre += BATTERY_WEAR_COST_ORE_PER_KWH * Math.abs(dispatch[i].socAfter - soc);
+    // Same basis as the DP's own cost function, or the optimum would not evaluate as the optimum.
+    wearOre += wearOreFor(
+      dispatch[i].socAfter - soc,
+      Math.min(solarRem, BATTERY_SLOT_KWH) * ONE_WAY_EFF,
+    );
     soc = dispatch[i].socAfter;
   }
   const terminalOre =

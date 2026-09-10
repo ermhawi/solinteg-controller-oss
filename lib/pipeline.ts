@@ -11,16 +11,21 @@ import type { OptimizerSlot } from './optimizer';
  * Covers today and tomorrow (which may span a month boundary).
  */
 export function buildSolarProfiles(
-  data: Pick<PriceData, 'today' | 'tomorrow'>,
+  data: Pick<PriceData, 'today' | 'tomorrow' | 'prices'>,
 ): Record<number, number[]> {
-  const todayMonth = parseInt(data.today.slice(5, 7), 10);
-  const tomorrowMonth = parseInt(data.tomorrow.slice(5, 7), 10);
-  const profiles: Record<number, number[]> = {
-    [todayMonth]: getSolarProfileByMonth(todayMonth),
-  };
-  if (tomorrowMonth !== todayMonth) {
-    profiles[tomorrowMonth] = getSolarProfileByMonth(tomorrowMonth);
-  }
+  // Every month present in the loaded horizon, not just today's and tomorrow's. The horizon reaches
+  // three days (lib/prices.ts merges a forecast horizon), so on a month boundary the third day used
+  // to find `profiles[month] === undefined` and fall back to **zero** solar for the whole day
+  // whenever the live forecast was missing — a silent, once-a-month, worst-case input. Deriving the
+  // set from the prices themselves means it cannot drift from the horizon again.
+  // See OPTIMIZER-AUDIT.md G3.
+  const months = new Set<number>([
+    parseInt(data.today.slice(5, 7), 10),
+    parseInt(data.tomorrow.slice(5, 7), 10),
+    ...data.prices.map((slot) => parseInt(slot.startTime.slice(5, 7), 10)),
+  ]);
+  const profiles: Record<number, number[]> = {};
+  for (const month of months) profiles[month] = getSolarProfileByMonth(month);
   return profiles;
 }
 

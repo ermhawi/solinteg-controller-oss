@@ -53,7 +53,6 @@ vi.mock('../pipeline', () => ({
 vi.mock('../optimizer', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../optimizer')>()),
   optimizeDispatch: vi.fn(),
-  applyBatterySaveForecast: vi.fn((dispatch) => dispatch),
 }));
 vi.mock('../inverter', () => ({
   readLiveInverterData: vi.fn(),
