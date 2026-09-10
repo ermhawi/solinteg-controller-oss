@@ -67,6 +67,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 11 | E2 live-load tracking on charge slots | ✅ done, shipping in shadow mode |
 | 12 | E8 DP ceiling + E6 real freeze | ✅ done, freeze gated on an on-device probe |
 | 13 | G1 curtailment, G3 per-month profiles, G6 dead code, G9 wear basis | ✅ done |
+| 14 | G4 measured per-hour reserve, G5 doc contradictions, G8 FX rate | ✅ done |
 
 ---
 
@@ -907,12 +908,34 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
   so on a month boundary the third horizon day falls back to `profiles[month] === undefined` ⇒
   **zero** solar whenever the live forecast is missing. Build profiles for every date present in
   `data.prices`.
-- **G4 Live load profile is a mean, not a risk measure.** `readTrailingLoadProfile` averages 14
+- **G4 Live load profile is a mean, not a risk measure.** ✅ **done.**
+  `readTrailingLoadProfile` now also returns `hourHighKwh` — the 80th-percentile (nearest-rank, so
+  always a day that really happened) of each local hour's across-days distribution, taken from the
+  same SQL buckets at no extra query cost. `buildOptimizerSlots` carries it into
+  `OptimizerSlot.consumptionReserveKwh`, and the DP reserves against
+  `max(consumptionKwh × loadFactor, reserve)`.
+
+  `max` rather than replacing the margin, deliberately: the quantile is measured from RECENT days, so
+  a cold snap the window has not seen yet is still covered by the flat margin on top of the
+  weather-scaled expectation. And `consumptionKwh` remains the honest expectation that gets logged
+  and scored against actuals — the reserve is a different question ("how bad does this hour get?"),
+  which is why it is a second field rather than an inflated first one. Undefined when any hour has
+  fewer than 7 days of coverage, all-or-nothing, so a profile cannot apply two different reserve
+  policies within one night.
+
+  The integration test seeds one volatile hour (4 kW on one day in three) against 23 steady ones and
+  asserts the contrast directly: a reserve above the flat margin exactly where the spread is, and no
+  reserve at all where there is none — which is the over-holding a single global factor causes. `readTrailingLoadProfile` averages 14
   days per hour-of-day with no weekday/weekend split and no outlier handling;
   `LOAD_FORECAST_MARGIN = 1.15` is the only allowance for the spread. With the same SQL it is
   cheap to also compute a per-hour p75/p90 and let the DP plan the *reserve* against the quantile
   while pricing against the mean — strictly better than one global multiplier.
-- **G5 Documentation contradicts code in three places** that matter for anyone tuning this:
+- **G5 Documentation contradicts code in three places** ✅ **done.** The `solarCalibrationByMonth`
+  and `irradiance-data.ts` claims were corrected with P0-1. The third was the largest:
+  `SOLAR_FORECAST_MODEL` reads as though it selects the planning forecast, and has not since the
+  forecast became a 5-source median ensemble. Its docstring now states what it actually controls —
+  whether the MET Norway Thredds fallback applies, and which model the display-only current-hour
+  reading uses — and keeps the backtest history, which still bears on choosing a fallback. that matter for anyone tuning this:
   `SOLAR_FORECAST_MODEL` is documented as selecting the forecast model, but
   `fetchSolarForecastSources` ignores it and always queries a fixed list of five sources (it now
   only selects the Thredds fallback); `lib/constants.ts` claims
@@ -924,7 +947,15 @@ the moment anyone lowers the ceiling. Fix by clamping the DP's top SoC level to
   both stories.
 - **G7 `trimIncompleteTerminalDays` rejects DST days** (92/100 slots) as "incomplete", truncating
   the horizon twice a year. Same fix as P0-3 part 2.
-- **G8 PlaneraElen `actual` rows go through a live EUR/SEK rate** (`frankfurter.dev`, fallback
+- **G8 PlaneraElen `actual` rows go through a live EUR/SEK rate** ✅ **done.** The rate is now
+  requested for the **auction date** (`/v1/<date>`) rather than `latest`: Nord Pool runs the
+  day-ahead auction in EUR and converts at the ECB reference rate fixed for that auction, so that is
+  the rate the settled price will have used — `latest` is a different day's rate whenever a plan is
+  computed after the auction, and stale on any weekend or holiday. Frankfurter returns the most
+  recent prior fixing for a date without one, which is also what the market uses (verified live: a
+  Sunday request returns the Friday fixing), and the response's own date is logged when it differs.
+  The hardcoded 11.5 fallback is now a named constant and its use is logged as scaling every forecast
+  price. (`frankfurter.dev`, fallback
   11.5), while Nord Pool settles SEK on the ECB rate fixed the day before. Only affects slots
   elprisetjustnu does not yet have, but it is a few percent of price error in the near horizon
   and it silently degrades to a hardcoded 11.5. Prefer the previous day's ECB fixing, and log

@@ -268,25 +268,51 @@ async function fetchPlaneraPrices(): Promise<PriceSlot[]> {
   // has a slot, but PlaneraElen may publish tomorrow as `actual` before that feed does. Dropping
   // those rows leaves a hole in the chart and falsely reports that tomorrow is unavailable.
   const usable = payload.data.filter((p) => isUsablePlaneraSource(p.source));
-  let eurSekRate = 11.5;
+  let eurSekRate = EURSEK_FALLBACK;
   try {
-    eurSekRate = await fetchEurSekRate();
+    // The auction for tomorrow's delivery ran today, so today's fixing is the relevant one.
+    eurSekRate = await fetchEurSekRate(new Date());
   } catch (err) {
-    console.warn('EUR/SEK rate unavailable; using fallback 11.5:', err);
+    console.warn(
+      `EUR/SEK rate unavailable; using fallback ${EURSEK_FALLBACK} — every forecast price is scaled by this:`,
+      err,
+    );
   }
   return usable.map((p) => forecastToSlot(p, eurSekRate));
 }
 
-async function fetchEurSekRate(): Promise<number> {
-  const res = await fetch('https://api.frankfurter.dev/v1/latest?from=EUR&to=SEK', {
+/** Fallback EUR/SEK used only when the rate service is unreachable. A wrong rate scales every
+ *  forecast price, so this being hit is worth seeing in the log — see the warn at the call site. */
+const EURSEK_FALLBACK = 11.5;
+
+/**
+ * EUR/SEK for converting PlaneraElen's EUR/MWh forecast to öre/kWh.
+ *
+ * Asks for the rate on the AUCTION date (the day before delivery) rather than "latest". Nord Pool
+ * runs the day-ahead auction in EUR and converts to the local currency at the ECB reference rate
+ * fixed for that auction, so the auction date's fixing is the rate the settled price will actually
+ * have used — "latest" is a different day's rate whenever a plan is computed after the auction, and
+ * on a weekend or holiday it is a stale one regardless.
+ *
+ * Frankfurter serves ECB reference rates and, for a date with no fixing (weekend/holiday), returns
+ * the most recent prior one — which is also what the market uses, so no special-casing is needed.
+ * The response's own `date` is logged when it differs from the request, so a stale rate is visible
+ * rather than assumed.
+ */
+async function fetchEurSekRate(auctionDate: Date): Promise<number> {
+  const day = auctionDate.toISOString().slice(0, 10);
+  const res = await fetch(`https://api.frankfurter.dev/v1/${day}?from=EUR&to=SEK`, {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`EUR/SEK rate failed: HTTP ${res.status}`);
-  const payload = (await res.json()) as { rates?: { SEK?: number } };
+  const payload = (await res.json()) as { rates?: { SEK?: number }; date?: string };
   const rate = payload.rates?.SEK;
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) throw new Error('EUR/SEK response has no valid rate');
+  if (payload.date && payload.date !== day) {
+    console.info(`EUR/SEK: no ECB fixing for ${day}, using ${payload.date}'s (weekend/holiday)`);
+  }
   return rate;
 }
 

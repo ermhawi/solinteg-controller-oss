@@ -926,6 +926,56 @@ describe('optimizeDispatch loadFactor (robust-planning margin)', () => {
   });
 });
 
+describe('consumptionReserveKwh — the measured per-hour reserve (OPTIMIZER-AUDIT.md G4)', () => {
+  const withReserve = (reserve: number | undefined) => [
+    makeSlot(0, 0, { buyPrice: 50, sellPrice: 10, consumptionKwh: 0.5 }),
+    makeSlot(1, 0, { buyPrice: 400, sellPrice: 10, consumptionKwh: 0.5, consumptionReserveKwh: reserve }),
+  ];
+
+  it('reserves against the measured quantile when it exceeds the flat margin', () => {
+    // The dear slot really needs 1.4 kWh, not 0.5 x 1.15. The plan must carry enough for the day
+    // that actually happens at this hour, not for the average one.
+    const plain = optimizeDispatch(withReserve(undefined), MIN_SOC, { loadFactor: 1.15 });
+    const reserved = optimizeDispatch(withReserve(1.4), MIN_SOC, { loadFactor: 1.15 });
+    expect(reserved[0].socAfter).toBeGreaterThan(plain[0].socAfter);
+    expect(reserved[1].batteryToLoadKwh).toBeGreaterThan(plain[1].batteryToLoadKwh);
+  });
+
+  it('keeps the flat margin when the quantile is BELOW it', () => {
+    // max(), not replace: a quiet trailing window must not shrink the reserve below the margin,
+    // because the margin also covers a cold snap the window has not seen yet.
+    const plain = optimizeDispatch(withReserve(undefined), MIN_SOC, { loadFactor: 1.15 });
+    const quiet = optimizeDispatch(withReserve(0.2), MIN_SOC, { loadFactor: 1.15 });
+    expect(quiet.map((d) => d.socAfter)).toEqual(plain.map((d) => d.socAfter));
+  });
+
+  it('omitting it reproduces the previous behaviour exactly', () => {
+    const slots = variedDay(0);
+    const base = optimizeDispatch(slots, 10, { loadFactor: 1.15 });
+    const explicitUndefined = optimizeDispatch(
+      slots.map((s) => ({ ...s, consumptionReserveKwh: undefined })),
+      10,
+      { loadFactor: 1.15 },
+    );
+    expect(explicitUndefined).toEqual(base);
+  });
+
+  it('is a planning reserve only — the logged forecast and its valuation are untouched', () => {
+    // evaluateDispatch prices consumptionKwh (x loadFactor when asked), never the reserve: the
+    // reserve is what the plan HOLDS for, not what anyone expects to happen or to be billed for.
+    const slots = withReserve(1.4);
+    const dispatch = optimizeDispatch(slots, MIN_SOC, { loadFactor: 1.15 });
+    const withField = evaluateDispatch(slots, dispatch, MIN_SOC, { loadFactor: 1.15 });
+    const withoutField = evaluateDispatch(
+      slots.map((s) => ({ ...s, consumptionReserveKwh: undefined })),
+      dispatch,
+      MIN_SOC,
+      { loadFactor: 1.15 },
+    );
+    expect(withField).toEqual(withoutField);
+  });
+});
+
 describe('grid-flow attribution (chart decision zones read these — see lib/chart-utils.ts)', () => {
   // A varied scenario exercising all flow shapes: cheap night (grid charge + load), modest
   // solar day (solar charge, but too little to fill the battery — so the night grid-buy stays

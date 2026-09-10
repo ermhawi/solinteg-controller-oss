@@ -77,6 +77,18 @@ export interface OptimizerSlot {
   sellPrice: number; // öre/kWh — price received per exported kWh: spot + EXPORT_BONUS_ORE (grid benefit), see DOMAIN.md
   solarKwh: number; // expected solar production for this 15-min slot
   consumptionKwh?: number; // expected household load for this 15-min slot (optional; defaults to 0)
+  /**
+   * The load this slot should be RESERVED against — a measured high quantile of the same hour across
+   * the trailing window (lib/telemetry/readings.ts), not a forecast. When present the DP plans
+   * against `max(consumptionKwh × loadFactor, this)`; when absent it falls back to the flat
+   * `loadFactor` alone, which is the previous behaviour exactly.
+   *
+   * Why both exist. `consumptionKwh` is the honest expectation: it is what gets logged and what
+   * forecast-vs-actual validation scores. The reserve is a different question — "how bad does this
+   * hour get?" — and a single global margin answers it identically for 03:00 and for the dinner peak,
+   * which do not have remotely the same spread. See LOAD_FORECAST_MARGIN and OPTIMIZER-AUDIT.md G4.
+   */
+  consumptionReserveKwh?: number;
   // Provenance tags, informational only — the DP never reads these, they exist purely so
   // logged telemetry (optimizer_runs.inputs_json) can tell a real forecast miss apart from a
   // climatology-fallback slot when validating solarKwh/consumptionKwh against actual readings
@@ -483,7 +495,12 @@ function dpCore(
   const loadRem = new Float64Array(n);
   const autoChargeInputKwh = new Float64Array(n);
   for (let i = 0; i < n; i++) {
-    const load = (slots[i].consumptionKwh ?? 0) * loadFactor;
+    // The greater of the flat margin and the measured high quantile. `max` rather than replacing the
+    // margin: the quantile is measured from RECENT days, so a cold snap the trailing window has not
+    // seen yet is still covered by the margin on top of the weather-scaled expectation.
+    const marginedLoad = (slots[i].consumptionKwh ?? 0) * loadFactor;
+    const reserve = slots[i].consumptionReserveKwh;
+    const load = reserve !== undefined ? Math.max(marginedLoad, reserve) : marginedLoad;
     const s2l = Math.min(slots[i].solarKwh, load);
     solarRem[i] = slots[i].solarKwh - s2l;
     loadRem[i] = load - s2l;

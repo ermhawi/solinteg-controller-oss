@@ -73,6 +73,17 @@ export function slotConsumptionKwh(
 export interface TrailingLoadProfile {
   /** Mean consumption per local hour-of-day (kWh per hour), index 0-23. */
   hourKwh: number[];
+  /**
+   * A HIGH quantile of the same per-hour distribution across the window's days (kWh per hour,
+   * index 0-23) — what a hot-but-not-freak day looks like at that hour, measured rather than assumed.
+   *
+   * Exists to replace the single global LOAD_FORECAST_MARGIN guess. The margin exists because the
+   * cost of running short is far larger than the cost of over-holding (see that constant), but a flat
+   * 1.15 says the same thing about 03:00 and about the dinner peak, and those hours do not have the
+   * same spread at all: overnight load is nearly deterministic, evenings are where the variance is.
+   * Undefined when the window is too thin to take a quantile from.
+   */
+  hourHighKwh?: number[];
   /** Mean outdoor temp (°C) over the same trailing window, or null if unavailable. */
   trailingMeanTempC: number | null;
   /** Distinct local days represented — callers already got null below this module's bar. */
@@ -99,10 +110,37 @@ export function slotConsumptionFromLive(
   startTime: string,
   tempByDate: Record<string, number> | null | undefined,
 ): number {
+  return scaledSlotLoad(profile, profile.hourKwh, startTime, tempByDate);
+}
+
+/**
+ * The same slot's load at the profile's HIGH quantile (see `hourHighKwh`) — the figure the DP plans
+ * its reserve against, while `slotConsumptionFromLive` stays the honest expectation that gets logged
+ * and validated against actuals.
+ *
+ * Returns null when the profile carries no quantile, so the caller falls back to the flat
+ * LOAD_FORECAST_MARGIN it used before.
+ */
+export function slotConsumptionHighFromLive(
+  profile: TrailingLoadProfile,
+  startTime: string,
+  tempByDate: Record<string, number> | null | undefined,
+): number | null {
+  if (!profile.hourHighKwh) return null;
+  return scaledSlotLoad(profile, profile.hourHighKwh, startTime, tempByDate);
+}
+
+/** Shared body: pick the hour's value, quarter it, and apply the weather scale. */
+function scaledSlotLoad(
+  profile: TrailingLoadProfile,
+  hourly: number[],
+  startTime: string,
+  tempByDate: Record<string, number> | null | undefined,
+): number {
   const date = startTime.slice(0, 10);
   const month = parseInt(startTime.slice(5, 7), 10);
   const hour = parseInt(startTime.slice(11, 13), 10);
-  const base = (profile.hourKwh[hour] ?? 0) / 4;
+  const base = (hourly[hour] ?? 0) / 4;
   const forecastTemp = tempByDate?.[date];
   if (forecastTemp == null || profile.trailingMeanTempC == null) return base;
   const scale =

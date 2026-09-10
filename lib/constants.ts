@@ -146,7 +146,17 @@ export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100); // opera
  * costs the small evening/next-day sell-price difference, running 1 kWh short costs the
  * full buy-sell spread at the night's worst prices. Price-certain arbitrage (sell high
  * evening, rebuy cheap night) is NOT distorted — prices carry no margin, the DP just
- * plans to rebuy the margin too. Env: SOLINTEG_LOAD_FORECAST_MARGIN.
+ * plans to rebuy the margin too.
+ *
+ * **Now a floor rather than the whole story.** When the trailing telemetry window supports it, each
+ * slot also carries a MEASURED high quantile for that hour of day
+ * (`OptimizerSlot.consumptionReserveKwh`) and the DP reserves against
+ * `max(consumptionKwh × this, that quantile)`. A single global factor necessarily says the same
+ * thing about 03:00 and about the dinner peak, and those hours do not have remotely the same
+ * spread — overnight load is nearly deterministic, evenings are where the variance is. This stays
+ * as the floor because the quantile is measured from RECENT days: a cold snap the window has not
+ * seen yet is covered by the margin on top of the weather-scaled expectation, not by the quantile.
+ * See OPTIMIZER-AUDIT.md G4. Env: SOLINTEG_LOAD_FORECAST_MARGIN.
  */
 export const LOAD_FORECAST_MARGIN = numEnv('SOLINTEG_LOAD_FORECAST_MARGIN', 1.15);
 
@@ -383,6 +393,20 @@ export const SITE_LATITUDE = numEnv('SITE_LATITUDE', 57.64);
 export const SITE_LONGITUDE = numEnv('SITE_LONGITUDE', 11.78);
 
 /**
+ * **What this actually controls, which is narrower than it reads.** Since the forecast became a
+ * 5-source median ensemble (`fetchSolarForecastSources`: metno_nordic, ecmwf_ifs025, icon_seamless,
+ * Open-Meteo's best_match blend, and forecast.solar), this no longer selects the planning forecast —
+ * every source is fetched regardless and `combineSolarForecasts` takes the per-slot median. It now
+ * governs exactly two things:
+ *   1. whether the second-tier MET Norway Thredds fallback is used when Open-Meteo fails entirely
+ *      (`lib/plan.ts`; that fallback only mirrors `metno_nordic`, so it is skipped for any other
+ *      value), and
+ *   2. which single model the display-only current-hour reading comes from
+ *      (`fetchCurrentHourGhiForecast`), including whether that request is hourly or minutely_15.
+ * The historical text below describes the backtest that chose `metno_nordic` when it WAS the single
+ * planning source; it is kept because the reasoning still applies to picking a fallback, and because
+ * the ensemble's per-source skill is the thing `solar_forecasts` telemetry exists to measure.
+ *
  * Open-Meteo `models=` value for the solar forecast (lib/forecast.ts), or '' for the
  * default best_match blend. Reference install (57.6°N, Nordic) backtested `metno_nordic`
  * against 4.3 months of its own measured GHI (scripts/tools/compare-metno-solar.mjs) and

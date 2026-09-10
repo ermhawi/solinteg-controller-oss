@@ -1,6 +1,6 @@
 import { getSolarProfileByMonth } from './solar';
 import { slotSolarKwh } from './slot-utils';
-import { slotConsumptionKwh, slotConsumptionFromLive } from './load';
+import { slotConsumptionKwh, slotConsumptionFromLive, slotConsumptionHighFromLive } from './load';
 import type { TrailingLoadProfile } from './load';
 import { SKATT_OVERFÖRING } from './constants';
 import type { PriceData } from './prices';
@@ -66,6 +66,11 @@ export function buildOptimizerSlots(
       consumptionKwh: liveLoad
         ? slotConsumptionFromLive(liveLoad, slot.startTime, tempByDate)
         : slotConsumptionKwh(slot.startTime, tempByDate),
+      // The measured high quantile for this hour, when the window supports one. Undefined falls the
+      // DP back to the flat LOAD_FORECAST_MARGIN — see consumptionReserveKwh on OptimizerSlot.
+      consumptionReserveKwh: liveLoad
+        ? slotConsumptionHighFromLive(liveLoad, slot.startTime, tempByDate) ?? undefined
+        : undefined,
       loadSource,
     };
   });

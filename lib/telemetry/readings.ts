@@ -255,17 +255,22 @@ export function readTrailingLoadProfile(days = 14, minDays = 5): TrailingLoadPro
 
     const sumW = new Array<number>(24).fill(0);
     const count = new Array<number>(24).fill(0);
+    // Each SQL bucket is one (day, hour) pair, so collecting them per local hour gives the
+    // across-days distribution the quantile below needs — no second query.
+    const perHourDayMeans: number[][] = Array.from({ length: 24 }, () => []);
     const localDays = new Set<string>();
     for (const b of buckets) {
       const p = stockholmParts(new Date(`${b.bucket}:00:00Z`));
       sumW[p.hour] += b.avg_w * b.n;
       count[p.hour] += b.n;
+      perHourDayMeans[p.hour].push(b.avg_w);
       localDays.add(p.dateStr);
     }
     if (localDays.size < minDays || count.some((n) => n === 0)) return null;
 
     // Mean W over an hour ≈ kWh in that hour (the poller's cadence is uniform within it).
     const hourKwh = sumW.map((s, h) => s / count[h] / 1000);
+    const hourHighKwh = highQuantilePerHour(perHourDayMeans);
 
     let trailingMeanTempC: number | null = null;
     try {
@@ -277,9 +282,36 @@ export function readTrailingLoadProfile(days = 14, minDays = 5): TrailingLoadPro
       trailingMeanTempC = null; // weather table absent — profile still usable without scaling
     }
 
-    loadProfileCache = { hourKwh, trailingMeanTempC, days: localDays.size };
+    loadProfileCache = { hourKwh, hourHighKwh, trailingMeanTempC, days: localDays.size };
     loadProfileKey = key;
     return loadProfileCache;
+  });
+}
+
+/** Days needed at an hour before a quantile there means anything. Below this the "high" figure is
+ *  just the max of a couple of samples, which is noise, not a distribution. */
+const MIN_DAYS_FOR_QUANTILE = 7;
+/** Which quantile counts as "a hot day at this hour". 0.8 = roughly the worst day in five — high
+ *  enough to cover ordinary variation, low enough that one anomalous day does not set the reserve
+ *  for the whole month. */
+const LOAD_HIGH_QUANTILE = 0.8;
+
+/**
+ * Per-local-hour high quantile of the across-days load distribution (kWh/h), or undefined when any
+ * hour has too few days to say anything.
+ *
+ * All-or-nothing on purpose: a profile where some hours carry a measured quantile and others fall
+ * back to a flat margin would apply two different reserve policies within one night, and which hours
+ * got which would drift silently as coverage changed.
+ */
+function highQuantilePerHour(perHourDayMeans: number[][]): number[] | undefined {
+  if (perHourDayMeans.some((v) => v.length < MIN_DAYS_FOR_QUANTILE)) return undefined;
+  return perHourDayMeans.map((values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    // Nearest-rank: no interpolation between days, so the figure is always a day that really
+    // happened at this hour.
+    const idx = Math.min(sorted.length - 1, Math.ceil(LOAD_HIGH_QUANTILE * sorted.length) - 1);
+    return sorted[Math.max(0, idx)] / 1000;
   });
 }
 
