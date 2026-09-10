@@ -209,6 +209,24 @@ export const HOLD_REFILL_MARGIN = numEnv('SOLINTEG_HOLD_REFILL_MARGIN', 1.1);
 export const HOLD_PRICE_DROP_MARGIN_ORE = numEnv('SOLINTEG_HOLD_PRICE_DROP_ORE', 0);
 
 /**
+ * Multiplier on the DP's terminal energy value (0..1; 0 disables and restores the historical
+ * terminal-value-0 behaviour exactly).
+ *
+ * The value itself is DERIVED per plan, not configured — `terminalEnergyValueOre` in
+ * lib/optimizer.ts takes the cheapest import price in the horizon, converts it at the discharge
+ * leg's efficiency and nets off wear. That is provably too low to make a grid buy worthwhile purely
+ * to bank energy past the horizon, and far too high to let the battery be dumped at the horizon's
+ * end, which is what a zero terminal value invited: measured 2026-09-10, every plan in every
+ * scenario and season ended at exactly the SoC floor, and a horizon that collapses to today (an
+ * unreleased day-ahead, a price-forecast outage) therefore meant "empty the battery tonight".
+ *
+ * This knob exists only as a kill switch and as a way to dial the confidence down (e.g. 0.8) if
+ * your own replay shows the plan carrying more than you want overnight. Planning-only: it never
+ * reaches the hindsight oracle. Env: SOLINTEG_TERMINAL_VALUE_FACTOR.
+ */
+export const TERMINAL_VALUE_FACTOR = numEnv('SOLINTEG_TERMINAL_VALUE_FACTOR', 1);
+
+/**
  * Trailing window (days) for the live per-hour load profile read from telemetry readings,
  * which replaces the static Ellevio-fitted hour shape whenever enough data exists (see
  * lib/telemetry/readings.ts readTrailingLoadProfile / lib/load.ts slotConsumptionFromLive). 0 disables

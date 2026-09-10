@@ -5,7 +5,7 @@ import { combineSolarForecasts, fetchSolarForecastSources, fetchDailyMeanTemp } 
 import { fetchSolarForecastDirect, fetchDailyMeanTempDirect } from './metno-thredds';
 import { readFreshSolarForecast, saveSolarForecast } from './solar-forecast-cache';
 import { buildSolarProfiles, buildOptimizerSlots } from './pipeline';
-import { optimizeDispatch } from './optimizer';
+import { optimizeDispatch, terminalEnergyValueOre } from './optimizer';
 import type { DispatchSlot } from './optimizer';
 import { readLiveInverterData, socKwhOrDefault } from './inverter';
 import type { InverterLiveData } from './inverter';
@@ -26,6 +26,7 @@ import {
   FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
   BATTERY_SAVE_FORECAST_DRAIN_W,
+  TERMINAL_VALUE_FACTOR,
 } from './constants';
 
 export interface PlanResult {
@@ -237,6 +238,13 @@ export async function producePlan(): Promise<PlanResult> {
       // sets it, so the facit stays hold-free. NB: hold is a pure relaxation of the solution
       // space, so that hold-free facit is NOT an upper bound on a hold-enabled plan — a
       // shadow-scored regret (see lib/oracle.ts) can legitimately go negative when hold helps.
+      // terminalValue: energy left in the battery when the known prices run out is NOT worthless
+      // (see terminalEnergyValueOre). Without it the DP drains to the floor at the end of every
+      // horizon — harmless when that end is three days out, a deliberate overnight give-away when
+      // the horizon collapses to today. Derived from this plan's own cheapest import, so it moves
+      // with the prices instead of being a tuned constant; SOLINTEG_TERMINAL_VALUE_FACTOR=0 is the
+      // kill switch. Live plans only, like the knobs above.
+      const terminalValueOrePerKwh = terminalEnergyValueOre(optimizerSlots) * TERMINAL_VALUE_FACTOR;
       dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, {
         loadFactor: LOAD_FORECAST_MARGIN,
         deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
@@ -246,6 +254,7 @@ export async function producePlan(): Promise<PlanResult> {
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
         batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+        terminalValueOrePerKwh,
       });
       logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
     } catch (err) {

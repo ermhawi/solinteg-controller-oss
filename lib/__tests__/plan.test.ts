@@ -47,7 +47,11 @@ vi.mock('../pipeline', () => ({
   buildSolarProfiles: vi.fn(),
   buildOptimizerSlots: vi.fn(),
 }));
-vi.mock('../optimizer', () => ({
+// Partial mock: only optimizeDispatch is stubbed (these tests are about the WIRING into it).
+// terminalEnergyValueOre is pure arithmetic over the slots and producePlan calls it to build the
+// argument being asserted on, so it stays real.
+vi.mock('../optimizer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../optimizer')>()),
   optimizeDispatch: vi.fn(),
   applyBatterySaveForecast: vi.fn((dispatch) => dispatch),
 }));
@@ -68,7 +72,7 @@ import { fetchSolarForecastSources, fetchDailyMeanTemp } from '../forecast';
 import { fetchSolarForecastDirect, fetchDailyMeanTempDirect } from '../metno-thredds';
 import { readFreshSolarForecast, saveSolarForecast } from '../solar-forecast-cache';
 import { buildSolarProfiles, buildOptimizerSlots } from '../pipeline';
-import { optimizeDispatch } from '../optimizer';
+import { optimizeDispatch, terminalEnergyValueOre } from '../optimizer';
 import { readLiveInverterData, socKwhOrDefault } from '../inverter';
 import { logPriceSnapshot, logOptimizerRun, readTrailingLoadProfile } from '../telemetry';
 import {
@@ -78,6 +82,7 @@ import {
   FORECAST_RISK_PREMIUM_ORE,
   BATTERY_SAVE_FORECAST_DRAIN_W,
   LIVE_LOAD_PROFILE_DAYS,
+  TERMINAL_VALUE_FACTOR,
 } from '../constants';
 import { producePlan } from '../plan';
 
@@ -182,6 +187,12 @@ describe('producePlan — happy path wiring', () => {
       holdEnabled: false,
       forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
       batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+      // Derived from the sliced horizon's own prices, then scaled by the kill-switch factor —
+      // asserted through the real helper rather than a literal, so this pins the WIRING (the
+      // optimizer gets a terminal value at all, computed from the slots it is given) without
+      // duplicating the formula. The formula itself is pinned in optimizer.test.ts.
+      terminalValueOrePerKwh:
+        terminalEnergyValueOre(ALL_SLOTS.slice(1)) * TERMINAL_VALUE_FACTOR,
     });
 
     expect(logPriceSnapshot).toHaveBeenCalledWith(PRICE_DATA);

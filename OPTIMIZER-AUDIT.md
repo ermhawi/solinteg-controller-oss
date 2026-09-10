@@ -58,6 +58,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 2 | P0-2 grid capacity vs battery power conflated | ✅ done |
 | 3 | E3 site-level import limit (fuse backstop for P0-2's raised budget) | ✅ implemented, gated on an on-device probe |
 | 4 | P0-3 part 2 + G7 horizon robustness (DST days, forecast holes, visibility) | ✅ done |
+| 5 | P1-3 `evaluateDispatch` priced the wrong problem + P0-3 part 1 terminal value | ✅ done (one commit — the guard fix needs the terminal-value option) |
 
 ---
 
@@ -286,8 +287,34 @@ fuse safety. See E3.
 
 ## P0-3 Terminal value 0 — every plan ends at the SoC floor, and the horizon can silently collapse to today
 
-> **Status: part 2 (horizon robustness, and with it G7) ✅ done. Part 1 (the terminal value function)
-> is still open — Phase B.**
+> **Status: ✅ both parts done.** Part 1 (terminal value) shipped together with P1-3, since the
+> deferral guard has to price the terminal credit too.
+>
+> `terminalEnergyValueOre(slots)` = `min(buyPrice) × η − wear`, floored at 0 — a *derived* figure
+> that moves with the plan's own prices, not a new tuning constant, passed to the DP as
+> `opts.terminalValueOrePerKwh` (0/omitted is bit-identical to the old behaviour, which the oracle
+> and every existing test rely on; `opts.endSoc` still overrides it completely). `lib/plan.ts`
+> computes it per plan and scales it by `TERMINAL_VALUE_FACTOR` (env
+> `SOLINTEG_TERMINAL_VALUE_FACTOR`, default 1, 0 = kill switch).
+>
+> It is deliberately the provably-safe **lower bound**, and the proof is the point:
+>   - *cannot induce hoarding by buying* — storing a kWh from the cheapest slot costs `minBuy / η`
+>     while the credit is `minBuy × η − wear`, and η < 1;
+>   - *cannot induce dumping* — carrying beats exporting by roughly the ~80 öre VAT+skatt wedge.
+>
+> A first attempt floored the value at the horizon's best **sell** price ("energy is worth at least
+> what exporting fetches"). Measurement killed it: on a synthetic winter horizon that credited
+> 134.5 öre/kWh against a 108 öre cheapest import, and the DP promptly filled the battery from the
+> grid for ~15 kr of imaginary value. The floor is gone and there is now a test pinning that sell
+> prices cannot influence the credit however high they get.
+>
+> **Honest limitation, documented in the code:** because the credit sits below every buy price in the
+> horizon by construction, it cannot stop the plan spending the battery on tonight's cheap load
+> instead of tomorrow morning's dear load. What it does fix is the free give-away — a battery holding
+> more energy than the remaining load can absorb used to export the surplus at whatever the last
+> slots paid, because leftover energy scored zero. Going further needs a credit *above* the cheapest
+> slot, i.e. trading the proof for an assumption about unseen prices; that is a Phase M (replay
+> data) decision, not a taste decision.
 >
 > `slotsInStockholmDay()` now lives in `lib/prices.ts` (the module that owns
 > `stockholmMidnightUtc`) and derives a date's real slot count from the two midnight instants: 96
@@ -433,6 +460,14 @@ interval times a small factor (2–6 h is the interval over which "the next repl
 is actually true). Then re-fit `rate` against the oracle (M-1), not by inspection.
 
 ## P1-3 The deferral sacrifice guard measures the wrong problem
+
+> **Status: ✅ done.** `evaluateDispatch` takes an options bag (`loadFactor`,
+> `terminalValueOrePerKwh`) whose defaults reproduce the previous behaviour exactly, and the deferral
+> guard now prices both trajectories on the problem they were actually solved against. Tests pin:
+> defaults identical to the old two-argument call; each plan optimal under *its own* metric
+> (margined plan wins the margined comparison, unmargined wins the unmargined one); the
+> optimum-dominates property holding under a load factor, not just at 1; and the terminal credit
+> being a credit on `valueOre` and not on `cashOre`.
 
 **What is wrong.** `lib/optimizer.ts:236-242` prices both trajectories with
 `evaluateDispatch(slots, …)`, and `evaluateDispatch` (line 506) reads `slots[i].consumptionKwh`

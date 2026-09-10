@@ -8,6 +8,7 @@ import {
   BATTERY_MIN_SOC_KWH,
   planningPrices,
   applyBatterySaveForecast,
+  terminalEnergyValueOre,
 } from '../optimizer';
 import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
 import type { OptimizerSlot } from '../optimizer';
@@ -493,6 +494,186 @@ describe('evaluateDispatch', () => {
       const altValue = evaluateDispatch(slots, alt, startSoc).valueOre;
       expect(altValue).toBeLessThanOrEqual(optimal.valueOre + 0.01);
     }
+  });
+});
+
+describe('evaluateDispatch pricing options (OPTIMIZER-AUDIT.md P1-3)', () => {
+  it('defaults reproduce the unmargined, no-terminal-value pricing exactly', () => {
+    const slots = variedDay(0);
+    const dispatch = optimizeDispatch(slots, 8);
+    expect(evaluateDispatch(slots, dispatch, 8, {})).toEqual(evaluateDispatch(slots, dispatch, 8));
+    expect(evaluateDispatch(slots, dispatch, 8, { loadFactor: 1, terminalValueOrePerKwh: 0 })).toEqual(
+      evaluateDispatch(slots, dispatch, 8),
+    );
+  });
+
+  it('prices a margined plan on the margined problem it was solved against', () => {
+    // The bug this fixes: both trajectories in the deferral sacrifice guard are solved against
+    // load x 1.15 and were then priced at load x 1.0, so NEITHER was optimal under the comparison
+    // metric and the measured "sacrifice" was partly accounting drift — 152.6 vs 196.4 ore in the
+    // measured case, against a 50 ore cap.
+    const slots = variedDay(3);
+    const startSoc = 8;
+    const factor = 1.15;
+    const margined = optimizeDispatch(slots, startSoc, { loadFactor: factor });
+    const unmargined = optimizeDispatch(slots, startSoc);
+
+    // Under the margined metric the margined plan wins; under the unmargined metric the
+    // unmargined one does. Each plan is optimal for its OWN problem, which is the whole point.
+    expect(
+      evaluateDispatch(slots, margined, startSoc, { loadFactor: factor }).valueOre,
+    ).toBeGreaterThanOrEqual(
+      evaluateDispatch(slots, unmargined, startSoc, { loadFactor: factor }).valueOre - 0.01,
+    );
+    expect(evaluateDispatch(slots, unmargined, startSoc).valueOre).toBeGreaterThanOrEqual(
+      evaluateDispatch(slots, margined, startSoc).valueOre - 0.01,
+    );
+  });
+
+  it('the optimum-dominates property holds under a load factor, not just at 1', () => {
+    const slots = variedDay(1);
+    const startSoc = 8;
+    const factor = 1.15;
+    const pricing = { loadFactor: factor };
+    const optimal = evaluateDispatch(slots, optimizeDispatch(slots, startSoc, pricing), startSoc, pricing);
+    const distortions: ((s: OptimizerSlot) => OptimizerSlot)[] = [
+      (s) => ({ ...s, buyPrice: 100, sellPrice: 50 }),
+      (s) => ({ ...s, buyPrice: s.sellPrice + 60, sellPrice: Math.max(0, s.buyPrice - 100) }),
+      (s) => ({ ...s, buyPrice: 400 - s.buyPrice / 2, sellPrice: s.sellPrice / 2 }),
+    ];
+    for (const distort of distortions) {
+      const alt = optimizeDispatch(slots.map(distort), startSoc, pricing);
+      expect(evaluateDispatch(slots, alt, startSoc, pricing).valueOre).toBeLessThanOrEqual(
+        optimal.valueOre + 0.01,
+      );
+    }
+  });
+
+  it('credits leftover energy at the terminal value', () => {
+    const slots = variedDay(0);
+    const dispatch = optimizeDispatch(slots, 8);
+    const plain = evaluateDispatch(slots, dispatch, 8);
+    const credited = evaluateDispatch(slots, dispatch, 8, { terminalValueOrePerKwh: 50 });
+    const leftover = Math.max(0, dispatch[dispatch.length - 1].socAfter - MIN_SOC);
+    expect(credited.valueOre - plain.valueOre).toBeCloseTo(leftover * 50, 6);
+    expect(credited.cashOre).toBe(plain.cashOre); // a credit, not cash
+  });
+});
+
+describe('terminalEnergyValueOre + terminal value in the DP (OPTIMIZER-AUDIT.md P0-3)', () => {
+  const eta = Math.sqrt(BATTERY_RT_EFF);
+
+  it('is the cheapest import in view, converted at the discharge leg and net of wear', () => {
+    const slots = [
+      makeSlot(0, 0, { buyPrice: 120, sellPrice: 20 }),
+      makeSlot(1, 0, { buyPrice: 90, sellPrice: 10 }),
+      makeSlot(2, 0, { buyPrice: 200, sellPrice: 40 }),
+    ];
+    expect(terminalEnergyValueOre(slots)).toBeCloseTo(90 * eta - BATTERY_WEAR_COST_ORE_PER_KWH, 6);
+  });
+
+  it('is 0 for an empty horizon', () => {
+    expect(terminalEnergyValueOre([])).toBe(0);
+  });
+
+  it('ignores sell prices entirely, however high they get', () => {
+    // A `max(minBuy, maxSell)` variant of this function credited 134.5 öre/kWh against a 108 öre
+    // cheapest import on a synthetic winter horizon and filled the battery from the grid for 15 kr
+    // of imaginary value. The credit must stay below the cheapest import or buy-and-bank pays.
+    const sellPeak = [
+      makeSlot(0, 0, { buyPrice: 108, sellPrice: 10 }),
+      makeSlot(1, 0, { buyPrice: 260, sellPrice: 240 }),
+    ];
+    expect(terminalEnergyValueOre(sellPeak)).toBeCloseTo(108 * eta - BATTERY_WEAR_COST_ORE_PER_KWH, 6);
+    expect(terminalEnergyValueOre(sellPeak)).toBeLessThan(108); // the non-hoarding property
+  });
+
+  it('is never negative, even on an all-negative-price horizon', () => {
+    const allNegative = [makeSlot(0, 0, { buyPrice: -50, sellPrice: -60 })];
+    expect(terminalEnergyValueOre(allNegative)).toBe(0);
+  });
+
+  it('stops the free end-of-horizon export when the battery holds more than the load can absorb', () => {
+    // The concrete give-away a zero terminal value invited: the remaining load cannot absorb a
+    // nearly-full battery, so the surplus was exported at whatever the last slots paid — free,
+    // because leftover energy scored 0. Carrying it is worth ~4x more at this wedge.
+    const slots = [
+      makeSlot(22, 0, { buyPrice: 100, sellPrice: 20, consumptionKwh: 0.2 }),
+      makeSlot(22, 1, { buyPrice: 100, sellPrice: 20, consumptionKwh: 0.2 }),
+      makeSlot(22, 2, { buyPrice: 100, sellPrice: 20, consumptionKwh: 0.2 }),
+    ];
+    const dumped = optimizeDispatch(slots, 20);
+    const carried = optimizeDispatch(slots, 20, {
+      terminalValueOrePerKwh: terminalEnergyValueOre(slots),
+    });
+    expect(dumped.reduce((sum, d) => sum + d.batteryToGridKwh, 0)).toBeGreaterThan(1);
+    expect(carried.reduce((sum, d) => sum + d.batteryToGridKwh, 0)).toBeCloseTo(0, 6);
+    expect(carried[carried.length - 1].socAfter).toBeGreaterThan(dumped[dumped.length - 1].socAfter);
+  });
+
+  it('CANNOT be collected by buying: a grid buy purely for the credit is always a loss', () => {
+    // The safety property that makes this derived rather than tuned. Flat prices, no load, no
+    // solar: there is no arbitrage and no need, so the only reason to buy would be the credit.
+    const slots = Array.from({ length: 24 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, { buyPrice: 100, sellPrice: 20 }),
+    );
+    const terminalValueOrePerKwh = terminalEnergyValueOre(slots);
+    expect(terminalValueOrePerKwh).toBeGreaterThan(0);
+
+    const dispatch = optimizeDispatch(slots, 10, { terminalValueOrePerKwh });
+
+    expect(dispatch.reduce((sum, d) => sum + d.gridToBatteryKwh, 0)).toBeCloseTo(0, 6);
+    expect(dispatch.every((d) => d.action !== 'charge')).toBe(true);
+  });
+
+  it('never ends the horizon with LESS energy than the zero-terminal-value plan would', () => {
+    // Weaker than "no longer drains to the floor" on purpose: where load runs right up to the
+    // horizon's end, every buy price exceeds this deliberately-conservative credit, so spending the
+    // battery on that load is correct and the plan still ends low. What must never happen is the
+    // credit making the plan end LOWER — that would mean it is pushing energy out, not holding it.
+    for (const day of [0, 1, 2, 3]) {
+      const slots = variedDay(day);
+      const startSoc = 20;
+      const drained = optimizeDispatch(slots, startSoc);
+      const carried = optimizeDispatch(slots, startSoc, {
+        terminalValueOrePerKwh: terminalEnergyValueOre(slots),
+      });
+      expect(carried[carried.length - 1].socAfter).toBeGreaterThanOrEqual(
+        drained[drained.length - 1].socAfter - 1e-9,
+      );
+    }
+  });
+
+  it('still covers a dear load rather than hoarding for the credit', () => {
+    // The credit must not turn into "never use the battery". Covering load at a price above the
+    // cheapest import in view always beats carrying the energy past the horizon.
+    const slots = [
+      makeSlot(0, 0, { buyPrice: 90, sellPrice: 10, consumptionKwh: 0 }),
+      makeSlot(1, 0, { buyPrice: 400, sellPrice: 10, consumptionKwh: 2.0 }),
+    ];
+    const dispatch = optimizeDispatch(slots, 10, {
+      terminalValueOrePerKwh: terminalEnergyValueOre(slots),
+    });
+    expect(dispatch[1].batteryToLoadKwh).toBeGreaterThan(1.5);
+  });
+
+  it('omitting it (or passing 0) is bit-identical to the historical behaviour', () => {
+    const slots = variedDay(2);
+    const base = optimizeDispatch(slots, 12);
+    expect(optimizeDispatch(slots, 12, { terminalValueOrePerKwh: 0 })).toEqual(base);
+    expect(optimizeDispatch(slots, 12, {})).toEqual(base);
+  });
+
+  it('an explicit endSoc still wins over the terminal value', () => {
+    // The hindsight oracle constrains the end SoC; a terminal credit must not quietly move it.
+    const slots = variedDay(0);
+    const target = 15;
+    const dispatch = optimizeDispatch(slots, 12, {
+      endSoc: target,
+      terminalValueOrePerKwh: 500, // absurdly high on purpose
+    });
+    const step = (BATTERY_KWH - MIN_SOC) / 192;
+    expect(Math.abs(dispatch[dispatch.length - 1].socAfter - target)).toBeLessThanOrEqual(step);
   });
 });
 

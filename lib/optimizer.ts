@@ -237,6 +237,58 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
  *   hindsight, where deferral/uncertainty have no meaning — biasing it would poison the
  *   regret-≥0 invariant (lib/oracle.ts). Only lib/plan.ts sets them, for live plans.
  */
+/**
+ * What a kWh still sitting in the battery at the end of the horizon is worth (öre per STORED kWh).
+ *
+ * The DP's terminal value used to be a flat 0, which is not a small simplification — it means
+ * stored energy is worthless the moment the known prices run out, so the optimum spends the battery
+ * down to the floor at the end of every horizon. Measured 2026-09-10: every scenario, every season,
+ * every horizon length ended at exactly MIN_SOC. That is tolerable only while the horizon reliably
+ * reaches 2-3 days ahead, and it does not: a PlaneraElen outage, an unreleased day-ahead before
+ * 13:00, or (until the previous commit) a DST day or one missing forecast slot collapses it to
+ * today, at which point "terminal value 0" means "empty the battery tonight".
+ *
+ * The value here is derived, not tuned: a stored kWh will, after the horizon, displace an import
+ * somewhere. Valued at the CHEAPEST import in view, converted at the discharge leg's efficiency and
+ * net of the wear that discharge will cost:
+ *
+ *     value = min(buyPrice over the horizon) × η − wear,  floored at 0
+ *
+ * This is deliberately the provably-safe LOWER BOUND on what the energy is worth, and the two
+ * properties that make it safe are worth stating, because both are easy to break by "improving"
+ * the formula:
+ *
+ *  1. **It cannot induce hoarding by buying.** Storing a kWh bought in the cheapest slot costs
+ *     `minBuy / η`; the credit is `minBuy × η − wear`. Since η < 1, `minBuy / η > minBuy × η`, so a
+ *     grid buy made purely to collect the credit is always a loss. The DP will still carry energy
+ *     it already has, and still buy for a real future need — never for the credit itself. Any
+ *     higher figure (an average, a percentile, or — as this function briefly did — a floor at the
+ *     horizon's best SELL price) breaks this: measured on a synthetic winter horizon, a
+ *     `max(minBuy, maxSell)` variant credited 134.5 öre/kWh against a 108 öre cheapest import and
+ *     promptly filled the battery from the grid for 15 kr of imaginary value.
+ *  2. **It cannot induce dumping.** Exporting a stored kWh earns `sell × η`; carrying it earns
+ *     `minBuy × η − wear`. At this site the buy/sell wedge (VAT + skatt/överföring) is ~80 öre, so
+ *     carrying wins comfortably — which is the actual fix here. With a zero terminal value, a
+ *     battery holding more energy than the horizon's remaining load could absorb exported the
+ *     surplus at whatever the last slots' sell price happened to be, for free.
+ *
+ * **What it does NOT fix**, and should not be expected to: it cannot stop the plan spending the
+ * battery on tonight's cheap load instead of tomorrow morning's expensive load, because by
+ * construction the credit is below every buy price in the horizon, so covering load always wins.
+ * Fixing that needs a value ABOVE the cheapest slot, which means giving up property 1 in exchange
+ * for an assumption about prices nobody has seen — a trade to make from replay data (see
+ * OPTIMIZER-AUDIT.md Phase M), not from taste.
+ *
+ * Planning-only, like loadFactor and the risk premiums: the hindsight oracle re-dispatches actual
+ * data and must never carry it, or the regret ≥ 0 invariant stops meaning anything.
+ */
+export function terminalEnergyValueOre(slots: OptimizerSlot[]): number {
+  if (slots.length === 0) return 0;
+  let minBuy = Infinity;
+  for (const slot of slots) if (slot.buyPrice < minBuy) minBuy = slot.buyPrice;
+  return Math.max(0, minBuy * ONE_WAY_EFF - BATTERY_WEAR_COST_ORE_PER_KWH);
+}
+
 export function planningPrices(slot: Pick<OptimizerSlot, 'buyPrice' | 'sellPrice' | 'priceSource'>, forecastRiskPremiumOre: number) {
   if (slot.priceSource !== 'forecast' || forecastRiskPremiumOre <= 0) {
     return { buy: slot.buyPrice, sell: slot.sellPrice };
@@ -256,6 +308,11 @@ export function optimizeDispatch(
     holdEnabled?: boolean;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    /** öre per stored kWh above the floor at the horizon's end (see terminalEnergyValueOre).
+     *  0/omitted keeps the historical terminal-value-0 behaviour bit-identically, which is what
+     *  the hindsight oracle and every existing test rely on. Ignored when endSoc is set — an
+     *  explicit terminal constraint already says what the trajectory must end at. */
+    terminalValueOrePerKwh?: number;
   },
 ): DispatchSlot[] {
   if ((opts?.deferralRateOrePerKwhHour ?? 0) > 0 && slots.length > 0) {
@@ -266,9 +323,17 @@ export function optimizeDispatch(
     const undeferred = dpCore(slots, startSoc, { ...opts, deferralRateOrePerKwhHour: 0 });
     const deferred = dpCore(slots, startSoc, opts);
     const cap = opts?.maxDeferralSacrificeOre ?? MAX_DEFERRAL_SACRIFICE_ORE;
+    // Priced on the problem the two plans were actually SOLVED against — same load margin, same
+    // terminal value. Pricing them at unmargined load (as this did until 2026-09-10) meant neither
+    // trajectory was optimal under the comparison metric, so the "sacrifice" measured accounting
+    // drift as much as deferral cost, and could even come out negative. See evaluateDispatch.
+    const pricing = {
+      loadFactor: opts?.loadFactor,
+      terminalValueOrePerKwh: opts?.terminalValueOrePerKwh,
+    };
     const sacrifice =
-      evaluateDispatch(slots, undeferred, startSoc).valueOre -
-      evaluateDispatch(slots, deferred, startSoc).valueOre;
+      evaluateDispatch(slots, undeferred, startSoc, pricing).valueOre -
+      evaluateDispatch(slots, deferred, startSoc, pricing).valueOre;
     return sacrifice <= cap ? deferred : undeferred;
   }
   return dpCore(slots, startSoc, opts);
@@ -285,6 +350,7 @@ function dpCore(
     holdEnabled?: boolean;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    terminalValueOrePerKwh?: number;
   },
 ): DispatchSlot[] {
   const n = slots.length;
@@ -363,17 +429,27 @@ function dpCore(
       const priceDropOk =
         Number.isFinite(minBuyAhead) && slots[i].sellPrice - minBuyAhead >= HOLD_PRICE_DROP_MARGIN_ORE;
       holdSlotEligible[i] = pvOk && priceDropOk ? 1 : 0;
-      // gate 3 (left-hand side): chargeable solar over the next 12 h — load-netted, capped to the grid limit,
-      // efficiency-corrected. min(...,SLOT_MAX_KWH) prevents curtailed energy from overestimating refill.
+      // gate 3 (left-hand side): chargeable solar over the next 12 h — load-netted, capped to the
+      // battery throughput limit, efficiency-corrected. The cap prevents curtailed energy from
+      // overestimating refill.
       let refill = 0;
       const g3End = Math.min(n, i + HOLD_REFILL_WINDOW_SLOTS);
-      for (let k = i; k < g3End; k++) refill += Math.min(solarRem[k], SLOT_MAX_KWH) * ONE_WAY_EFF;
+      for (let k = i; k < g3End; k++) refill += Math.min(solarRem[k], BATTERY_SLOT_KWH) * ONE_WAY_EFF;
       refillableSolarKwh[i] = refill;
     }
   }
 
   // Backward pass: costToGo[level] = min öre cost from the next slot onward at that SoC level.
-  let costToGo = new Float64Array(SOC_LEVELS); // terminal value 0
+  // Terminal value: a credit (negative cost) for energy left above the floor. 0 = the historical
+  // "leftover energy is worthless" behaviour. See terminalEnergyValueOre for why the figure is
+  // derived from the horizon's own cheapest import rather than tuned.
+  let costToGo = new Float64Array(SOC_LEVELS);
+  const terminalValue = opts?.terminalValueOrePerKwh ?? 0;
+  if (opts?.endSoc === undefined && terminalValue > 0) {
+    for (let level = 0; level < SOC_LEVELS; level++) {
+      costToGo[level] = -Math.max(0, socOf(level) - MIN_SOC_KWH) * terminalValue;
+    }
+  }
   if (opts?.endSoc !== undefined) {
     // Terminal constraint: only the target's own grid level may end the horizon (Infinity
     // elsewhere propagates backward and prunes every path that misses it). Exactly ONE level,
@@ -537,7 +613,7 @@ function dpCore(
       // 'hold' = solar surplus that auto/idle WOULD have stored but is exported here: SoC stayed
       // below the natural floor despite surplus. Can only happen when the auto-charge block has
       // been relaxed (holdOK), so the label is unambiguous. '- step' guards against discretization noise.
-      const naturalFloorSoc = Math.min(soc + Math.min(solarRem[i], SLOT_MAX_KWH) * ONE_WAY_EFF, BATTERY_KWH);
+      const naturalFloorSoc = Math.min(soc + Math.min(solarRem[i], BATTERY_SLOT_KWH) * ONE_WAY_EFF, BATTERY_KWH);
       if (gridForCharging > step) action = 'charge';
       else if (f.solarExport > 1e-6 && socNext < naturalFloorSoc - step) action = 'hold';
       else action = 'idle';
@@ -568,11 +644,25 @@ export interface DispatchEconomics {
 /**
  * Price a dispatch trajectory with the DP's own arithmetic: the same solar-first netting and
  * computeFlows physics the backward pass costs transitions with, so
- * `evaluateDispatch(slots, optimizeDispatch(slots, s), s)` is the optimum's value and any other
- * feasible trajectory over the same slots evaluates ≤ it. Exists for the hindsight-oracle
+ * `evaluateDispatch(slots, optimizeDispatch(slots, s, o), s, o)` is the optimum's value and any
+ * other feasible trajectory over the same slots evaluates ≤ it. Exists for the hindsight-oracle
  * comparison (lib/oracle.ts), where oracle/constrained/continuation trajectories must all be
  * valued on one identical basis — pricing them with separate ad-hoc arithmetic would make the
  * regret numbers reflect accounting drift, not dispatch quality.
+ *
+ * **`opts` must describe the same problem the trajectory was PLANNED against**, and that is not a
+ * detail. The deferral sacrifice guard in `optimizeDispatch` compares two trajectories both solved
+ * against `consumptionKwh × loadFactor` (1.15 in production) while pricing them here at unmargined
+ * load, so neither was optimal under the metric being applied and the difference was not a
+ * "sacrifice" at all. Measured 2026-09-10 on a three-day shoulder-season horizon: the guard's own
+ * number was 152.6 öre against the 196.4 öre it costs on the problem actually solved — a 44 öre
+ * discrepancy against a 50 öre cap, and in another scenario the same mismatch produced a *negative*
+ * sacrifice, i.e. the biased plan scoring better than the optimum it was compared with. See
+ * OPTIMIZER-AUDIT.md P1-3.
+ *
+ * Defaults reproduce the previous behaviour exactly: `loadFactor` 1 and no terminal value. The
+ * hindsight oracle relies on that — it re-dispatches ACTUAL load and must never carry a planning
+ * margin or a terminal credit, or the regret ≥ 0 invariant stops meaning anything.
  *
  * `dispatch` may be a prefix of a longer trajectory's slots (e.g. the first-day slice of a
  * 48 h oracle run); only `dispatch.length` slots are valued.
@@ -586,17 +676,28 @@ export function evaluateDispatch(
   slots: OptimizerSlot[],
   dispatch: Pick<DispatchSlot, 'socAfter'>[],
   startSoc: number,
+  opts?: {
+    /** Multiply every slot's consumptionKwh by this before netting — pass the same factor the
+     *  trajectory was planned against. Default 1. */
+    loadFactor?: number;
+    /** öre per stored kWh left above the floor at the end of `dispatch`, credited to the value.
+     *  Pass the same figure the plan was solved with, or omit for the raw cash-and-wear value. */
+    terminalValueOrePerKwh?: number;
+  },
 ): DispatchEconomics {
+  const loadFactor = opts?.loadFactor ?? 1;
   let cashOre = 0;
   let wearOre = 0;
   let soc = startSoc;
   for (let i = 0; i < dispatch.length; i++) {
-    const load = slots[i].consumptionKwh ?? 0;
+    const load = (slots[i].consumptionKwh ?? 0) * loadFactor;
     const s2l = Math.min(slots[i].solarKwh, load);
     const f = computeFlows(soc, dispatch[i].socAfter, slots[i].solarKwh - s2l, load - s2l);
     cashOre += f.gridExport * slots[i].sellPrice - f.gridImport * slots[i].buyPrice;
     wearOre += BATTERY_WEAR_COST_ORE_PER_KWH * Math.abs(dispatch[i].socAfter - soc);
     soc = dispatch[i].socAfter;
   }
-  return { cashOre, wearOre, valueOre: cashOre - wearOre };
+  const terminalOre =
+    Math.max(0, soc - MIN_SOC_KWH) * (opts?.terminalValueOrePerKwh ?? 0);
+  return { cashOre, wearOre, valueOre: cashOre - wearOre + terminalOre };
 }
