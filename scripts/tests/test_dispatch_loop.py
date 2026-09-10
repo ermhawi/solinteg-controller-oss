@@ -166,6 +166,49 @@ class CheckSolarFundingTests(unittest.TestCase):
         self.assertTrue(skip)
         self.assertGreater(numbers["solar_shortfall_kwh"], 0)
 
+    # ── The plan's own funding attribution (OPTIMIZER-AUDIT.md E1) ────────────────────────────────
+
+    def test_prefers_the_plans_own_grid_attribution_over_re_deriving_it(self):
+        # The DP solved against consumptionKwh x LOAD_FORECAST_MARGIN while inputs_json records the
+        # HONEST unmargined forecast, so netting solar against inputs overstates the planned solar
+        # surplus and therefore OVERSTATES the shortfall -- vetoing charges the plan had already
+        # accounted for as grid-funded. Here inputs claim the charge is fully solar-funded while the
+        # plan says it is entirely grid-funded; with zero live surplus that is reality matching the
+        # plan exactly, so there is nothing to skip.
+        inputs = [{"solarKwh": 3.5, "consumptionKwh": 0.0}]
+        dispatch_slot = {"gridToBatteryKwh": 3.0 / dl.ONE_WAY_EFF}
+        skip, detail, numbers = dl.check_solar_funding(
+            inputs, 0, charge_kwh=3.0, surplus_w=0.0, dispatch_slot=dispatch_slot)
+        self.assertFalse(skip)
+        self.assertAlmostEqual(numbers["solar_shortfall_kwh"], 0.0, places=2)
+        self.assertIn("per plan", detail)
+        # …and without the attribution the same situation trips the guard, which is the bug.
+        skip_rederived, _d, _n = dl.check_solar_funding(inputs, 0, charge_kwh=3.0, surplus_w=0.0)
+        self.assertTrue(skip_rederived)
+
+    def test_falls_back_to_the_forecast_when_the_plan_row_predates_the_field(self):
+        inputs = [{"solarKwh": 3.0, "consumptionKwh": 0.0}]
+        skip, detail, _numbers = dl.check_solar_funding(
+            inputs, 0, charge_kwh=3.0, surplus_w=0.0, dispatch_slot={"socAfter": 5.0})
+        self.assertTrue(skip)
+        self.assertIn("per forecast", detail)
+
+    def test_clamps_a_plan_attribution_larger_than_the_charge_itself(self):
+        # A plan whose attribution disagrees with its own SoC trajectory must not produce a grid
+        # share bigger than the charge it is part of, or planned_solar_kwh would go negative.
+        inputs = [{"solarKwh": 0.0, "consumptionKwh": 0.0}]
+        skip, _detail, numbers = dl.check_solar_funding(
+            inputs, 0, charge_kwh=1.0, surplus_w=0.0, dispatch_slot={"gridToBatteryKwh": 99.0})
+        self.assertFalse(skip)
+        self.assertLessEqual(numbers["solar_shortfall_kwh"], 0.0)
+
+    def test_no_attribution_and_no_inputs_reports_unable_to_check(self):
+        skip, detail, numbers = dl.check_solar_funding([], 0, charge_kwh=2.0, surplus_w=500,
+                                                      dispatch_slot={"socAfter": 5.0})
+        self.assertFalse(skip)
+        self.assertEqual(numbers, {})
+        self.assertIn("not possible", detail)
+
 
 class LiveDischargePowerWTests(unittest.TestCase):
     def setUp(self):
@@ -210,10 +253,28 @@ class LiveDischargePowerWTests(unittest.TestCase):
         self.write_live_json(now, pv_w=500, house_load_w=3500)
         dispatch = [{"gridKwh": 0.0}]
         power_w, _detail, numbers = dl.live_discharge_power_w(dispatch, 0, now, planned_power_w=1000)
-        # required_w = house_load - pv - planned_grid_w = 3500 - 500 - 0 = 3000
-        self.assertEqual(power_w, 3000)
+        # AC need = house_load - pv - planned_grid_w = 3500 - 500 - 0 = 3000 W. Register 50207 is
+        # BATTERY-side, so the cells must give up 3000 / ONE_WAY_EFF to land 3000 W at the AC port;
+        # writing the AC figure straight through under-delivered by the conversion loss, and that
+        # shortfall leaks to the grid at full retail price -- the exact thing this tracking exists
+        # to prevent. Rounded to LIVE_LOAD_ROUND_W.
+        expected = round(3000 / dl.ONE_WAY_EFF / dl.LIVE_LOAD_ROUND_W) * dl.LIVE_LOAD_ROUND_W
+        self.assertEqual(power_w, expected)
+        self.assertGreater(power_w, 3000)
+        self.assertEqual(numbers["required_ac_w"], 3000)
         self.assertEqual(numbers["live_house_load_w"], 3500)
         self.assertEqual(numbers["live_pv_w"], 500)
+
+    def test_an_over_forecast_load_lowers_the_target_symmetrically(self):
+        # The mirror case, and the reason the AC->battery conversion is only applied to a positive
+        # need: a negative required_ac_w means the surplus covers the house, and the caller demotes
+        # the tick to idle/auto rather than scaling a negative number through an efficiency.
+        now = datetime.now(UTC)
+        self.write_live_json(now, pv_w=4000, house_load_w=500)
+        dispatch = [{"gridKwh": 0.0}]
+        power_w, _detail, numbers = dl.live_discharge_power_w(dispatch, 0, now, planned_power_w=1000)
+        self.assertEqual(numbers["required_ac_w"], -3500)
+        self.assertEqual(power_w, 0)  # clamp_power_w floors at 0; decide() then demotes to idle
 
 
 class ApplyTargetRouting(unittest.TestCase):
@@ -684,6 +745,106 @@ class CheckSocDivergenceTests(unittest.TestCase):
         dl.check_soc_divergence(FakeInverter(50.0), 12.8, "t0", "charge", numbers)
         self.assertIn("soc_drift_kwh", numbers)
         self.assertIn("soc_drift_limit_kwh", numbers)
+
+
+class LoadLatestPlanTests(unittest.TestCase):
+    """Plan selection by COVERAGE, not by price_date (OPTIMIZER-AUDIT.md E4).
+
+    A plan spans up to three days, so one computed at 23:50 covers tomorrow in full — but it is
+    logged under yesterday's price_date, and the old date filter therefore stopped finding it at
+    00:00. Every single day the loop reported no_plan and fell back to Auto (which discharges the
+    battery to cover load) until a fresh row appeared, at the hour when prices are usually lowest.
+    """
+
+    def setUp(self):
+        self.con = sqlite3.connect(":memory:")
+        self.con.execute(
+            """CREATE TABLE optimizer_runs (id INTEGER PRIMARY KEY, logged_at TEXT,
+               price_date TEXT, has_tomorrow INTEGER, start_soc_kwh REAL,
+               inputs_json TEXT, dispatch_json TEXT)"""
+        )
+
+    def tearDown(self):
+        self.con.close()
+
+    def insert(self, logged_at: str, price_date: str, first_slot: str, slots: int, has_tomorrow=1):
+        start = datetime.strptime(first_slot, "%Y-%m-%dT%H:%M:%S")
+        dispatch = [
+            {"startTime": (start + timedelta(minutes=15 * i)).strftime("%Y-%m-%dT%H:%M:%S"),
+             "action": "idle", "socAfter": 8.0}
+            for i in range(slots)
+        ]
+        self.con.execute(
+            "INSERT INTO optimizer_runs (logged_at, price_date, has_tomorrow, start_soc_kwh, "
+            "inputs_json, dispatch_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (logged_at, price_date, has_tomorrow, 8.0, json.dumps([]), json.dumps(dispatch)),
+        )
+        self.con.commit()
+
+    def test_uses_yesterdays_plan_just_after_midnight_when_it_covers_now(self):
+        # Logged 2026-02-10 23:50 under price_date 2026-02-10, covering into the 11th.
+        self.insert("2026-02-10T22:50:00+00:00", "2026-02-10", "2026-02-10T23:45:00", 96)
+        now = datetime(2026, 2, 11, 0, 5, tzinfo=STOCKHOLM).astimezone(UTC)
+        start_soc, dispatch, inputs, has_tomorrow = dl.load_latest_plan(self.con, now)
+        self.assertIsNotNone(dispatch)
+        self.assertEqual(start_soc, 8.0)
+        self.assertEqual(has_tomorrow, 1)
+        self.assertIsNotNone(dl.slot_index_for_instant(dispatch, now))
+
+    def test_skips_a_newer_row_that_does_not_cover_now(self):
+        # A newer plan for a future day plus an older one that actually covers now: coverage wins.
+        self.insert("2026-02-10T10:00:00+00:00", "2026-02-10", "2026-02-10T12:00:00", 8)
+        self.insert("2026-02-10T11:00:00+00:00", "2026-02-10", "2026-02-12T00:00:00", 96)
+        now = datetime(2026, 2, 10, 12, 30, tzinfo=STOCKHOLM).astimezone(UTC)
+        _soc, dispatch, _inputs, _ht = dl.load_latest_plan(self.con, now)
+        self.assertIsNotNone(dispatch)
+        self.assertEqual(dispatch[0]["startTime"], "2026-02-10T12:00:00")
+
+    def test_returns_nothing_when_no_recent_plan_covers_now(self):
+        self.insert("2026-02-10T10:00:00+00:00", "2026-02-10", "2026-02-10T12:00:00", 8)
+        now = datetime(2026, 2, 10, 20, 0, tzinfo=STOCKHOLM).astimezone(UTC)
+        self.assertEqual(dl.load_latest_plan(self.con, now), (None, None, None, None))
+
+    def test_looks_no_further_back_than_the_lookback_window(self):
+        # A covering plan buried behind PLAN_LOOKBACK_ROWS newer, non-covering ones is deliberately
+        # NOT found: the right answer then is "no usable plan" (and a replan request), not archaeology.
+        self.insert("2026-02-10T09:00:00+00:00", "2026-02-10", "2026-02-10T12:00:00", 8)
+        for i in range(dl.PLAN_LOOKBACK_ROWS):
+            self.insert(f"2026-02-10T1{i}:00:00+00:00", "2026-02-10", "2026-02-12T00:00:00", 8)
+        now = datetime(2026, 2, 10, 12, 30, tzinfo=STOCKHOLM).astimezone(UTC)
+        self.assertEqual(dl.load_latest_plan(self.con, now), (None, None, None, None))
+
+
+class IsPlannedHoldTests(unittest.TestCase):
+    """The hold decision comes from the plan's own marker (OPTIMIZER-AUDIT.md E5).
+
+    It used to be re-derived from `loadFromGridKwh > 0.05`, which disagreed with the optimizer's own
+    condition (that tests the load BEFORE the hold discharge; the plan publishes what is left after
+    it) for a house load between roughly 200 and 420 W. In that band the plan carried a hold the
+    executor declined, falling back to Auto — which discharges at whatever the house draws, the exact
+    opposite of a hold.
+    """
+
+    def test_the_narrow_band_that_used_to_fall_back_to_auto(self):
+        # loadRem 0.10 kWh/slot (400 W) minus a ~0.055 kWh hold leaves 0.045 published — under the
+        # old 0.05 threshold, so the executor declined a hold the optimizer had planned and modelled.
+        slot = {"loadFromGridKwh": 0.045, "socAfter": dl.BATTERY_FLOOR_KWH + 1.0,
+                "batterySaveDriftKwh": 0.055}
+        self.assertTrue(dl.is_planned_hold(slot))
+
+    def test_an_unmarked_idle_slot_is_not_a_hold(self):
+        slot = {"loadFromGridKwh": 0.5, "socAfter": dl.BATTERY_FLOOR_KWH + 1.0}
+        self.assertFalse(dl.is_planned_hold(slot))
+        self.assertFalse(dl.is_planned_hold({**slot, "batterySaveDriftKwh": 0}))
+
+    def test_never_a_hold_at_or_below_the_floor(self):
+        slot = {"loadFromGridKwh": 0.5, "socAfter": dl.BATTERY_FLOOR_KWH,
+                "batterySaveDriftKwh": 0.055}
+        self.assertFalse(dl.is_planned_hold(slot))
+
+    def test_malformed_fields_degrade_to_no_hold(self):
+        self.assertFalse(dl.is_planned_hold({"batterySaveDriftKwh": "x", "socAfter": 5.0}))
+        self.assertFalse(dl.is_planned_hold({"batterySaveDriftKwh": 0.05}))  # no socAfter
 
 
 class ApplyImportLimitTests(unittest.TestCase):

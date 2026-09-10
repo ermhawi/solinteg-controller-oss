@@ -63,6 +63,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 7 | P1-4 solar premium saturated over a multi-day horizon + guard covered only deferral | ✅ done |
 | 8 | P1-1 forecast price premium was a hoarding incentive | ✅ done (band captured for the refit, not yet consumed) |
 | 9 | P1-5 DC datasheet efficiency used on the AC path | ✅ done |
+| 10 | E1 + E4 + E5 + E7 executor/plan mismatches | ✅ done (E7 was misdiagnosed in the audit — corrected below) |
 
 ---
 
@@ -639,6 +640,15 @@ INVERTER_CONV_EFF` per leg.
 
 ## E1 `check_solar_funding` re-derives the plan's funding split, and gets it wrong
 
+> **Status: ✅ done.** New `planned_grid_charge_kwh()` reads `DispatchSlot.gridToBatteryKwh` — the
+> plan's own attribution, computed with the same load margin as the trajectory — and falls back to
+> the old forecast recomputation only for a plan row predating the field, so an in-flight upgrade
+> keeps working. The value is clamped to the charge itself so a plan whose attribution disagrees with
+> its own SoC trajectory cannot produce a negative solar share. Which source was used is named in the
+> logged `detail` (`per plan` / `per forecast`), so the guard's own history stays interpretable.
+> Tests cover the divergence directly: inputs claiming a fully solar-funded charge against a plan that
+> says grid-funded, with zero live surplus — no skip with the attribution, skip without it.
+
 `scripts/services/dispatch_loop.py:674-675` recomputes
 `planned_surplus = solarKwh − consumptionKwh` from `inputs_json`, which holds the **honest,
 unmargined** load — while the DP netted against `consumptionKwh × 1.15`. So the guard's
@@ -716,6 +726,14 @@ safe. Document the probe result in MODBUS.md's verification table.
 
 ## E4 A plan spanning three days is invisible to the executor after midnight
 
+> **Status: ✅ done.** `load_latest_plan(con, now)` takes the newest `PLAN_LOOKBACK_ROWS` (5) rows and
+> returns the first whose slots actually cover `now`, instead of filtering on `price_date`. The
+> lookback is deliberately shallow: if none of the last few plans covers now, the right answer is "no
+> usable plan" — which already triggers a replan request — not digging through history. `price_date`
+> stays on the row for indexing and analysis. Tests: yesterday's 23:50 plan used at 00:05; a newer
+> non-covering row skipped in favour of an older covering one; nothing returned when none covers now;
+> and the lookback window honoured rather than searched past.
+
 `load_latest_plan` filters `WHERE price_date = ?` with today's Stockholm date
 (`dispatch_loop.py:495`), and `logOptimizerRun` stores `price_date = data.today`. A plan computed
 at 23:50 covers tomorrow in full, but at 00:00 the loop cannot see it: `decide()` returns
@@ -729,6 +747,12 @@ non-`None`. Keep `price_date` for indexing/analysis only. Add a test with a plan
 *d* being used at `d+1 00:05`.
 
 ## E5 Hold-band mismatch: TS plans a hold that Python declines to execute
+
+> **Status: ✅ done.** `is_planned_hold` now tests the plan's own marker (`batterySaveDriftKwh > 0`)
+> plus the SoC floor; the load figure remains a *cap* inside `battery_save_target`, not a decision.
+> `HOLD_LOAD_FROM_GRID_KWH` is gone. A missing marker still means no hold, so an older plan row keeps
+> the safe idle → Auto behaviour. The regression test constructs exactly the 200-420 W band: a slot
+> publishing `loadFromGridKwh` 0.045 with a 0.055 kWh planned drift, which the old threshold rejected.
 
 TS decides a battery-save hold on `loadRem > 0.05` (pre-discharge load,
 `lib/optimizer.ts:60,64`); Python's `is_planned_hold` tests the emitted
@@ -756,7 +780,26 @@ cleanly?), and only then let `battery_save_target` prefer freeze over the 220 W 
 slots with no solar. Keep the emulation as fallback. Set `BATTERY_SAVE_FORECAST_DRAIN_W = 0` for
 frozen slots so plan and execution agree.
 
-## E7 `slot_power_w` ignores efficiency
+## E7 `slot_power_w` ignores efficiency — **the audit had this backwards**
+
+> **Status: ✅ done, but not as written.** The original finding was wrong and is corrected here rather
+> than quietly dropped.
+>
+> `slot_power_w` is **correct as it stands**: register 50207 commands BATTERY-side power (confirmed
+> on-device, MODBUS.md) and `socAfter` is battery-side energy, so the two are already in the same
+> units and no efficiency factor belongs there in either direction. A comment now says so, because the
+> audit re-derived it wrong once and the next reader will too.
+>
+> The real instance of this defect is in `live_discharge_power_w`, which the audit did not flag:
+> `required_w = house_load_w − pv_w − planned_grid_w` is an **AC-side** figure — house load, PV and
+> the plan's grid position are all measured at the AC port / the meter — and it was written straight
+> to the battery-side register. Delivering it at AC needs `required_w / ONE_WAY_EFF` out of the cells,
+> so the battery under-delivered by the conversion loss (~5 % once `EFF_ONE_WAY` started carrying the
+> inverter's legs) and that shortfall leaked to the grid at full retail price — precisely what this
+> tracking exists to prevent. Fixed, with `required_ac_w` now logged alongside the battery target so
+> the two quantities are distinguishable in `control_actions`. The conversion is applied only to a
+> positive need; a negative one means the surplus covers the house and the caller demotes the tick to
+> idle/auto rather than scaling a negative number through an efficiency.
 
 `dispatch_loop.py:565-568` commands `|ΔSoC| / 0.25` kW. `50207` is confirmed **battery-side**
 (MODBUS.md), so this is right for charge (stored = commanded × 0.25) but ~2 % low for discharge,

@@ -2,9 +2,9 @@
 """
 Dispatch loop: applies the web app's DP battery plan to the real inverter.
 
-Reads the latest optimizer_runs row for today (dispatch_json: DispatchSlot[] — the same
-plan shown on the dashboard) from telemetry.db, finds the entry for the current 15-min
-Stockholm slot, and drives the inverter to match it via inverter_control.py's
+Reads the newest optimizer_runs row whose slots COVER the current instant (dispatch_json:
+DispatchSlot[] — the same plan shown on the dashboard) from telemetry.db, finds the entry for the
+current 15-min Stockholm slot, and drives the inverter to match it via inverter_control.py's
 force_charge/force_discharge/return_to_auto. Runs continuously, re-checking every
 DISPATCH_LOOP_INTERVAL_S and re-asserting an unchanged CHARGE/DISCHARGE target at least
 every DISPATCH_REASSERT_S (cheap insurance — see MODBUS.md's setpoint-persistence probe,
@@ -292,9 +292,10 @@ AUTO_ACTIONS = ("idle", "hold")
 BATTERY_KWH = float(os.environ.get("SOLINTEG_BATTERY_KWH", "25.6"))  # usable capacity
 SOC_FLOOR_PCT = float(os.environ.get("SOLINTEG_SOC_FLOOR_PCT", "8"))
 BATTERY_FLOOR_KWH = BATTERY_KWH * SOC_FLOOR_PCT / 100
-# Keep these aligned with lib/chart-utils.ts's hold-band classification. Missing flow fields
-# deliberately do not qualify: older/partial plans must retain the safe idle -> Auto behaviour.
-HOLD_LOAD_FROM_GRID_KWH = 0.05
+# The hold DECISION now comes from the plan's own batterySaveDriftKwh marker (see is_planned_hold),
+# not from a re-derived load threshold that disagreed with the optimizer's own in a 200-420 W band.
+# loadFromGridKwh still caps the target in battery_save_target -- a hold may not discharge more than
+# the house is actually taking from the grid.
 # The forecast drain is measured inverter behaviour, not a reserve margin. The SoC cap below
 # still prevents the target from crossing the operational floor.
 # How far actual SoC may drift from the plan's assumed starting point for this slot before
@@ -511,23 +512,41 @@ def stockholm_date(now: datetime) -> str:
     return now.astimezone(STOCKHOLM).strftime("%Y-%m-%d")
 
 
-def load_latest_plan(con: sqlite3.Connection, price_date: str):
-    """The most recently logged optimizer run for this Stockholm date as
+# How many recent optimizer_runs rows load_latest_plan will consider. Small on purpose: this is a
+# "the newest usable plan" lookup, not a search — if none of the last few rows covers now, the right
+# answer is no plan (and a replan request), not digging further into history.
+PLAN_LOOKBACK_ROWS = 5
+
+
+def load_latest_plan(con: sqlite3.Connection, now: datetime):
+    """The newest logged optimizer run whose slots actually COVER `now`, as
     (start_soc_kwh, dispatch slots, optimizer input slots, has_tomorrow), or
-    (None, None, None, None). inputs_json rides along for the solar-funding check: it holds the
-    per-slot forecast solarKwh/consumptionKwh the dispatch plan was computed from. has_tomorrow
-    (added alongside the replan-trigger feature) is the plan's own record of whether tomorrow's
-    day-ahead prices were released yet at the time it was computed — read here so the
-    awaiting_tomorrow replan trigger in decide() doesn't need a second query."""
-    row = con.execute(
+    (None, None, None, None).
+
+    Selected by coverage rather than by price_date, which is what it used to filter on. A plan spans
+    up to three days (lib/prices.ts merges a forecast horizon), so a plan computed at 23:50 covers
+    tomorrow in full — but it is logged under yesterday's price_date, so at 00:00 the date filter
+    stopped finding it. Every single day, decide() then reported no_plan and the loop fell back to
+    Auto (self-use, which discharges the battery to cover load) until a render or the replan trigger
+    produced a fresh row — at the hour when prices are usually lowest and a hold or charge is most
+    likely what the plan wanted.
+
+    price_date stays on the row for indexing and analysis; it is simply not what "is this plan
+    usable right now" means. inputs_json rides along for the solar-funding check: it holds the
+    per-slot forecast solarKwh/consumptionKwh the dispatch plan was computed from. has_tomorrow is
+    the plan's own record of whether tomorrow's day-ahead prices were released when it was computed,
+    read here so the awaiting_tomorrow replan trigger in decide() doesn't need a second query.
+    """
+    rows = con.execute(
         """SELECT start_soc_kwh, dispatch_json, inputs_json, has_tomorrow FROM optimizer_runs
-           WHERE price_date = ? ORDER BY logged_at DESC LIMIT 1""",
-        (price_date,),
-    ).fetchone()
-    if row is None:
-        return None, None, None, None
-    start_soc_kwh, dispatch_json, inputs_json, has_tomorrow = row
-    return start_soc_kwh, json.loads(dispatch_json), json.loads(inputs_json), has_tomorrow
+           ORDER BY logged_at DESC LIMIT ?""",
+        (PLAN_LOOKBACK_ROWS,),
+    ).fetchall()
+    for start_soc_kwh, dispatch_json, inputs_json, has_tomorrow in rows:
+        dispatch = json.loads(dispatch_json)
+        if slot_index_for_instant(dispatch, now) is not None:
+            return start_soc_kwh, dispatch, json.loads(inputs_json), has_tomorrow
+    return None, None, None, None
 
 
 def slot_index_for_instant(dispatch: list, now: datetime):
@@ -592,7 +611,14 @@ def plan_expected_soc_now(dispatch: list, idx: int, prev_soc: float, now: dateti
 
 
 def slot_power_w(dispatch: list, idx: int, prev_soc: float) -> int:
-    """Battery power needed this slot to realize the planned socAfter transition."""
+    """Battery power needed this slot to realize the planned socAfter transition.
+
+    No efficiency factor here, deliberately, in EITHER direction: register 50207 commands
+    BATTERY-side power (confirmed on-device, MODBUS.md) and socAfter is battery-side energy, so the
+    two are already in the same units. The efficiency lives between the battery and the METER, which
+    is where ONE_WAY_EFF is applied — see live_discharge_power_w, whose target is an AC-side figure
+    and therefore does need converting before it reaches this register.
+    """
     delta_kwh = dispatch[idx]["socAfter"] - prev_soc
     return clamp_power_w(abs(delta_kwh) / SLOT_HOURS * 1000)
 
@@ -663,22 +689,63 @@ def live_discharge_power_w(dispatch: list, idx: int, now: datetime, planned_powe
     pv_w, house_load_w = live
     grid_kwh = dispatch[idx].get("gridKwh")
     planned_grid_w = (float(grid_kwh) / SLOT_HOURS * 1000) if grid_kwh is not None else 0.0
-    required_w = house_load_w - pv_w - planned_grid_w
-    power_w = clamp_power_w(round(required_w / LIVE_LOAD_ROUND_W) * LIVE_LOAD_ROUND_W)
+    # required_w is an AC-SIDE figure: it is derived from house load, PV and the plan's grid
+    # position, all measured at the inverter's AC port / the meter. Register 50207 commands
+    # BATTERY-side power, so delivering required_w at AC needs required_w / ONE_WAY_EFF out of the
+    # cells. Writing the AC figure straight to the register under-delivered by the conversion loss
+    # (~5 % once ONE_WAY_EFF started carrying the inverter's own legs), and that shortfall is
+    # precisely what this tracking exists to stop leaking to the grid at full retail price.
+    required_ac_w = house_load_w - pv_w - planned_grid_w
+    required_battery_w = required_ac_w / ONE_WAY_EFF if required_ac_w > 0 else required_ac_w
+    power_w = clamp_power_w(round(required_battery_w / LIVE_LOAD_ROUND_W) * LIVE_LOAD_ROUND_W)
     detail = (
         f"live load {house_load_w:.0f} W, pv {pv_w:.0f} W, planned grid {planned_grid_w:.0f} W "
-        f"(+import/-export) -> battery {power_w} W (plan-only would be {planned_power_w} W)"
+        f"(+import/-export) -> AC need {required_ac_w:.0f} W -> battery {power_w} W "
+        f"(plan-only would be {planned_power_w} W)"
     )
     numbers = {
         "live_house_load_w": round(house_load_w),
         "live_pv_w": round(pv_w),
         "planned_grid_w": round(planned_grid_w),
+        "required_ac_w": round(required_ac_w),
         "planned_power_w": planned_power_w,
     }
     return power_w, detail, numbers
 
 
-def check_solar_funding(inputs: list, idx: int, charge_kwh: float, surplus_w):
+def planned_grid_charge_kwh(dispatch_slot: dict, inputs_slot: dict | None, need_kwh: float):
+    """How much of this slot's charge the PLAN intended to buy from the grid, in kWh.
+
+    Read straight off the plan (`DispatchSlot.gridToBatteryKwh`) rather than recomputed from the
+    forecast, because the plan is the authority and a recomputation cannot reproduce it: the DP
+    solves against `consumptionKwh x LOAD_FORECAST_MARGIN` (1.15) while inputs_json deliberately
+    records the HONEST, unmargined forecast. Netting solar against the unmargined load overstates
+    the planned solar surplus, understates the planned grid share, and therefore OVERSTATES the
+    shortfall — so the guard vetoed charges the plan had already accounted for as grid-funded, each
+    veto also firing a replan request. See OPTIMIZER-AUDIT.md E1.
+
+    Falls back to the old recomputation for a plan row predating the field, so an in-flight upgrade
+    keeps working; returns None when neither source is available.
+    """
+    raw = dispatch_slot.get("gridToBatteryKwh")
+    if raw is not None:
+        try:
+            # Clamped to the charge itself: a plan whose attribution disagrees with its own SoC
+            # trajectory must not produce a grid share larger than the charge it is part of.
+            return max(0.0, min(float(raw), need_kwh)), "plan"
+        except (TypeError, ValueError):
+            pass
+    if inputs_slot is None:
+        return None, "none"
+    planned_surplus_kwh = max(
+        0.0,
+        float(inputs_slot.get("solarKwh") or 0.0) - float(inputs_slot.get("consumptionKwh") or 0.0),
+    )
+    return need_kwh - min(planned_surplus_kwh, need_kwh), "forecast"
+
+
+def check_solar_funding(inputs: list, idx: int, charge_kwh: float, surplus_w,
+                        dispatch_slot: dict | None = None):
     """Should a forced charge fall back to auto because live solar can't fund it as planned?
 
     The DP prices each charge against the slot's forecast solar surplus; whatever that
@@ -689,26 +756,29 @@ def check_solar_funding(inputs: list, idx: int, charge_kwh: float, surplus_w):
     live surplus implies, and skip when the extra buy would exceed SOLAR_SHORTFALL_KWH.
     Skipping wastes no real solar: auto (self-use) still charges from any actual surplus.
 
+    The plan's intended grid share comes from `planned_grid_charge_kwh` — off the plan itself when
+    the row carries the attribution, which is what makes this guard agree with what the DP actually
+    decided rather than with a recomputation the load margin makes wrong.
+
     surplus_w=None (no live data) skips conservatively when the plan funds more than the
     threshold from solar. Returns (skip, detail, numbers): detail always carries the
     numbers as human-readable text so the threshold can be tuned from telemetry; numbers
     carries the SAME figures structured (solar_shortfall_kwh/solar_shortfall_limit_kwh)
     for the dashboard's gauge — see log_action's detail_json. Empty dict when the check
-    couldn't run at all (no optimizer inputs for this slot).
+    couldn't run at all (no plan attribution and no optimizer inputs for this slot).
     """
-    if not inputs or idx >= len(inputs):
-        return False, "no optimizer inputs for slot — solar-funding check not possible", {}
-    slot = inputs[idx]
+    inputs_slot = inputs[idx] if inputs and idx < len(inputs) else None
     need_kwh = charge_kwh / ONE_WAY_EFF  # battery input energy incl. one-way losses
-    planned_surplus_kwh = max(0.0, float(slot.get("solarKwh") or 0.0) - float(slot.get("consumptionKwh") or 0.0))
-    planned_grid_kwh = need_kwh - min(planned_surplus_kwh, need_kwh)
-    planned_solar_kwh = need_kwh - planned_grid_kwh
+    planned_grid_kwh, source = planned_grid_charge_kwh(dispatch_slot or {}, inputs_slot, need_kwh)
+    if planned_grid_kwh is None:
+        return False, "no plan attribution or optimizer inputs for slot — solar-funding check not possible", {}
+    planned_solar_kwh = max(0.0, need_kwh - planned_grid_kwh)
 
     if surplus_w is None:
         skip = planned_solar_kwh > SOLAR_SHORTFALL_KWH
         detail = (
             f"live solar unknown (live.json missing/stale); plan funds "
-            f"{planned_solar_kwh:.2f} of {need_kwh:.2f} kWh from solar"
+            f"{planned_solar_kwh:.2f} of {need_kwh:.2f} kWh from solar (per {source})"
         )
         # No live surplus reading to compare against, so the "shortfall" here is the
         # whole plan-assumed solar share — the most conservative reading of the risk.
@@ -719,7 +789,7 @@ def check_solar_funding(inputs: list, idx: int, charge_kwh: float, surplus_w):
     projected_grid_kwh = need_kwh - min(live_surplus_kwh, need_kwh)
     shortfall_kwh = projected_grid_kwh - planned_grid_kwh
     detail = (
-        f"charge {need_kwh:.2f} kWh input: planned grid {planned_grid_kwh:.2f} kWh, "
+        f"charge {need_kwh:.2f} kWh input: planned grid {planned_grid_kwh:.2f} kWh (per {source}), "
         f"live surplus {surplus_w:.0f} W -> projected grid {projected_grid_kwh:.2f} kWh, "
         f"solar shortfall {shortfall_kwh:.2f} kWh (threshold {SOLAR_SHORTFALL_KWH})"
     )
@@ -754,7 +824,7 @@ def decide(con: sqlite3.Connection, now: datetime):
     since that needs a live inverter connection decide() doesn't hold.
     """
     price_date = stockholm_date(now)
-    start_soc_kwh, dispatch, inputs, has_tomorrow = load_latest_plan(con, price_date)
+    start_soc_kwh, dispatch, inputs, has_tomorrow = load_latest_plan(con, now)
 
     if dispatch is None:
         # No plan row at all for today — the loop is about to sit idle for lack of data, not
@@ -762,12 +832,13 @@ def decide(con: sqlite3.Connection, now: datetime):
         # than waiting for the next timer-driven render (see the module docstring's REPLAN
         # TRIGGERS section).
         maybe_request_replan("no_plan")
-        return None, "idle", 0, None, False, f"no optimizer plan logged for {price_date}", {}
+        return None, "idle", 0, None, False, f"no logged optimizer plan covers now ({price_date})", {}
 
+    # load_latest_plan only returns a plan that covers `now`, so this cannot be None — kept as a
+    # belt-and-braces guard rather than an assert, because the fail-safe for "no usable plan" is
+    # idle/auto and that must stay true however we got here.
     idx = slot_index_for_instant(dispatch, now)
-    if idx is None:
-        # A plan exists but doesn't cover THIS instant (now is before its first slot or past
-        # its last) — same "treated as idle for lack of a usable plan" situation as above.
+    if idx is None:  # pragma: no cover — unreachable via load_latest_plan
         maybe_request_replan("no_plan")
         return None, "idle", 0, None, False, f"now falls outside the {len(dispatch)}-slot plan logged for {price_date}", {}
 
@@ -855,7 +926,8 @@ def decide(con: sqlite3.Connection, now: datetime):
         try:
             surplus_w = read_live_solar_surplus_w(now)
             charge_kwh = dispatch[idx]["socAfter"] - prev_soc
-            solar_skip, detail, solar_numbers = check_solar_funding(inputs, idx, charge_kwh, surplus_w)
+            solar_skip, detail, solar_numbers = check_solar_funding(
+                inputs, idx, charge_kwh, surplus_w, dispatch[idx])
             numbers.update(solar_numbers)
         except Exception as exc:  # noqa: BLE001
             log.warning("solar-funding check failed (%s) — proceeding without it", exc)
@@ -869,29 +941,34 @@ def decide(con: sqlite3.Connection, now: datetime):
 
 
 def is_planned_hold(slot: dict) -> bool:
-    """Return true only for an idle slot where the plan deliberately leaves load to the grid."""
+    """Return true only for an idle slot the PLAN itself marked as a battery-save hold.
+
+    The marker is `batterySaveDriftKwh > 0`, which the optimizer sets on exactly the slots it modelled
+    the hold on. This used to re-derive the condition from `loadFromGridKwh > 0.05`, and the two
+    disagreed in a narrow band: the optimizer decides on the load BEFORE the hold discharge
+    (loadRem), the plan publishes what is left AFTER it (loadRem − ~0.055 kWh). For a house load
+    between roughly 200 and 420 W the plan therefore carried a hold that the executor declined —
+    falling back to Auto, whose self-use logic discharges at whatever the house draws, which is the
+    exact opposite of a hold. See OPTIMIZER-AUDIT.md E5.
+
+    A missing marker still means no hold, so a plan row from before the field existed keeps the safe
+    idle → Auto behaviour. The load and SoC conditions remain as clamps in battery_save_target; only
+    the DECISION moved to the plan.
+    """
     try:
-        load_from_grid = float(slot.get("loadFromGridKwh") or 0)
+        planned_drift = float(slot.get("batterySaveDriftKwh") or 0)
         soc_after = float(slot["socAfter"])
     except (KeyError, TypeError, ValueError):
         return False
-    return (
-        load_from_grid > HOLD_LOAD_FROM_GRID_KWH
-        and soc_after > BATTERY_FLOOR_KWH
-    )
+    return planned_drift > 0 and soc_after > BATTERY_FLOOR_KWH
 
 
 def battery_save_target(action: str, power_w: int, slot: dict | None = None):
     """Apply the optimizer's physical battery-save drift on explicitly marked hold slots."""
     if action == "idle" and BATTERY_SAVE_W > 0 and slot is not None and is_planned_hold(slot):
-        # A missing field is treated as no drift so persisted plans cannot silently diverge from
-        # their recorded physical trajectory.
-        try:
-            planned_drift = float(slot.get("batterySaveDriftKwh") or 0)
-        except (TypeError, ValueError):
-            planned_drift = 0
-        if planned_drift <= 0:
-            return action, power_w
+        # is_planned_hold already established that this is > 0 (it is the marker it tests), so this
+        # only re-reads the magnitude.
+        planned_drift = float(slot.get("batterySaveDriftKwh") or 0)
         load_cap = float(slot.get("loadFromGridKwh") or 0) / SLOT_HOURS * 1000
         soc_cap = max(0.0, float(slot["socAfter"]) - BATTERY_FLOOR_KWH) / SLOT_HOURS * 1000
         # batterySaveDriftKwh is the optimizer's planned SoC drop. Convert it back to the
