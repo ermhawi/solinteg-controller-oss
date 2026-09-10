@@ -892,6 +892,54 @@ describe('risk-aware planning (deferral bias + solar risk premium — the 2026-0
     expect(soldKwh(deferred, 24, 28)).toBeGreaterThan(10);
   });
 
+  it('the bias is bounded and independent of how many days the price feed returned', () => {
+    // The regression this pins (OPTIMIZER-AUDIT.md P1-2): the ramp used to be measured from the
+    // horizon's END and unbounded, so appending more days of prices raised the surcharge on EVERY
+    // grid-funded kWh — 9.5 öre/kWh at a 1-day horizon, 28.7 at three. Because it multiplies the
+    // energy and not just its timing, extra look-ahead suppressed charging outright. The decision
+    // must depend on the DECISION's own timing, not on the feed's generosity.
+    const cheap = Array.from({ length: 24 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, { buyPrice: 85 + i * 0.05, sellPrice: 10 }),
+    );
+    const peak = Array.from({ length: 4 }, (_, i) => makeSlot(6, i, { buyPrice: 310, sellPrice: 300 }));
+    // Neutral tail: no arbitrage of its own (buy high, sell low), it only makes the horizon longer.
+    const tail = Array.from({ length: 192 }, (_, i) =>
+      makeSlot(7 + Math.floor(i / 4), i % 4, { buyPrice: 200, sellPrice: 5 }),
+    );
+
+    const short = optimizeDispatch([...cheap, ...peak], MIN_SOC, { deferralRateOrePerKwhHour: 0.4 });
+    const long = optimizeDispatch([...cheap, ...peak, ...tail], MIN_SOC, {
+      deferralRateOrePerKwhHour: 0.4,
+    });
+
+    // Same timing decision …
+    expect(boughtKwh(long, 0, 12)).toBeLessThan(0.1);
+    expect(boughtKwh(long, 18, 24)).toBeGreaterThan(10);
+    // … and the same QUANTITY: the extra days must not tax the trade out of existence.
+    expect(boughtKwh(long, 0, 24)).toBeCloseTo(boughtKwh(short, 0, 24), 1);
+  });
+
+  it('the surcharge stops discriminating beyond the deferral window', () => {
+    // Two equal-price buying opportunities, one inside the window and one well outside it, both
+    // serving the same later peak. Inside the window later is preferred; outside there is nothing
+    // left to nudge, so a decision 20 h out must not be pushed further just for being early.
+    const slots = [
+      ...Array.from({ length: 4 }, (_, i) => makeSlot(0, i, { buyPrice: 85, sellPrice: 10 })),
+      ...Array.from({ length: 76 }, (_, i) =>
+        makeSlot(1 + Math.floor(i / 4), i % 4, { buyPrice: 300, sellPrice: 10 }),
+      ),
+      ...Array.from({ length: 4 }, (_, i) => makeSlot(20, i, { buyPrice: 85, sellPrice: 10 })),
+      ...Array.from({ length: 4 }, (_, i) => makeSlot(21, i, { buyPrice: 310, sellPrice: 300 })),
+    ];
+    const deferred = optimizeDispatch(slots, MIN_SOC, {
+      deferralRateOrePerKwhHour: 0.4,
+      deferralHorizonHours: 6, // both cheap windows sit outside a 6 h window except the first
+    });
+    // The 20 h-out window carries no surcharge at all, so the plain price tie decides — and both
+    // windows are equally priced, so the second (adjacent to the peak, no idle holding cost) wins.
+    expect(boughtKwh(deferred, 80, 84)).toBeGreaterThan(10);
+  });
+
   it('sells defer from an evening peak to a near-equal next-morning peak (holds overnight)', () => {
     // A sold kWh can only be re-acquired ~75-80 öre dearer (moms + skatt/överföring), so among
     // near-equal sell prices later strictly dominates: the energy stays available overnight for

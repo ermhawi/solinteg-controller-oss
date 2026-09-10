@@ -4,6 +4,7 @@ import {
   BATTERY_RT_EFF,
   BATTERY_MIN_SOC_KWH,
   BATTERY_WEAR_COST_ORE_PER_KWH,
+  DEFERRAL_HORIZON_HOURS,
   GRID_KW,
   MAX_DEFERRAL_SACRIFICE_ORE,
   HOLD_MIN_PV_KW,
@@ -221,8 +222,10 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
  * @param opts.deferralRateOrePerKwhHour  risk-aware planning (added 2026-07-19, see
  *   DEFERRAL_RATE_ORE_PER_KWH_HOUR in lib/constants.ts for the incident + full rationale):
  *   surcharge the battery's grid-facing actions (grid-funded charge, battery-to-grid sell) by
- *   `rate × hoursUntilHorizonEnd` öre/kWh in the backward pass, so among near-equal prices the
- *   action lands as late as possible and stays cancellable by the next replan. When set, the DP
+ *   `rate × max(0, deferralHorizonHours − hoursFromNow)` öre/kWh in the backward pass, so among
+ *   near-equal prices the action lands as late as possible and stays cancellable by the next
+ *   replan. Bounded and measured from NOW rather than from the horizon's end — see
+ *   DEFERRAL_HORIZON_HOURS for why that distinction cost the feature its usefulness. When set, the DP
  *   runs twice — with and without the bias — and the deferred plan is kept only if it gives up
  *   at most opts.maxDeferralSacrificeOre (default MAX_DEFERRAL_SACRIFICE_ORE) of TRUE-priced
  *   value vs the undeferred optimum, so a genuinely better early price is never deferred over.
@@ -303,6 +306,9 @@ export function optimizeDispatch(
     endSoc?: number;
     loadFactor?: number;
     deferralRateOrePerKwhHour?: number;
+    /** Hours from now over which the deferral bias still discriminates; beyond it the surcharge is
+     *  0. Defaults to DEFERRAL_HORIZON_HOURS. */
+    deferralHorizonHours?: number;
     maxDeferralSacrificeOre?: number;
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
@@ -346,6 +352,7 @@ function dpCore(
     endSoc?: number;
     loadFactor?: number;
     deferralRateOrePerKwhHour?: number;
+    deferralHorizonHours?: number;
     solarRiskPremiumOre?: number;
     holdEnabled?: boolean;
     forecastRiskPremiumOre?: number;
@@ -403,11 +410,19 @@ function dpCore(
   // deliver 3-5× and fill the battery (the 2026-07-19 incident did exactly that); netted
   // surplus would price that day as risk-free, blind on precisely the highest-error days.
   const deferralRate = opts?.deferralRateOrePerKwhHour ?? 0;
+  const deferralHorizonH = opts?.deferralHorizonHours ?? DEFERRAL_HORIZON_HOURS;
   const solarRiskPremiumOre = opts?.solarRiskPremiumOre ?? 0;
   const deferOre = new Float64Array(n);
   const suffixSolarKwh = new Float64Array(n + 1);
   for (let i = n - 1; i >= 0; i--) {
-    deferOre[i] = deferralRate * 0.25 * (n - 1 - i); // 0.25 h per 15-min slot of earliness
+    // Earliness measured from NOW (slot 0 — lib/plan.ts slices the horizon at the current slot
+    // before solving), and zero beyond deferralHorizonH. Measuring it from the horizon's END, as
+    // this did until 2026-09-10, made the surcharge grow with however many days of prices the feed
+    // happened to return: 9.5 öre/kWh at one day, 28.7 at three. Since it multiplies the ENERGY
+    // charged and not just its timing, that turned a tie-breaker into a flat tax on grid charging
+    // — and one the sacrifice guard then rejected wholesale on every plan. See
+    // DEFERRAL_HORIZON_HOURS in lib/constants.ts.
+    deferOre[i] = deferralRate * Math.max(0, deferralHorizonH - 0.25 * i);
     suffixSolarKwh[i] = suffixSolarKwh[i + 1] + slots[i].solarKwh;
   }
 

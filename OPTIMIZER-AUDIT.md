@@ -59,6 +59,7 @@ was shipped with `npm test`, `npm run test:py`, `npm run typecheck`, `npx eslint
 | 3 | E3 site-level import limit (fuse backstop for P0-2's raised budget) | ✅ implemented, gated on an on-device probe |
 | 4 | P0-3 part 2 + G7 horizon robustness (DST days, forecast holes, visibility) | ✅ done |
 | 5 | P1-3 `evaluateDispatch` priced the wrong problem + P0-3 part 1 terminal value | ✅ done (one commit — the guard fix needs the terminal-value option) |
+| 6 | P1-2 deferral ramp unbounded in horizon length | ✅ done |
 
 ---
 
@@ -429,6 +430,27 @@ in ascending quality:
 Until one of those lands, `SOLINTEG_FORECAST_RISK_PREMIUM_ORE=0` is the better setting than 10.
 
 ## P1-2 The deferral ramp scales with horizon length; it was sized for a one-day horizon
+
+> **Status: ✅ done.** The ramp is now measured from **now** and bounded:
+> `deferOre[i] = rate × max(0, DEFERRAL_HORIZON_HOURS − hoursFromNow(i))`, zero beyond the window.
+> Measuring from now is what makes it horizon-independent — the plan's slot 0 *is* now, because
+> `lib/plan.ts` slices the horizon at the current slot before solving, so the surcharge is a property
+> of the decision instead of a property of how many days the price feed happened to return.
+>
+> New constant `DEFERRAL_HORIZON_HOURS` (env `SOLINTEG_DEFERRAL_HORIZON_H`, default 12 h), chosen to
+> span the two shapes the bias exists for: deferring a charge a few hours to see whether the solar
+> arrives, and deferring a sell from an evening peak to a near-equal next-morning one. At the default
+> rate the maximum level is 4.8 öre/kWh — enough to break a near-tie, an order of magnitude below any
+> real daily spread, which is the claim the feature always made for itself.
+>
+> All five existing risk-aware tests pass unchanged (for a horizon inside the window the two forms
+> have the same slope, so the intended behaviour was never the problem — only its level). Two new
+> tests pin what actually broke: appending two neutral days to a scenario must change neither the
+> timing decision **nor the quantity** bought (the old form taxed the trade itself), and the
+> surcharge must stop discriminating beyond its window.
+>
+> The magnitude is still a placed estimate, not a fit — but the feature now survives its own
+> sacrifice guard instead of being rejected on every plan, so it can actually be measured.
 
 **What is wrong.** `deferOre[i] = deferralRate * 0.25 * (n - 1 - i)` (`lib/optimizer.ts:304`) is
 unbounded in `n`, and `n` grew when the horizon was extended to 3 days.

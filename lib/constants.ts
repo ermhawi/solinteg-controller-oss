@@ -113,7 +113,7 @@ export const LOAD_FORECAST_MARGIN = numEnv('SOLINTEG_LOAD_FORECAST_MARGIN', 1.15
  * Risk-aware planning knob 1 of 2: deferral bias on the battery's grid-facing actions
  * (öre per kWh per hour of earliness; 0 disables). Inside the DP, a grid-funded battery
  * charge or a battery-to-grid sell scheduled at slot i is surcharged
- * `rate × hoursUntilHorizonEnd(i)` öre/kWh, so among near-equal-price slots the action
+ * `rate × max(0, DEFERRAL_HORIZON_HOURS − hoursFromNow(i))` öre/kWh, so among near-equal-price slots the action
  * lands as LATE as physically possible (throughput caps still force multi-slot actions to
  * start early enough). Planning-only: the surcharge shapes the backward pass, never the
  * emitted flows, the logged inputs, or the hindsight oracle (which must not carry it —
@@ -133,9 +133,43 @@ export const LOAD_FORECAST_MARGIN = numEnv('SOLINTEG_LOAD_FORECAST_MARGIN', 1.15
  * dominates (energy still sellable, and it can cover a surprise load at full buy-price
  * value). The linear ramp is deliberately unbounded across the horizon; the sacrifice cap
  * below is what keeps a genuinely-better early price from being deferred over.
+ * The linear ramp used to be measured from the horizon's END and unbounded; see
+ * DEFERRAL_HORIZON_HOURS below for why that had to change when the horizon grew past a day.
  * Env: SOLINTEG_DEFERRAL_RATE_ORE.
  */
 export const DEFERRAL_RATE_ORE_PER_KWH_HOUR = numEnv('SOLINTEG_DEFERRAL_RATE_ORE', 0.4);
+
+/**
+ * How far ahead the deferral bias above still discriminates between slots (hours; the surcharge
+ * is `rate × max(0, this − hoursFromNow)`, so its maximum level is `rate × this`).
+ *
+ * Why a cap exists at all. The ramp used to be measured from the horizon's END and left unbounded:
+ * `rate × hoursUntilHorizonEnd`. That is fine while the horizon is one day, which is what it was
+ * designed against — but the horizon later grew to three days, and the surcharge grew with it:
+ * measured 2026-09-10, 9.5 öre/kWh at a 1-day horizon, 19.1 at two days, **28.7 at three**. Because
+ * the surcharge multiplies the ENERGY charged, not just its timing, that stopped being a
+ * tie-breaker and became a flat tax on grid charging: against a real SE2 buy-side spread of
+ * 64-96 öre and a ~62 öre net round-trip margin, a 28.7 öre bias plus the 20 öre solar premium
+ * consumed ~78 % of the trade. And it self-destructed — on a three-day shoulder-season horizon the
+ * deferred plan gave up 152.6 öre of real value against the 50 öre sacrifice cap, so the two-pass
+ * guard threw it away on every plan, paying the cost of the feature (two full DP solves) while
+ * delivering none of its benefit.
+ *
+ * Measuring from NOW instead of from the horizon's end is what makes it horizon-independent: the
+ * plan's slot 0 IS now (lib/plan.ts slices the horizon at the current slot before solving), so
+ * "hours from now" is a property of the decision rather than of how much data the price feed
+ * happened to return. Beyond this window the surcharge is 0 — a far-off action is maximally
+ * cancellable already, and has nothing to be nudged about.
+ *
+ * 12 h is chosen to span the two shapes the bias exists for: deferring a charge by a few hours to
+ * see whether the solar arrives, and deferring a sell from an evening peak to a near-equal
+ * next-morning one. At the default rate the maximum level is then 4.8 öre/kWh — enough to break a
+ * near-tie, an order of magnitude below any real daily spread, which is exactly the claim the
+ * feature has always made for itself. The MAGNITUDE is still a placed estimate, not a fit; refit it
+ * against replay data (OPTIMIZER-AUDIT.md Phase M) rather than by inspection.
+ * Env: SOLINTEG_DEFERRAL_HORIZON_H.
+ */
+export const DEFERRAL_HORIZON_HOURS = numEnv('SOLINTEG_DEFERRAL_HORIZON_H', 12);
 
 /** Premium applied only to forecast slots while optimizing; logged prices remain untouched. */
 export const FORECAST_RISK_PREMIUM_ORE = numEnv('SOLINTEG_FORECAST_RISK_PREMIUM_ORE', 10);
