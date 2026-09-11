@@ -56,6 +56,13 @@ import inverter_control as ic  # noqa: E402
 
 log = logging.getLogger("probe.import_limit")
 
+# Read registers, same ones modbus_poller.py uses. Named rather than inline so the precondition
+# arithmetic below is readable: house load is a DERIVED quantity (inverter AC output minus the
+# meter), not a register.
+REG_METER = 11000        # S32, +ve = export, -ve = import
+REG_INVERTER_AC = 11016  # S32, inverter's own AC output
+REG_PV = 11028           # PV production
+
 SETTLE_S = 25  # a full modbus_poller cycle plus margin, so the inverter has really reacted
 SAMPLES = 6
 SAMPLE_GAP_S = 5
@@ -72,10 +79,10 @@ MIN_PHASE_A_IMPORT_FACTOR = 2.0
 def read_sample(inv: ic.Inverter) -> dict:
     """One observation of everything that separates 'enforced' from 'stored but ignored'."""
     return {
-        "meter_w": inv.read_s32(11000),  # +ve = export, -ve = import (same register the poller uses)
-        "inverter_ac_w": inv.read_s32(11016),
-        "battery_w": inv.battery_power_w(),
+        "meter_w": inv.read_s32(REG_METER),
         "inverter_ac_w": inv.read_s32(REG_INVERTER_AC),
+        "pv_w": inv.read_s32(REG_PV),
+        "battery_w": inv.battery_power_w(),
         "soc_pct": inv.soc_pct(),
         "limit_raw": inv.read_u16(ic.REG_IMPORT_LIMIT),
         "limit_on": inv.read_u16(ic.REG_IMPORT_LIMIT_ENABLE),
@@ -119,7 +126,7 @@ def main(argv: list[str]) -> int:
     log.info("probe start: charge %d W, limit %d W, original mode 0x%X", probe_w, limit_w, original_mode)
 
     # ── Preconditions. Each one, unmet, makes the verdict meaningless rather than merely noisy. ──
-    pre = sample(inv)
+    pre = read_sample(inv)
     battery_kwh = float(os.environ.get("SOLINTEG_BATTERY_KWH", "25.6"))
     headroom = (100.0 - pre["soc_pct"]) / 100.0 * battery_kwh
     if headroom < MIN_HEADROOM_KWH:
@@ -128,14 +135,15 @@ def main(argv: list[str]) -> int:
                   "battery has been drawn down — after the evening peak, or before sunrise.",
                   pre["soc_pct"], headroom, MIN_HEADROOM_KWH)
         return 2
-    surplus = max(0, pre["pv_w"] - (pre["inverter_ac_w"] - pre["meter_w"]))
+    house_w = pre["inverter_ac_w"] - pre["meter_w"]  # poller's own derivation
+    surplus = max(0, pre["pv_w"] - house_w)
     if probe_w <= surplus:
         log.error("live PV surplus is ~%d W and the probe charge is %d W, so the charge would be "
                   "solar-funded and draw nothing from the grid. Raise the charge above the surplus, "
                   "or run this after sunset.", surplus, probe_w)
         return 2
-    log.info("preconditions OK: SoC %.1f%% (%.2f kWh headroom), PV surplus ~%d W",
-             pre["soc_pct"], headroom, surplus)
+    log.info("preconditions OK: SoC %.1f%% (%.2f kWh headroom), pv %d W, house %d W, surplus ~%d W",
+             pre["soc_pct"], headroom, pre["pv_w"], house_w, surplus)
 
     try:
         baseline = observe(inv, "phase0-baseline")
