@@ -58,6 +58,7 @@ Usage:
 """
 import argparse
 import logging
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -68,9 +69,47 @@ import inverter_control as ic  # noqa: E402
 
 log = logging.getLogger("probe.freeze")
 
+MAX_PV_W = 100          # 50208=0 blocks AC output, so in daylight this curtails PV, not the battery
+MIN_SOC_PCT = 30.0      # well clear of freeze_battery's own SOC_FLOOR_PCT + 5 refusal
+MIN_HOUSE_W = 400       # a freeze must be demonstrable against a load Auto would otherwise drain into
+
 REG_METER = 11000  # +ve = export, -ve = import (same register the poller reads)
+REG_INVERTER_AC = 11016  # inverter's own AC output; house load = this - meter
 REG_PV = 11028
 
+
+
+def refuse_if_dispatch_running() -> bool:
+    """True when the dispatch loop is active, which makes any probe result worthless.
+
+    The loop re-asserts its own setpoint every tick, so it stomps whatever a probe commands within
+    ~60 s and the probe measures the loop rather than the inverter. Learned the hard way 2026-09-11:
+    a freeze probe run with the loop up showed the battery discharging 2400-2800 W through every
+    phase and would have concluded "freeze not enforced" — a false negative about the HARDWARE,
+    caused entirely by the controller fighting it. It also left the inverter briefly in EMS with a
+    zeroed setpoint, the one state MODBUS.md says never to enter.
+
+    Deliberately a local copy in each probe rather than a shared helper: the probes put
+    scripts/services on sys.path[0], and a bare `import common` there resolves to the SERVICES
+    common module, not the tools one (see scripts/tools/common.py's own docstring). Ten duplicated
+    lines beats a silent import collision.
+    """
+    try:
+        out = subprocess.run(["systemctl", "is-active", "solinteg-dispatch"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:  # noqa: BLE001 — no systemd, or not managed here: proceed, but say so
+        log.warning("could not check whether solinteg-dispatch is running — if it is, this probe's "
+                    "result will be meaningless")
+        return False
+    if out == "active":
+        log.error("solinteg-dispatch is RUNNING. It re-asserts its own setpoint every tick, so it "
+                  "will stomp whatever this probe commands and the probe will measure the loop "
+                  "instead of the inverter. Stop it first:\n"
+                  "    sudo systemctl stop solinteg-dispatch\n"
+                  "    <run this probe>\n"
+                  "    sudo systemctl start solinteg-dispatch")
+        return True
+    return False
 
 def sample(inv: ic.Inverter) -> dict:
     """Everything that separates 'enforced' from 'stored': the registers AND the physics."""
@@ -78,6 +117,7 @@ def sample(inv: ic.Inverter) -> dict:
         "battery_w": inv.battery_power_w(),
         "soc_pct": inv.soc_pct(),
         "meter_w": inv.read_s32(REG_METER),
+        "inverter_ac_w": inv.read_s32(REG_INVERTER_AC),
         "pv_w": inv.read_s32(REG_PV),
         "mode": inv.work_mode(),
         "cap_out": inv.read_s16(ic.REG_MAX_AC_OUTPUT),
@@ -119,17 +159,39 @@ def main(argv: list[str]) -> int:
                   "baseline. Set SOLINTEG_CONTROL_ARMED=1 for a real probe.")
         return 2
 
+    if refuse_if_dispatch_running():
+        return 2
+
     inv = ic.Inverter()
     ic._install_failsafe(inv)
     original_mode = inv.work_mode()
     log.info("probe start: original mode 0x%X, SoC %.1f%%", original_mode, inv.soc_pct())
 
     first = sample(inv)
-    if first["pv_w"] > 100:
+    if first["pv_w"] > MAX_PV_W:
         log.error("PV is producing %d W — run this at night. 50208=0 blocks the inverter's AC "
                   "output, so in daylight this curtails PV instead of demonstrating a hold.",
                   first["pv_w"])
         return 2
+    # Well clear of the floor, not merely above it: freeze_battery refuses below SOC_FLOOR_PCT + 5,
+    # and running right at that edge would mean a single sample of drift decides whether the probe
+    # completes. It also keeps the battery away from the state whose safety is unverified.
+    if first["soc_pct"] < MIN_SOC_PCT:
+        log.error("SoC %.1f%% is below %.1f%%. A freeze demonstrates 'the battery does not move',"
+                  " which needs a battery with something to hold — and this keeps well clear of the"
+                  " floor, where whether the inverter's own protection still works with AC input"
+                  " blocked is unverified.", first["soc_pct"], MIN_SOC_PCT)
+        return 2
+    # Without load there is nothing for Auto to drain into, so 'held' and 'idle anyway' look
+    # identical and the probe cannot tell them apart.
+    house_w = first["inverter_ac_w"] - first["meter_w"]
+    if house_w < MIN_HOUSE_W:
+        log.error("house load is only %d W. A freeze is the claim that the GRID supplies the house "
+                  "while the battery sits; with no load to supply, a held battery is "
+                  "indistinguishable from an idle one.", house_w)
+        return 2
+    log.info("preconditions OK: pv %d W, SoC %.1f%%, house %d W",
+             first["pv_w"], first["soc_pct"], house_w)
 
     try:
         baseline = observe(inv, "0-baseline", args.samples, args.gap)
@@ -152,7 +214,11 @@ def main(argv: list[str]) -> int:
         ic.restore_ac_limits(inv)
         ic.return_to_auto(inv)
         time.sleep(2)
-        ic.freeze_battery(inv, min_soc_pct=0.0)  # floor guard bypassed: the probe is the test
+        # The floor guard is deliberately NOT bypassed. It exists because whether the inverter's own
+        # on-grid floor (52502/52503) can still grid-charge with AC input blocked is an OPEN
+        # question, and bypassing it would make this probe the one thing that puts the battery in
+        # exactly that unverified state. The precondition below keeps SoC well clear of it anyway.
+        ic.freeze_battery(inv)
         time.sleep(args.settle)
         in_mode = observe(inv, "B-in-mode", args.samples, args.gap)
     except ic.FreezeNotEnforced as exc:

@@ -54,6 +54,7 @@ Usage:
 """
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -83,6 +84,39 @@ MIN_HEADROOM_KWH = 2.0
 # limit" is true for reasons that have nothing to do with the limit.
 MIN_PHASE_A_IMPORT_FACTOR = 2.0
 
+
+
+def refuse_if_dispatch_running() -> bool:
+    """True when the dispatch loop is active, which makes any probe result worthless.
+
+    The loop re-asserts its own setpoint every tick, so it stomps whatever a probe commands within
+    ~60 s and the probe measures the loop rather than the inverter. Learned the hard way 2026-09-11:
+    a freeze probe run with the loop up showed the battery discharging 2400-2800 W through every
+    phase and would have concluded "freeze not enforced" — a false negative about the HARDWARE,
+    caused entirely by the controller fighting it. It also left the inverter briefly in EMS with a
+    zeroed setpoint, the one state MODBUS.md says never to enter.
+
+    Deliberately a local copy in each probe rather than a shared helper: the probes put
+    scripts/services on sys.path[0], and a bare `import common` there resolves to the SERVICES
+    common module, not the tools one (see scripts/tools/common.py's own docstring). Ten duplicated
+    lines beats a silent import collision.
+    """
+    try:
+        out = subprocess.run(["systemctl", "is-active", "solinteg-dispatch"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:  # noqa: BLE001 — no systemd, or not managed here: proceed, but say so
+        log.warning("could not check whether solinteg-dispatch is running — if it is, this probe's "
+                    "result will be meaningless")
+        return False
+    if out == "active":
+        log.error("solinteg-dispatch is RUNNING. It re-asserts its own setpoint every tick, so it "
+                  "will stomp whatever this probe commands and the probe will measure the loop "
+                  "instead of the inverter. Stop it first:\n"
+                  "    sudo systemctl stop solinteg-dispatch\n"
+                  "    <run this probe>\n"
+                  "    sudo systemctl start solinteg-dispatch")
+        return True
+    return False
 
 def read_sample(inv: ic.Inverter) -> dict:
     """One observation of everything that separates 'enforced' from 'stored but ignored'."""
@@ -127,6 +161,9 @@ def main(argv: list[str]) -> int:
     if not ic.ARMED:
         log.warning("DISARMED — every write below is a no-op. Baseline only; set "
                     "SOLINTEG_CONTROL_ARMED=1 for a real probe.")
+
+    if refuse_if_dispatch_running():
+        return 2
 
     inv = ic.Inverter()
     ic._install_failsafe(inv)
