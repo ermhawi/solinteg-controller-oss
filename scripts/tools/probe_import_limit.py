@@ -59,6 +59,14 @@ log = logging.getLogger("probe.import_limit")
 SETTLE_S = 25  # a full modbus_poller cycle plus margin, so the inverter has really reacted
 SAMPLES = 6
 SAMPLE_GAP_S = 5
+# The probe runs three observation phases, so it needs the battery to keep accepting charge for
+# several minutes. At 99% SoC a 3 kW charge fills in about three minutes and the inverter stops —
+# every phase then reads ~0 import and the verdict below would be drawn from nothing.
+MIN_HEADROOM_KWH = 2.0
+# Phase A must produce real grid import, or there is nothing for a cap to cap. If PV happens to fund
+# the whole charge, or the battery filled, import is ~0 in every phase and "import stayed under the
+# limit" is true for reasons that have nothing to do with the limit.
+MIN_PHASE_A_IMPORT_FACTOR = 2.0
 
 
 def read_sample(inv: ic.Inverter) -> dict:
@@ -67,6 +75,7 @@ def read_sample(inv: ic.Inverter) -> dict:
         "meter_w": inv.read_s32(11000),  # +ve = export, -ve = import (same register the poller uses)
         "inverter_ac_w": inv.read_s32(11016),
         "battery_w": inv.battery_power_w(),
+        "inverter_ac_w": inv.read_s32(REG_INVERTER_AC),
         "soc_pct": inv.soc_pct(),
         "limit_raw": inv.read_u16(ic.REG_IMPORT_LIMIT),
         "limit_on": inv.read_u16(ic.REG_IMPORT_LIMIT_ENABLE),
@@ -109,6 +118,25 @@ def main(argv: list[str]) -> int:
     original_mode = inv.work_mode()
     log.info("probe start: charge %d W, limit %d W, original mode 0x%X", probe_w, limit_w, original_mode)
 
+    # ── Preconditions. Each one, unmet, makes the verdict meaningless rather than merely noisy. ──
+    pre = sample(inv)
+    battery_kwh = float(os.environ.get("SOLINTEG_BATTERY_KWH", "25.6"))
+    headroom = (100.0 - pre["soc_pct"]) / 100.0 * battery_kwh
+    if headroom < MIN_HEADROOM_KWH:
+        log.error("SoC %.1f%% leaves only %.2f kWh of headroom (need %.1f). A forced charge would fill "
+                  "the battery mid-probe and every phase would read ~0 import. Run this when the "
+                  "battery has been drawn down — after the evening peak, or before sunrise.",
+                  pre["soc_pct"], headroom, MIN_HEADROOM_KWH)
+        return 2
+    surplus = max(0, pre["pv_w"] - (pre["inverter_ac_w"] - pre["meter_w"]))
+    if probe_w <= surplus:
+        log.error("live PV surplus is ~%d W and the probe charge is %d W, so the charge would be "
+                  "solar-funded and draw nothing from the grid. Raise the charge above the surplus, "
+                  "or run this after sunset.", surplus, probe_w)
+        return 2
+    log.info("preconditions OK: SoC %.1f%% (%.2f kWh headroom), PV surplus ~%d W",
+             pre["soc_pct"], headroom, surplus)
+
     try:
         baseline = observe(inv, "phase0-baseline")
 
@@ -132,6 +160,15 @@ def main(argv: list[str]) -> int:
     a, b = mean_import_w(unlimited), mean_import_w(limited)
     log.info("RESULT  baseline import %.0f W | unlimited %.0f W | limited %.0f W (cap asked: %d W)",
              mean_import_w(baseline), a, b, limit_w)
+    # Phase A is the control. If it did not import meaningfully more than the cap, then "import
+    # stayed under the cap in phase B" is not evidence about the cap — the battery filled, the sun
+    # covered it, or the house stopped drawing.
+    if a < limit_w * MIN_PHASE_A_IMPORT_FACTOR:
+        log.warning("VERDICT: INCONCLUSIVE — the uncapped control phase only imported ~%.0f W against "
+                    "a %d W cap, so phase B proves nothing about enforcement. Most likely the battery "
+                    "filled or PV funded the charge. Re-run with more headroom, a higher --probe_w, or "
+                    "after sunset.", a, limit_w)
+        return 3
     readback_ok = limited[-1]["limit_raw"] == int(round(limit_w / 100)) and limited[-1]["limit_on"] == 1
     if not readback_ok:
         log.error("VERDICT: registers did not read back as written (50009=%d, 50007=%d) — wrong "
