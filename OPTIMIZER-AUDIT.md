@@ -76,7 +76,7 @@ and one refit, all of them gated on data that does not exist yet:
 
 | Open | Why it is not code | Gate |
 |---|---|---|
-| `DISPATCH_IMPORT_LIMIT_W` unset | 50007/50009 are the only control registers here taken from a third-party doc rather than measured; "stored but not enforced" is the realistic failure | run `scripts/tools/probe_import_limit.py` |
+| ~~`DISPATCH_IMPORT_LIMIT_W` unset~~ | ✅ **closed 2026-09-11** — probed in both write orders, enforced, set to 10500 W and verified live | done |
 | `DISPATCH_FREEZE_HOLDS=0` | the freeze's three-register combination is unverified, and the SoC-floor question below it is open | run `scripts/tools/probe_freeze.py` **at night** |
 | `INVERTER_CONV_EFF = 0.97` is a datasheet class, not this unit | needs night-time cycling in telemetry | `scripts/tools/measure-battery-rt-eff.py` |
 | The risk-knob magnitudes are placed estimates | needs weeks of logged plans and readings | `scripts/tools/replay-plans.ts` |
@@ -751,9 +751,23 @@ after validation in shadow mode).
 > journal and does nothing. `MODBUS.md` and `deploy/solinteg.env.example` now say so, with fuse
 > ratings for the common Swedish service sizes.
 >
-> **Operator action required:** run the probe, then set `DISPATCH_IMPORT_LIMIT_W` to the real
-> main-fuse rating. Until then `SOLINTEG_GRID_CAP_W` should stay conservative, because after P0-2
-> the planner genuinely fills it.
+> **✅ CLOSED 2026-09-11 — probed, enforced, and live.** With a 3 kW forced charge against a ~1.4 kW
+> house load: uncapped control imported **3555 W**; capped, the meter fell to **862 W** in-mode and
+> **1311-1362 W** written pre-mode, the inverter throttling the commanded charge to ~1 kW. Both write
+> orders work, so unlike 50208/50209 these are not EMS-scoped and the startup write is sound — that
+> was the one thing that could have made the whole feature decorative.
+> `DISPATCH_IMPORT_LIMIT_W=10500` is set and verified live (`50007=1`, `50009=105`): above the
+> planner's 10 kW budget so it never interferes with a legitimate plan, below the 11027 W this
+> installation has demonstrably passed. Raise or lower once the huvudsäkring is actually confirmed.
+>
+> Getting there cost two corrections worth recording. The first run was **inconclusive and would have
+> reported ENFORCED anyway**: SoC was 99 %, the house load happened to drop to 0.35 kW as it started,
+> and PV funded the whole charge — the site EXPORTED through all three phases, so `b ≈ 0` satisfied
+> the `b <= cap × 1.25` verdict about a register that was never exercised. And the guards written to
+> prevent exactly that were themselves broken (a function name copied from `probe_freeze.py`, a
+> constant whose insertion anchor did not exist, a key `read_sample` never returned) — `ast.parse`
+> passed and hid all three. The probe now refuses on SoC headroom, on PV surplus, and on a control
+> phase that produced too little import, and it tests both write orders permanently.
 
 
 `MODBUS.md:154-155` documents `50007` (import-limit switch) and `50009` (import-limit value,

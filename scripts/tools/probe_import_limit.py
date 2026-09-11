@@ -21,12 +21,20 @@ the meter:
   Phase 0  baseline    observe, no writes (records the resting house load)
   Phase A  unlimited   charge at PROBE_W with no import limit -> the meter should show roughly
                        PROBE_W + house load - PV
-  Phase B  limited     write 50009 = LIMIT_W, 50007 = 1 while the charge is still running.
+  Phase B  in-mode     write 50009 = LIMIT_W, 50007 = 1 while the charge is still running.
                        If enforced, meter import falls to ~LIMIT_W and battery power drops to
                        make room for the house.
+  Phase C  pre-mode    back to auto, write the cap while in General (0x101), THEN force the
+                       charge. This is the order dispatch_loop.apply_import_limit() uses at
+                       service startup, and it is the order that makes 50208/50209 silently
+                       inert (MODBUS.md's write-order rule). If these registers behaved the
+                       same way, the startup write would be decorative.
   restore              50007 = 0, 50207 = 0, original work mode
 
 Reading the result:
+  B and C both ~= LIMIT_W          -> ENFORCED in both orders. Set DISPATCH_IMPORT_LIMIT_W.
+  B enforced, C not                -> the startup write is inert; apply_import_limit() would have
+                                      to be moved inside an EMS session to be worth anything.
   B meter import ~= LIMIT_W        -> ENFORCED. Set DISPATCH_IMPORT_LIMIT_W to your fuse rating.
   B looks like A, readback correct -> stored but NOT enforced. Do NOT rely on it; the software
                                       bounds are all you have, so keep SOLINTEG_GRID_CAP_W
@@ -155,6 +163,16 @@ def main(argv: list[str]) -> int:
         ic.set_import_limit(inv, limit_w)
         time.sleep(SETTLE_S)
         limited = observe(inv, "phaseB-limited")
+
+        # Phase C: the startup order. Clear everything, write the cap in General, THEN charge.
+        log.info("phase C: cap written PRE-MODE (in General), the order apply_import_limit() uses")
+        ic.clear_import_limit(inv)
+        ic.return_to_auto(inv)
+        time.sleep(5)
+        ic.set_import_limit(inv, limit_w)
+        ic.force_charge(inv, probe_w)
+        time.sleep(SETTLE_S)
+        pre_mode = observe(inv, "phaseC-pre-mode")
     finally:
         log.info("restoring: import limit off, target 0, mode 0x%X", original_mode)
         try:
@@ -166,8 +184,9 @@ def main(argv: list[str]) -> int:
             log.error("restore failed (%s) — check the inverter manually", exc)
 
     a, b = mean_import_w(unlimited), mean_import_w(limited)
-    log.info("RESULT  baseline import %.0f W | unlimited %.0f W | limited %.0f W (cap asked: %d W)",
-             mean_import_w(baseline), a, b, limit_w)
+    c = mean_import_w(pre_mode)
+    log.info("RESULT  baseline %.0f W | unlimited %.0f W | in-mode %.0f W | pre-mode %.0f W "
+             "(cap asked: %d W)", mean_import_w(baseline), a, b, c, limit_w)
     # Phase A is the control. If it did not import meaningfully more than the cap, then "import
     # stayed under the cap in phase B" is not evidence about the cap — the battery filled, the sun
     # covered it, or the house stopped drawing.
@@ -183,11 +202,19 @@ def main(argv: list[str]) -> int:
                   "address or scale on this firmware. Do NOT set DISPATCH_IMPORT_LIMIT_W.",
                   limited[-1]["limit_raw"], limited[-1]["limit_on"])
         return 1
-    if b <= limit_w * 1.25:
-        log.info("VERDICT: ENFORCED — import fell to ~%.0f W against a %d W cap. Set "
-                 "DISPATCH_IMPORT_LIMIT_W to your main-fuse rating and record it in MODBUS.md.",
-                 b, limit_w)
+    if b <= limit_w * 1.25 and c <= limit_w * 1.25:
+        log.info("VERDICT: ENFORCED in both write orders — in-mode %.0f W, pre-mode %.0f W against a "
+                 "%d W cap. These are site-level registers, not EMS-scoped, so apply_import_limit()'s "
+                 "startup write is sound. Set DISPATCH_IMPORT_LIMIT_W to your main-fuse rating and "
+                 "record it in MODBUS.md.", b, c, limit_w)
         return 0
+    if b <= limit_w * 1.25:
+        log.warning("VERDICT: enforced IN-MODE only (%.0f W), not pre-mode (%.0f W). The cap works, "
+                    "but dispatch_loop.apply_import_limit() writes it at startup in General, which on "
+                    "this unit is stored and ignored — same shape as the 50208/50209 write-order rule. "
+                    "Do NOT set DISPATCH_IMPORT_LIMIT_W until that write is moved inside an EMS "
+                    "session.", b, c)
+        return 1
     log.warning("VERDICT: stored but NOT enforced — import stayed at ~%.0f W against a %d W cap. "
                 "Leave DISPATCH_IMPORT_LIMIT_W unset and keep SOLINTEG_GRID_CAP_W conservative; "
                 "the planner's own grid-cap check is then the only guard.", b, limit_w)

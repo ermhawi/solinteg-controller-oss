@@ -156,8 +156,23 @@ actual point.
 | 50007 | Import limit switch | U16 | enum | 0=off, 1=on |
 | 50009 | Import limit value | U16 | 0.1 kW | 0..100 kW; enforce ~11 kW fuse cap → 110 |
 
-**50007/50009 are the only site-level (utility-meter) cap available, and the only control
-registers in this table NOT probe-verified on the reference unit.** They are implemented
+**50007/50009 are the only site-level (utility-meter) cap available, and are ✅ PROBE-VERIFIED on
+the reference deployment 2026-09-11 — in BOTH write orders.** With a 3 kW forced charge against a
+~1.4 kW house load, the uncapped control imported **3555 W**; with `50009 = 15`, `50007 = 1` the
+meter fell to **862 W** written in-mode and **1311-1362 W** written PRE-MODE (in General, before any
+EMS entry), the inverter throttling the commanded 3 kW charge down to ~1 kW to stay under the cap.
+
+**So the write-order rule that governs 50208/50209 does NOT apply here.** These are site-level
+registers rather than EMS-scoped ones, which is why `dispatch_loop.apply_import_limit()` can write
+them once at service startup, in General, and have them mean something. That was the open question
+before the probe, and it is the difference between a real fuse guard and a decorative one.
+Set `DISPATCH_IMPORT_LIMIT_W` to your own main-fuse rating (this install: 10500 W, above the
+planner's 10 kW budget so it never interferes, below the 11027 W the installation has demonstrably
+passed). `scripts/tools/probe_import_limit.py` tests both orders and refuses to draw a verdict when
+the control phase produced no real import — its earlier version could report ENFORCED off a phase
+with zero import at all.
+
+**Historical note on the old wording below:** They are implemented
 (`inverter_control.set_import_limit` / `clear_import_limit`, `inverter_control.py import-limit
 <W|off>`) and wired into `dispatch_loop`'s startup, but **off unless `DISPATCH_IMPORT_LIMIT_W`
 is set**, because the addresses and scale come from the third-party doc rather than from testing
