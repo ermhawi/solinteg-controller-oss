@@ -77,7 +77,7 @@ and one refit, all of them gated on data that does not exist yet:
 | Open | Why it is not code | Gate |
 |---|---|---|
 | ~~`DISPATCH_IMPORT_LIMIT_W` unset~~ | ✅ **closed 2026-09-11** — probed in both write orders, enforced, set to 10500 W and verified live | done |
-| `DISPATCH_FREEZE_HOLDS=0` | the freeze's three-register combination is unverified, and the SoC-floor question below it is open | run `scripts/tools/probe_freeze.py` **at night** |
+| ~~`DISPATCH_FREEZE_HOLDS=0`~~ | ✅ **closed 2026-09-11** — probed at night: the documented freeze is not implemented on this firmware (it imports and charges instead of holding). Stays off; the emulation remains the hold. | done |
 | `INVERTER_CONV_EFF = 0.97` is a datasheet class, not this unit | needs night-time cycling in telemetry | `scripts/tools/measure-battery-rt-eff.py` |
 | The risk-knob magnitudes are placed estimates | needs weeks of logged plans and readings | `scripts/tools/replay-plans.ts` |
 | `DISPATCH_LIVE_LOAD_TRACKING_CHARGE=shadow` | deliberately observes before acting | review `detail_json.tracked_charge_w` vs `planned_power_w` |
@@ -859,7 +859,22 @@ Add a Python test for the 200–420 W band.
 > disarmed no-op — that last one was a real bug the tests caught: the confirmation poll would spin
 > for the full timeout and report a freeze failure that never happened.
 >
-> **Operator action required:** run the probe at night before setting `DISPATCH_FREEZE_HOLDS=1`.
+> **✅ PROBED 2026-09-11 — and the answer is no.** Run at night (PV 93 W) with the dispatch loop
+> stopped, SoC 78 %, house load ~780 W: the baseline discharged **+717 W** to cover the house; with
+> `50208=0`, `50209=0`, `50207=0` the inverter **charged the battery at ~500 W while importing
+> 1.3 kW** — the opposite of a hold — and all three registers read back as written the whole time.
+> Neither write order helps. `freeze_battery` correctly detected the battery still moving, raised
+> `FreezeNotEnforced` and reverted to auto.
+>
+> `DISPATCH_FREEZE_HOLDS` stays off on this installation; the ~220 W battery-save emulation remains
+> the only working hold. The feature ships as written because another adopter's firmware may differ,
+> and because the failure is now self-detecting rather than silent.
+>
+> **The design decision that mattered was refusing to trust the readback.** Every register reported
+> exactly what was written. Only the measured battery power exposed that nothing was held. A
+> readback-keyed implementation — the obvious one, and the one the first draft of this work had —
+> would have reported a successful freeze while the inverter bought 1.3 kW from the grid on every
+> planned hold slot, overnight, invisibly.
 
 `BATTERY_SAVE_W = 220` keeps the inverter in EMS BattCtrl at a small discharge because parking at
 0 W blocks self-consumption. But `MODBUS.md:211` documents a genuine freeze:

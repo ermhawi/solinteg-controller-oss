@@ -262,6 +262,31 @@ is "the battery does not move". Write the caps after mode entry, and do not trus
 as proof. `50208 = 0` itself is still unprobed — the probe deliberately never wrote it, so
 export stayed open and the blast radius stayed small.
 
+**❌ PROBED 2026-09-11 — the documented freeze DOES NOT WORK on this unit/firmware.** Measured at
+night (PV 93 W), dispatch loop stopped, SoC 78 %, house load ~780 W:
+
+| phase | battery | meter | registers |
+|---|---|---|---|
+| baseline (General) | **+717 W discharging** to cover the house | ~0 | normal |
+| caps written pre-mode | **−500 W CHARGING** | **−1300 W IMPORTING** | 50208=0, 50209=0, 50207=0, 0x303 |
+| caps written in-mode (`freeze_battery`'s order) | −535 W | — | refused, reverted |
+
+So `50208 = 0` + `50209 = 0` + `50207 = 0` does not mean "exchange nothing" here. It produced the
+**opposite** of a hold: the inverter imported 1.3 kW from the grid and charged the battery, while all
+three registers read back as written throughout. Neither write order helps — this is not the
+pre-mode enforcement rule, it is the recipe itself not being implemented as documented on this
+firmware.
+
+**Two things this validates.** First, `50208 = 0` was the unprobed half of the recipe and is now
+probed: it does not block AC output the way `50209 = 0` blocks AC input. Second, and more
+importantly, `freeze_battery`'s **physical verification is load-bearing, not belt-and-braces**.
+Every register read back correctly; only the measured battery power (30258) revealed that nothing
+was held. A readback-trusting implementation would have reported a successful freeze while the
+inverter bought 1.3 kW.
+
+`DISPATCH_FREEZE_HOLDS` therefore stays **off** on this installation, and the ~220 W battery-save
+emulation remains the only working hold. Re-probe after a firmware update before reconsidering.
+
 **Implemented 2026-09-10 (`inverter_control.freeze_battery`), following that rule exactly:**
 mode → *confirm the inverter reports `0x303`, abort to auto if it never does* → priority → caps →
 target → **verify physically** by reading 30258 after a settle, because the readback provably
