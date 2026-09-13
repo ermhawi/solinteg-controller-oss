@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +18,27 @@ let telemetry: typeof import('../telemetry');
  */
 const HOURS_PER_DAY = 24;
 
+/**
+ * The clock is PINNED for this file, because the fixture below is anchored to `now` and the
+ * profile it exercises buckets by Stockholm-local hour. Against a live clock that combination
+ * failed roughly half the time, for two independent reasons — both measured by sweeping the
+ * anchor (see the commit that added this):
+ *
+ *  1. `start` was `Date.now() - days×86 400 000`, so its MINUTE-OF-HOUR was whatever the wall
+ *     clock happened to be. The second reading of each hour is written at `t + 30 min`, which
+ *     lands in the NEXT UTC hour whenever that minute is ≥ 30 — carrying the previous hour's
+ *     value with it. The volatile hour then appears twice: once genuinely, once as a smear.
+ *     Failed for anchor minutes 30-59, i.e. 50% of runs. (2026-09-13 it ran at :48.)
+ *  2. Even anchored to a whole hour, a trailing window that CONTAINS a DST transition maps one
+ *     UTC hour onto two local ones, splitting the volatile hour the same way. Failed on 8 days
+ *     of 2026 — the two windows following the March and October transitions.
+ *
+ * A fixed whole-hour instant in mid-July has neither property, and makes the file deterministic
+ * rather than merely lucky. Nothing here is testing DST or clock behaviour; that belongs in
+ * prices.test.ts / horizon.test.ts, which cover it deliberately.
+ */
+const PINNED_NOW = new Date('2026-07-15T00:00:00.000Z');
+
 function seed(days: number, loadForDayHour: (day: number, hourUtc: number) => number) {
   const db = new DatabaseSync(DB_PATH);
   db.exec(`CREATE TABLE readings (
@@ -25,7 +46,8 @@ function seed(days: number, loadForDayHour: (day: number, hourUtc: number) => nu
     pv_w INTEGER, grid_w INTEGER, battery_w INTEGER, inverter_ac_w INTEGER,
     house_load_w INTEGER, work_mode TEXT, work_mode_raw INTEGER)`);
   const ins = db.prepare('INSERT INTO readings (timestamp, house_load_w) VALUES (?, ?)');
-  // Anchored a few days back from now so the whole window falls inside the trailing period.
+  // Anchored a whole number of days back from the pinned instant, which is itself on a whole
+  // hour — so every reading lands at :00 or :30 of the hour it belongs to.
   const start = new Date(Date.now() - days * 86_400_000);
   for (let d = 0; d < days; d++) {
     for (let h = 0; h < HOURS_PER_DAY; h++) {
@@ -39,6 +61,7 @@ function seed(days: number, loadForDayHour: (day: number, hourUtc: number) => nu
 }
 
 afterAll(() => {
+  vi.useRealTimers();
   try {
     rmSync(DB_PATH, { force: true });
   } catch {
@@ -46,10 +69,36 @@ afterAll(() => {
   }
 });
 
+/** Stockholm's UTC offset in minutes, computed independently of lib/ so this guard does not
+ *  lean on the code it is guarding. */
+function stockholmOffsetMinutes(d: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Stockholm',
+    timeZoneName: 'longOffset',
+  }).formatToParts(d);
+  const name = parts.find((p) => p.type === 'timeZoneName')!.value; // e.g. "GMT+02:00"
+  const m = name.match(/GMT([+-])(\d{2}):(\d{2})/);
+  if (!m) return 0; // "GMT" alone means +00:00
+  return (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3]));
+}
+
+describe('the pinned instant this file depends on', () => {
+  // Both properties are load-bearing (see PINNED_NOW's comment). Asserted rather than trusted,
+  // because moving PINNED_NOW to a date that breaks either would surface as the SHAPE assertions
+  // below failing — which reads like the quantile regressed, not like the fixture moved.
+  it('sits on a whole hour and spans no DST transition', () => {
+    expect(PINNED_NOW.getTime() % 3_600_000).toBe(0);
+    const windowStart = new Date(PINNED_NOW.getTime() - 14 * 86_400_000);
+    expect(stockholmOffsetMinutes(windowStart)).toBe(stockholmOffsetMinutes(PINNED_NOW));
+  });
+});
+
 describe('readTrailingLoadProfile — per-hour high quantile', () => {
   beforeAll(async () => {
     // Hour 20 is volatile (a big evening load on one day in three), hour 3 is nearly constant.
     // That contrast is the entire point: a flat margin says the same thing about both.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(PINNED_NOW);
     seed(14, (day, hourUtc) => {
       if (hourUtc === 20) return day % 3 === 0 ? 4000 : 800;
       if (hourUtc === 3) return 300;
