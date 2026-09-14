@@ -281,6 +281,14 @@ sudo systemctl enable --now solinteg-backup.timer
 sudo systemctl start solinteg-backup.service   # fire once now to test
 ls -la /opt/solinteg/backups                   # should show telemetry-*.db.gz + solinteg.env-*.bak
 ```
+> **If that test run fails with `backup failed: unable to open database file`**, check who owns
+> `BACKUP_DIR`. backup.py creates it when absent, so a clean install is fine — but if the
+> directory already exists owned by someone other than `solinteg` (e.g. left behind by an
+> earlier manual `sudo` step), `mkdir(exist_ok=True)` succeeds as a no-op and the failure
+> surfaces later, when sqlite tries to open its `partial-*.db` intermediate inside it. The
+> message names the database rather than the directory, so it reads like a corrupt or missing
+> telemetry.db. Fix with `sudo chown solinteg:solinteg /opt/solinteg/backups`. Observed
+> 2026-09-14 on an install whose backups/ held unrelated root-owned build snapshots.
 This is LOCAL-only - it protects against DB corruption or a bad query, not a dead disk. If you
 have another always-on machine (a NAS, another PC), the simplest offsite option is periodically
 pulling the backups directory over Tailscale, e.g.:
