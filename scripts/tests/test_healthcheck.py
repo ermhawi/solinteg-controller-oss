@@ -450,6 +450,54 @@ class AlertStateMachineTests(unittest.TestCase):
         self.assertEqual(self.sent, [])
 
 
+class WeatherStaleTests(unittest.TestCase):
+    """check_weather_stale — and the knob that switches it off.
+
+    The disable path is the one worth pinning. An install with no Ecowitt station has a
+    permanently empty weather table, so without the knob this check reports a standing fault
+    on every run forever. That is worse than not checking: healthcheck.py's whole dedup and
+    cooldown design exists to keep alerts meaningful, and one permanent false positive trains
+    you to ignore the rest. Observed 2026-09-14 on an install carrying the example file's
+    placeholder Ecowitt credentials (MAC AA:BB:CC:DD:EE:FF, API said "Invalid application Key").
+    """
+
+    @staticmethod
+    def _db(latest=None):
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE TABLE weather (timestamp TEXT)")
+        if latest is not None:
+            con.execute("INSERT INTO weather VALUES (?)", (latest.isoformat(),))
+        return con
+
+    def test_empty_table_reports_no_data(self):
+        with mock.patch.object(hc, "WEATHER_STALE_S", 1800):
+            issue = hc.check_weather_stale(self._db(), NOW)
+        self.assertIsNotNone(issue)
+        self.assertEqual(issue[0], "weather_no_data")
+
+    def test_stale_reading_reports_stale(self):
+        with mock.patch.object(hc, "WEATHER_STALE_S", 1800):
+            issue = hc.check_weather_stale(self._db(NOW - timedelta(seconds=3600)), NOW)
+        self.assertIsNotNone(issue)
+        self.assertEqual(issue[0], "weather_stale")
+
+    def test_fresh_reading_is_quiet(self):
+        with mock.patch.object(hc, "WEATHER_STALE_S", 1800):
+            self.assertIsNone(hc.check_weather_stale(self._db(NOW - timedelta(seconds=60)), NOW))
+
+    def test_zero_disables_the_check_even_with_an_empty_table(self):
+        # The no-station case: the table is empty and stays empty, and that is not a fault.
+        with mock.patch.object(hc, "WEATHER_STALE_S", 0):
+            self.assertIsNone(hc.check_weather_stale(self._db(), NOW))
+
+    def test_zero_disables_the_check_even_when_genuinely_stale(self):
+        # Not just the empty case — a station switched off mid-life must go quiet too, or the
+        # knob would only work on a fresh install.
+        with mock.patch.object(hc, "WEATHER_STALE_S", 0):
+            self.assertIsNone(
+                hc.check_weather_stale(self._db(NOW - timedelta(days=30)), NOW))
+
+
 class SolarSourceDegradedTests(unittest.TestCase):
     """check_solar_source_degraded — is the plan still made from real weather?
 

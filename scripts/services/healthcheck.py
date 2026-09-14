@@ -77,7 +77,13 @@ Environment (beyond notify.py's own NTFY_*):
                                 the poller's 30 s interval)
   WEATHER_STALE_S               weather table max age before flagging (default 1800 — the
                                 station's own upload cadence varies more than the poll
-                                interval, so this needs more slack than the poller's)
+                                interval, so this needs more slack than the poller's).
+                                **0 disables the weather-station checks entirely** — set that
+                                when the install has no Ecowitt station, or the empty table
+                                reports as a standing fault forever and trains you to ignore
+                                every other alert in this file. Does NOT affect
+                                check_weather_fallback_dead, which watches the solar-forecast
+                                Thredds tier and is unrelated to the station.
   CONTROL_ERROR_WINDOW_S        how far back to look for error_reverted/error_revert_failed
                                 rows (default 900)
   DISK_FREE_MIN_PCT            minimum free space on / before alerting (default 10) - a full
@@ -210,6 +216,11 @@ def check_poller_stale(con: sqlite3.Connection, now: datetime):
 
 
 def check_weather_stale(con: sqlite3.Connection, now: datetime):
+    # No station on this install -> nothing to be stale. Returning None rather than never
+    # registering the check keeps the resolve sweep able to clear a previously-raised issue if
+    # someone turns the station off after it had been reporting.
+    if WEATHER_STALE_S <= 0:
+        return None
     latest = safe_scalar(con, "SELECT MAX(timestamp) FROM weather")
     if latest is None:
         return ("weather_no_data", notify.PRIORITY_LOW, "Solinteg: no weather data yet",
