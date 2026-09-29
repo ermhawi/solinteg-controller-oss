@@ -135,7 +135,15 @@ export function mergePriceHorizon(
 export function slotsInStockholmDay(date: string): number {
   const [y, m, d] = date.split('-').map(Number);
   const start = stockholmMidnightUtc(y, m - 1, d);
-  const next = stockholmMidnightUtc(y, m - 1, d + 1); // Date.UTC handles month/year overflow
+  // Normalize the next date before passing it to stockholmMidnightUtc, which checks the
+  // round-tripped calendar components. Passing d + 1 directly crosses month-end with an
+  // unnormalized month/day pair; in CEST the fallback can then make a normal day look 25 h.
+  const nextDate = new Date(Date.UTC(y, m - 1, d + 1));
+  const next = stockholmMidnightUtc(
+    nextDate.getUTCFullYear(),
+    nextDate.getUTCMonth(),
+    nextDate.getUTCDate(),
+  );
   return Math.round((next.getTime() - start.getTime()) / 900_000);
 }
 

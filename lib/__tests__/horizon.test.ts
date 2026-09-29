@@ -15,6 +15,7 @@ function day(date: string, count: number, startSlot = 0) {
 describe('slotsInStockholmDay', () => {
   it('is 96 on an ordinary day', () => {
     expect(slotsInStockholmDay('2026-09-02')).toBe(96);
+    expect(slotsInStockholmDay('2026-09-30')).toBe(96);
     expect(slotsInStockholmDay('2026-01-15')).toBe(96);
   });
 
@@ -35,6 +36,11 @@ describe('slotsInStockholmDay', () => {
 });
 
 describe('trimIncompleteTerminalDays', () => {
+  it('keeps the complete September 30, 2026 day after September 29', () => {
+    const slots = [...day('2026-09-29', 96), ...day('2026-09-30', 96)];
+    expect(trimIncompleteTerminalDays(slots, '2026-09-29')).toHaveLength(192);
+  });
+
   it('keeps today and complete future days but drops a partial terminal day', () => {
     const slots = [
       ...day('2026-09-01', 2, 90), // today, already partly elapsed
