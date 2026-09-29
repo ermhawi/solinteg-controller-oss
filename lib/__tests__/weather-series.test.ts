@@ -52,26 +52,35 @@ describe('buildWeatherSeries', () => {
     expect(sample[2]).toBe(expectedPvKw(500, july));
   });
 
-  it('does not emit the raw uncalibrated model output', () => {
-    // The regression this pins: ghiToKwh() alone runs 13–43% low against measured production,
-    // so an uncalibrated pvKw would sit systematically below the forecast series it is compared
-    // against — and it reaches an HA sensor, where it reads as a measurement.
+  it('keeps the raw model output when the configured calibration is 1.0', () => {
+    // A new site without measured production history deliberately has a unity calibration.
+    // Do not carry another install's fitted multiplier into the weather sensor.
     const july = 6;
     const [sample] = buildWeatherSeries([row({ solar_wm2: 500 })], july);
     const uncalibrated = Math.round(ghiToKwh(500) * 100) / 100;
-    expect(sample[2]).not.toBe(uncalibrated);
-    expect(sample[2]).toBeGreaterThan(uncalibrated);
+    expect(solarCalibrationByMonth[july]).toBe(1);
+    expect(sample[2]).toBe(uncalibrated);
   });
 
   it('indexes the calibration table by month0 without an off-by-one', () => {
-    // June (1.26) and July (1.16) differ, so a stray `- 1` would show up here.
+    // Use distinct fixture factors because this site's production table correctly has no fitted
+    // history yet (all 1.0). Restore the shared config even if an assertion fails.
     const june = 5;
     const july = 6;
-    const [inJune] = buildWeatherSeries([row({ solar_wm2: 500 })], june);
-    const [inJuly] = buildWeatherSeries([row({ solar_wm2: 500 })], july);
-    expect(inJune[2]).toBe(expectedPvKw(500, june));
-    expect(inJuly[2]).toBe(expectedPvKw(500, july));
-    expect(inJune[2]).not.toBe(inJuly[2]);
+    const savedJune = solarCalibrationByMonth[june];
+    const savedJuly = solarCalibrationByMonth[july];
+    try {
+      solarCalibrationByMonth[june] = 1.26;
+      solarCalibrationByMonth[july] = 1.16;
+      const [inJune] = buildWeatherSeries([row({ solar_wm2: 500 })], june);
+      const [inJuly] = buildWeatherSeries([row({ solar_wm2: 500 })], july);
+      expect(inJune[2]).toBe(expectedPvKw(500, june));
+      expect(inJuly[2]).toBe(expectedPvKw(500, july));
+      expect(inJune[2]).not.toBe(inJuly[2]);
+    } finally {
+      solarCalibrationByMonth[june] = savedJune;
+      solarCalibrationByMonth[july] = savedJuly;
+    }
   });
 
   it('skips rows without an irradiance reading', () => {
