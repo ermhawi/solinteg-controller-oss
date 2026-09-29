@@ -1250,6 +1250,20 @@ def needs_apply(target, last_target, effective_action: str, effective_power: int
         unaffected. The caller keeps the APPLIED power in last_target while suppressing, so slow
         creep accumulates against it and still applies once it sums past the band.
     """
+    # A replan may publish a different action for the slot that is already being
+    # executed. Do not let a battery-save discharge be replaced by a charge in
+    # the middle of that same 15-minute slot: the next tick would otherwise see
+    # a genuine action change and apply it immediately. The next slot may still
+    # change direction normally.
+    mid_slot_drift_to_charge = (
+        last_target is not None
+        and target[0] == last_target[0]
+        and last_target[1] == "discharge"
+        and target[1] == "charge"
+    )
+    if mid_slot_drift_to_charge:
+        return False
+
     small_power_move = (
         last_target is not None
         and target[:2] == last_target[:2]

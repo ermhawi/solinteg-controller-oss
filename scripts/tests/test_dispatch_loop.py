@@ -579,6 +579,21 @@ class NeedsApplyTests(unittest.TestCase):
         last = ("t0", "charge", 100)
         self.assertTrue(dl.needs_apply(("t0", "discharge", 100), last, "discharge", 100, False))
 
+    def test_battery_save_discharge_is_not_replaced_by_charge_mid_slot(self):
+        # A replan may change the plan while the current slot is already executing.
+        # Keep the applied battery-save direction until the next slot boundary.
+        last = ("t0", "discharge", 50)
+        self.assertFalse(dl.needs_apply(("t0", "charge", 2100), last, "charge", 2100, False))
+
+    def test_due_reassert_does_not_override_mid_slot_discharge_guard(self):
+        # Periodic reassertions must not push a mid-slot reversal through the same guard.
+        last = ("t0", "discharge", 50)
+        self.assertFalse(dl.needs_apply(("t0", "charge", 2100), last, "charge", 2100, True))
+
+    def test_discharge_to_charge_is_allowed_at_the_next_slot(self):
+        last = ("t0", "discharge", 50)
+        self.assertTrue(dl.needs_apply(("t1", "charge", 2100), last, "charge", 2100, False))
+
 
 class NextLastTargetTests(unittest.TestCase):
     """What gets recorded as "the inverter is now at this target" after an apply.
