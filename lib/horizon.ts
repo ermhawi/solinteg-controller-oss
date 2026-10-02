@@ -57,9 +57,11 @@ export function trimIncompleteTerminalDays<T extends Pick<OptimizerSlot, 'startT
 function isContiguous(day: Pick<OptimizerSlot, 'startTime'>[]): boolean {
   for (let i = 1; i < day.length; i++) {
     if (minutesOfDay(day[i].startTime) - minutesOfDay(day[i - 1].startTime) !== 15) {
-      // The repeated hour on the fall-back day steps backwards by 60 min exactly once; that is
-      // the feed being correct, not a hole.
-      if (minutesOfDay(day[i].startTime) - minutesOfDay(day[i - 1].startTime) === -45) continue;
+      const previous = day[i - 1].startTime.slice(11, 16);
+      const current = day[i].startTime.slice(11, 16);
+      // These are the only valid local-label discontinuities: the fall-back duplicate
+      // 02:45 → 02:00 and spring-forward skip 01:45 → 03:00.
+      if ((previous === '02:45' && current === '02:00') || (previous === '01:45' && current === '03:00')) continue;
       return false;
     }
   }

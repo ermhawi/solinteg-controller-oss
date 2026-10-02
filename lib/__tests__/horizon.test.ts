@@ -50,11 +50,15 @@ describe('trimIncompleteTerminalDays', () => {
     expect(trimIncompleteTerminalDays(slots, '2026-09-01')).toHaveLength(98);
   });
 
-  it('keeps a full spring-forward day, which is 92 slots and not partial', () => {
-    // The old `length !== 96` test dropped this day and everything after it, collapsing the
-    // horizon on exactly the day the DP would otherwise plan across. See OPTIMIZER-AUDIT.md P0-3.
-    const slots = [...day('2026-03-28', 96), ...day('2026-03-29', 92)];
-    expect(trimIncompleteTerminalDays(slots, '2026-03-28')).toHaveLength(188);
+  it('keeps a full spring-forward day with the real 01:45 → 03:00 label jump', () => {
+    // Stockholm spring-forward is 2027-03-28 (02:00–02:45 does not exist).
+    // Feed labels are naive local times, so the transition is 01:45 → 03:00 (+75 min).
+    const springForward = [...day('2027-03-28', 8), ...day('2027-03-28', 84, 12)];
+    expect(springForward).toHaveLength(92);
+    expect(springForward[7].startTime).toBe('2027-03-28T01:45:00');
+    expect(springForward[8].startTime).toBe('2027-03-28T03:00:00');
+    const slots = [...day('2027-03-27', 96), ...springForward];
+    expect(trimIncompleteTerminalDays(slots, '2027-03-27')).toHaveLength(188);
   });
 
   it('keeps a full fall-back day, which is 100 slots', () => {
