@@ -488,6 +488,58 @@ describe('computeOracleDay', () => {
     expect(Math.abs(acc.gapOre)).toBeLessThan(60);
   });
 
+  it('prices achieved grid charging wear on the same efficiency basis as dispatch evaluation', () => {
+    const readings = constantReadings(DAY_MS, 48, { pv_w: 0, house_load_w: 0, grid_w: 0, soc_kwh: 12 })
+      .map((r) => {
+        const slot = Math.floor((Date.parse(r.timestamp) - DAY_MS) / SLOT_MS);
+        const chargedSlots = Math.max(0, Math.min(slot, 4));
+        return {
+          ...r,
+          soc_kwh: 10 + chargedSlots * 0.5,
+          grid_w: slot >= 0 && slot < 4 ? -(0.5 / ONE_WAY_EFF / 0.25) * 1000 : 0,
+        };
+      });
+    const row = computeOracleDay(makeInputs({ readings, achievedCashOre: 0 }));
+    const wearRate = Number(row.params.wearOrePerKwh);
+    expect(row.achievedWearOre).toBeCloseTo((2 * wearRate) / ONE_WAY_EFF, 1);
+  });
+
+  it('does not charge achieved wear for a battery increase funded by solar surplus', () => {
+    const solarExportW = ((0.8 - 0.2 - 0.5 / ONE_WAY_EFF) / 0.25) * 1000;
+    const readings = constantReadings(DAY_MS, 48, { pv_w: 0, house_load_w: 0, grid_w: 0, soc_kwh: 12 })
+      .map((r) => {
+        const slot = Math.floor((Date.parse(r.timestamp) - DAY_MS) / SLOT_MS);
+        const chargedSlots = Math.max(0, Math.min(slot, 4));
+        const solarFundedSlot = slot >= 0 && slot < 4;
+        return {
+          ...r,
+          pv_w: solarFundedSlot ? 3200 : 0,
+          house_load_w: solarFundedSlot ? 800 : 0,
+          soc_kwh: 10 + chargedSlots * 0.5,
+          grid_w: solarFundedSlot ? solarExportW : 0,
+        };
+      });
+    const row = computeOracleDay(makeInputs({ readings, achievedCashOre: 0 }));
+    expect(row.achievedWearOre).toBeCloseTo(0, 1);
+  });
+
+  it('prices achieved battery discharge wear with the dispatch one-way efficiency', () => {
+    const readings = constantReadings(DAY_MS, 48, { pv_w: 0, house_load_w: 0, grid_w: 0, soc_kwh: 10 })
+      .map((r) => {
+        const slot = Math.floor((Date.parse(r.timestamp) - DAY_MS) / SLOT_MS);
+        const dischargedSlots = Math.max(0, Math.min(slot, 20));
+        const discharging = slot >= 0 && slot < 20;
+        return {
+          ...r,
+          house_load_w: discharging ? 0.5 * ONE_WAY_EFF / 0.25 * 1000 : 0,
+          soc_kwh: 20 - dischargedSlots * 0.5,
+        };
+      });
+    const row = computeOracleDay(makeInputs({ readings, achievedCashOre: 0 }));
+    const wearRate = Number(row.params.wearOrePerKwh);
+    expect(row.achievedWearOre).toBeCloseTo(10 * wearRate * ONE_WAY_EFF, 0);
+  });
+
   it('flags a disarmed day as shadow, not ok', () => {
     const row = computeOracleDay(makeInputs({ armedEvents: armedAllDay(DAY_MS, 0) }));
     expect(row.status).toBe('shadow');

@@ -673,26 +673,25 @@ export function computeOracleDay(inputs: OracleDayInputs): OracleDayRow {
   // Continuation value of the SoC the system ACTUALLY handed to D+1.
   const contDispatch = optimizeDispatch(slotsCont, endSoc.soc);
 
-  // Achieved wear on the DP's own basis (Σ|ΔSoC| across day-D slot boundaries), so the wear
-  // term subtracts identically on both sides. Boundary SoC gaps carry the last known value
-  // (Δ = 0 across the gap) — consistent with the coverage flagging above.
-  let achievedWearOre = 0;
+  // The achieved wear must use the same economics as evaluateDispatch: charging from grid is
+  // scaled for conversion efficiency, while charge attributable to free solar surplus is excluded.
+  // Boundary SoC gaps carry the last known value (Δ = 0 across the gap), consistent with the
+  // coverage diagnostics above.
   let prevSoc = startSoc.soc;
   /** The trajectory the battery ACTUALLY followed, in the shape evaluateDispatch prices.
    *  A boundary with no reading repeats the last known SoC, so the Δ across a gap is counted
-   *  once at the next real boundary — identical to the wear walk it shares this loop with. */
+   *  once at the next real boundary. */
   const achievedTrajectory: { socAfter: number }[] = [];
   for (let i = 1; i <= nD; i++) {
     const b = socAtInstant(soc, dayStartMs + i * SLOT_MS);
-    if (b) {
-      achievedWearOre += BATTERY_WEAR_COST_ORE_PER_KWH * Math.abs(b.soc - prevSoc);
-      prevSoc = b.soc;
-    }
+    if (b) prevSoc = b.soc;
     achievedTrajectory.push({ socAfter: prevSoc });
   }
 
-  // Day D's real trajectory priced on the model's own basis (see diagnostics.accounting below).
-  const achievedModelCashOre = evaluateDispatch(slotsD, achievedTrajectory, startSoc.soc).cashOre;
+  // Day D's real trajectory priced on the model's own basis (cash and wear share one evaluator).
+  const achievedModel = evaluateDispatch(slotsD, achievedTrajectory, startSoc.soc);
+  const achievedWearOre = achievedModel.wearOre;
+  const achievedModelCashOre = achievedModel.cashOre;
 
   // Intraday: best possible day D forced to end where the real day ended. The target comes
   // from a real trajectory under the same physics, so it is reachable by construction; guard
