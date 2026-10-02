@@ -57,8 +57,7 @@ function stockholmTimeLabel(isoUtc: string): string {
 }
 
 export function toneFor(action: LatestControlAction): DispatchTone {
-  // 'hold' groups with 'idle': the hardware is in auto either way (apply_target maps hold to
-  // return_to_auto), so nothing is being actively forced — AKTIV would overstate it.
+  // Planner hold maps to Auto; physical freeze is a distinct executor action.
   if (action.outcome === 'applied') {
     return action.plannedAction === 'idle' || action.plannedAction === 'hold' ? 'PLANERAT' : 'AKTIV';
   }
@@ -75,6 +74,7 @@ export function actionLabel(action: LatestControlAction['plannedAction'], outcom
   if (outcome === 'error_reverted' || outcome === 'error_revert_failed') return 'Fel';
   if (action === 'charge') return 'Laddning';
   if (action === 'discharge') return 'Urladdning';
+  if (action === 'freeze') return 'Frysning';
   // The plan's intent, not the hardware's state — the inverter does sit in auto during a hold
   // slot, but labelling it 'Auto' would hide that the plan chose to decline the surplus.
   if (action === 'hold') return 'Hålläge';
@@ -120,6 +120,9 @@ function buildReason(a: LatestControlAction): { reason: string; warning?: string
       }
       const priceNote = d.buyOre != null ? ` (slipper köpa för ${d.buyOre.toFixed(1)} öre/kWh)` : '';
       return { reason: `Laddar ur ${powerKw.toFixed(1)} kW — täcker husets förbrukning${priceNote}.` };
+    }
+    if (a.plannedAction === 'freeze') {
+      return { reason: 'Batteriet hålls stilla med aktiv freeze-policy.' };
     }
     // idle
     if (a.detail && (a.detail.startsWith('no optimizer plan') || a.detail.startsWith('now falls outside'))) {

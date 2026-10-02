@@ -50,7 +50,7 @@ function pyTuple(name: string): string[] {
 describe('Action contract: lib/optimizer.ts <-> scripts/services/dispatch_loop.py', () => {
   it('every Action the optimizer can emit is accounted for by the executor', () => {
     const union = tsActionUnion();
-    const handled = [...pyTuple('FORCED_ACTIONS'), ...pyTuple('AUTO_ACTIONS'), ...pyTuple('EXECUTOR_ACTIONS')].sort();
+    const handled = [...pyTuple('FORCED_ACTIONS'), ...pyTuple('AUTO_ACTIONS')].sort();
 
     // The assertion message carries the fix, because whoever trips this is most likely adding
     // an action in TS without knowing dispatch_loop.py exists.
@@ -67,7 +67,7 @@ describe('Action contract: lib/optimizer.ts <-> scripts/services/dispatch_loop.p
 
   it('the executor does not claim actions the optimizer cannot emit', () => {
     const union = tsActionUnion();
-    const handled = [...pyTuple('FORCED_ACTIONS'), ...pyTuple('AUTO_ACTIONS'), ...pyTuple('EXECUTOR_ACTIONS')].sort();
+    const handled = [...pyTuple('FORCED_ACTIONS'), ...pyTuple('AUTO_ACTIONS')].sort();
 
     // The reverse direction: a stale entry here is dead code, and worse, it makes the contract
     // look satisfied when it is not.
@@ -102,13 +102,18 @@ describe('Action contract: lib/optimizer.ts <-> scripts/services/dispatch_loop.p
     }
   });
 
+  it('executor-only actions never reuse a planner Action name', () => {
+    const overlap = pyTuple('EXECUTOR_ACTIONS').filter((action) => tsActionUnion().includes(action));
+    expect(overlap, `executor-only action(s) ${JSON.stringify(overlap)} collide with planner Action`).toEqual([]);
+  });
+
   it('parses a known-good baseline (guards the regexes themselves)', () => {
     // If a refactor changes the shape of either declaration, the parsers above would start
     // returning [] and every assertion would vacuously pass. Pin the current values so the
     // test fails loudly instead of going quiet.
     expect(tsActionUnion()).toEqual(['charge', 'discharge', 'hold', 'idle']);
     expect(pyTuple('FORCED_ACTIONS')).toEqual(['charge', 'discharge']);
-    expect(pyTuple('AUTO_ACTIONS')).toEqual(['idle']);
-    expect(pyTuple('EXECUTOR_ACTIONS')).toEqual(['hold']);
+    expect(pyTuple('AUTO_ACTIONS')).toEqual(['hold', 'idle']);
+    expect(pyTuple('EXECUTOR_ACTIONS')).toEqual(['freeze']);
   });
 });

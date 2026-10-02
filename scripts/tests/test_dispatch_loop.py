@@ -367,6 +367,25 @@ class LiveChargePowerWTests(unittest.TestCase):
         self.assertEqual(power_w, 0)
 
 
+class PlannerHoldDecisionTests(unittest.TestCase):
+    def test_legacy_planner_hold_becomes_idle_before_executor_guards(self):
+        now = stockholm("2026-01-15T00:00:00").astimezone(UTC)
+        dispatch = [{
+            "startTime": "2026-01-15T00:00:00",
+            "action": "hold",
+            "socAfter": 10.0,
+            "gridKwh": 0.0,
+        }]
+        con = sqlite3.connect(":memory:")
+        with mock.patch.object(dl, "load_latest_plan", return_value=(10.0, dispatch, [], 1)), \
+             mock.patch.object(dl, "read_live_soc_kwh", return_value=10.0), \
+             mock.patch.object(dl, "read_live_solar_surplus_w", return_value=0.0):
+            decision = dl.decide(con, now)
+        self.assertEqual(decision[1], "idle")
+        self.assertIsNone(decision[3])
+        con.close()
+
+
 class ApplyTargetRouting(unittest.TestCase):
     """apply_target() is the whole executor half of the ACTION CONTRACT (see dispatch_loop.py's
     note beside FORCED_ACTIONS, and lib/__tests__/action-contract.test.ts for the TS half).
@@ -485,9 +504,15 @@ class ApplyTargetRouting(unittest.TestCase):
         self.assertIn("unrecognised dispatch action", joined)
         self.assertIn("curtail", joined)
 
-    def test_hold_routes_to_a_real_freeze(self):
-        self.assertEqual(dl.apply_target(object(), "hold", 0), None)
+    def test_freeze_routes_to_a_real_freeze(self):
+        self.assertEqual(dl.apply_target(object(), "freeze", 0), None)
         self.assertEqual(self.calls, [("freeze", None)])
+
+    def test_planner_hold_falls_back_to_auto_with_explicit_warning(self):
+        with self.assertLogs("solinteg.dispatch", level="WARNING") as caught:
+            dl.apply_target(object(), "hold", 0)
+        self.assertEqual(self.calls, [("auto", None)])
+        self.assertIn("planner hold", "\n".join(caught.output).lower())
 
     def test_an_unenforced_freeze_latches_off_and_does_not_retry(self):
         # A freeze the inverter accepts but does not enforce is the documented pre-mode failure
@@ -498,7 +523,7 @@ class ApplyTargetRouting(unittest.TestCase):
             ic.FreezeNotEnforced("battery still at 900 W after freeze"))
         self.assertFalse(dl._freeze_unavailable)
         with self.assertLogs("solinteg.dispatch", level="ERROR"):
-            dl.apply_target(object(), "hold", 0)
+            dl.apply_target(object(), "freeze", 0)
         self.assertTrue(dl._freeze_unavailable)
 
         # …and with the latch set, a marked hold slot no longer asks for a freeze.
@@ -769,6 +794,14 @@ class ApplyDecisionTests(unittest.TestCase):
         self.assertEqual(outcome, "applied")
         self.assertTrue(in_auto)
         self.assertEqual(self.applied, [("idle", 0)])
+
+    def test_legacy_planner_hold_records_auto_state(self):
+        outcome, in_auto = dl.apply_decision(
+            self.con, "t0", "hold", 0, expected_soc_kwh=None, solar_skipped_now=False,
+            detail="legacy planner hold", numbers={}, loop_in_auto=False)
+        self.assertEqual(outcome, "applied")
+        self.assertTrue(in_auto)
+        self.assertEqual(self.applied, [("hold", 0)])
 
     def test_a_failed_apply_reverts_to_auto_and_still_logs(self):
         self.inverter_fail_on = {"soc"}  # blow up inside the divergence check

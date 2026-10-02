@@ -28,7 +28,7 @@ export interface ControlActionDetail {
 export interface LatestControlAction {
   timestamp: string; // UTC ISO — when the dispatch loop logged this decision
   slotTime: string | null; // naive Stockholm local slot start, matches DispatchSlot.startTime
-  plannedAction: 'charge' | 'discharge' | 'idle' | 'hold'; // mirrors optimizer.ts's Action — 'hold' rows only occur on shadow (disarmed) installs, see lib/plan.ts
+  plannedAction: 'charge' | 'discharge' | 'idle' | 'hold' | 'freeze'; // executor can log freeze; optimizer only emits charge/discharge/idle/hold
   powerW: number | null;
   armed: boolean;
   outcome: string; // 'applied' | 'skipped_divergence' | 'skipped_solar_shortfall' | 'error_reverted' | 'error_revert_failed'

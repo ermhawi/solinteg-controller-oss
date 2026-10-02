@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS control_actions (
     id             INTEGER PRIMARY KEY,
     timestamp      TEXT NOT NULL,   -- UTC ISO
     slot_time      TEXT,            -- naive Stockholm local slot start, matches DispatchSlot.startTime
-    planned_action TEXT NOT NULL,   -- 'charge' | 'discharge' | 'idle'
+    planned_action TEXT NOT NULL,   -- planner actions plus executor-only 'freeze'
     power_w        INTEGER,
     armed          INTEGER NOT NULL,
     outcome        TEXT NOT NULL,   -- 'applied' | 'skipped_divergence' | 'skipped_solar_shortfall'

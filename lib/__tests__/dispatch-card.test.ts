@@ -33,9 +33,10 @@ describe('toneFor', () => {
   it('is PLANERAT for an applied idle', () => {
     expect(toneFor(action({ outcome: 'applied', plannedAction: 'idle' }))).toBe('PLANERAT');
   });
-  it('is PLANERAT for an applied hold — the hardware sits in auto, nothing is forced', () => {
-    expect(toneFor(action({ outcome: 'applied', plannedAction: 'hold' }))).toBe('PLANERAT');
+  it('is AKTIV for an applied executor freeze', () => {
+    expect(toneFor(action({ outcome: 'applied', plannedAction: 'freeze' }))).toBe('AKTIV');
   });
+
   it('is AVVAKTAR for skipped_divergence', () => {
     expect(toneFor(action({ outcome: 'skipped_divergence' }))).toBe('AVVAKTAR');
   });
@@ -70,8 +71,8 @@ describe('actionLabel', () => {
   it('labels an applied idle as Auto', () => {
     expect(actionLabel('idle', 'applied')).toBe('Auto');
   });
-  it('labels hold as Hålläge — the plan declined the surplus, which Auto would hide', () => {
-    expect(actionLabel('hold', 'applied')).toBe('Hålläge');
+  it('labels an applied executor freeze explicitly', () => {
+    expect(actionLabel('freeze', 'applied')).toBe('Frysning');
   });
   it('labels a skipped idle as Överhoppad', () => {
     expect(actionLabel('idle', 'skipped_divergence')).toBe('Överhoppad');

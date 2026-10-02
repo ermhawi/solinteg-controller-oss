@@ -291,21 +291,22 @@ SLOT_HOURS = 0.25
 # apply_target() below forces a setpoint for FORCED_ACTIONS and returns to auto for everything
 # else. That "everything else" is the hazard: an action type added on the TS side but unknown
 # here does not fail - it silently takes the auto path, and auto CHARGES from solar surplus.
-# For a hold-style action ("don't charge, export the surplus") that is the exact opposite of
-# what was planned, and nothing in the plan-vs-actual telemetry would name the cause.
+# For a planner `hold` action ("don't charge, export the surplus") that is the exact opposite of
+# what was planned, and nothing in the plan-vs-actual telemetry would name the cause. Planner `hold`
+# therefore maps explicitly to Auto as a legacy-plan fallback; physical freeze is named `freeze`.
 #
 # So the vocabulary is declared here rather than left implicit, and
 # lib/__tests__/action-contract.test.ts asserts these two tuples together cover every member of
 # the TS union. Adding an action there fails that test until it is either given a branch below
 # or listed in AUTO_ACTIONS as a deliberate auto mapping. See CONTRIBUTING.md.
 FORCED_ACTIONS = ("charge", "discharge")
-AUTO_ACTIONS = ("idle",)
-# 'hold' is an EXECUTOR-ONLY action and deliberately not part of the TS Action union: the optimizer
+AUTO_ACTIONS = ("hold", "idle")
+# 'freeze' is an EXECUTOR-ONLY action and deliberately not part of the TS Action union: the optimizer
 # says "idle" and marks the slot with batterySaveDriftKwh, and this loop decides HOW to realise that
 # — Auto, the ~220 W battery-save emulation, or a real freeze (see FREEZE_HOLDS). Keeping it out of
 # the shared vocabulary is what stops lib/__tests__/action-contract.test.ts from demanding a TS
 # counterpart for a purely local execution strategy.
-EXECUTOR_ACTIONS = ("hold",)
+EXECUTOR_ACTIONS = ("freeze",)
 
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
@@ -959,7 +960,14 @@ def decide(con: sqlite3.Connection, now: datetime):
     prev_soc = expected_prev_soc_kwh(dispatch, idx, start_soc_kwh)
     planned_power_w = slot_power_w(dispatch, idx, prev_soc) if planned_action != "idle" else 0
     action, power_w = battery_save_target(planned_action, planned_power_w, dispatch[idx])
-    save_mode = planned_action == "idle" and action in ("discharge", "hold")
+    legacy_planner_hold = planned_action == "hold"
+    if legacy_planner_hold:
+        # Old persisted plans may still contain the planner's semantic hold (export surplus).
+        # Auto cannot realize that trajectory, but routing it as idle keeps the no-forced-write,
+        # no-divergence, and no-reassert guards consistent; physical freeze is a distinct action.
+        log.warning("legacy planner hold at slot=%s cannot be realized — falling back to idle/auto", slot_time)
+        action, power_w = "idle", 0
+    save_mode = planned_action == "idle" and action in ("discharge", "freeze")
     if not save_mode:
         # SoC-floor guard: when idle and live SoC is near the floor, escalate to a
         # recovery charge BEFORE the inverter's BMS triggers its own uncontrolled buy.
@@ -991,14 +999,16 @@ def decide(con: sqlite3.Connection, now: datetime):
                 numbers["next_action_time"] = future["startTime"]
                 break
 
-    solar_skip, detail = False, ""
-    if action == "hold":
+    solar_skip, detail = False, (
+        "legacy planner hold cannot be realized — falling back to idle/auto" if legacy_planner_hold else ""
+    )
+    if action == "freeze":
         # A real freeze (see inverter_control.freeze_battery). No power target to compute and no
         # divergence guard: the plan's own trajectory for this slot is "SoC does not move", which is
         # exactly what the freeze delivers — closer to the plan than the battery-save emulation it
         # replaces, which deliberately drifts.
-        detail = "planned hold realised as a real freeze (50207/50208/50209 = 0)"
-        numbers["hold_mode"] = "freeze"
+        detail = "planned battery-save policy realised with executor freeze (50207/50208/50209 = 0)"
+        numbers["freeze_mode"] = "freeze"
     if action == "discharge":
         # The plan's net grid exchange for this slot (+import/−export, DispatchSlot.gridKwh)
         # — lets the dashboard say whether this discharge sells to the grid or just covers
@@ -1091,7 +1101,7 @@ def battery_save_target(action: str, power_w: int, slot: dict | None = None):
     """Decide HOW to realise a planned hold.
 
     The optimizer says "idle" and marks the slot (batterySaveDriftKwh); this picks the mechanism:
-      - FREEZE_HOLDS on  -> ("hold", 0): a real freeze, the thing the plan actually means.
+      - FREEZE_HOLDS on  -> ("freeze", 0): a real freeze, the optimizer-marked idle policy.
       - otherwise        -> ("discharge", small): the battery-save emulation, which keeps the
         inverter out of Auto (whose self-use logic would discharge at whatever the house draws) at
         the cost of moving ~0.055 kWh/slot out of the battery at the CURRENT price.
@@ -1099,7 +1109,7 @@ def battery_save_target(action: str, power_w: int, slot: dict | None = None):
     """
     if (action == "idle" and FREEZE_HOLDS and not _freeze_unavailable
             and slot is not None and is_planned_hold(slot)):
-        return "hold", 0
+        return "freeze", 0
     if action == "idle" and BATTERY_SAVE_W > 0 and slot is not None and is_planned_hold(slot):
         # is_planned_hold already established that this is > 0 (it is the marker it tests), so this
         # only re-reads the magnitude.
@@ -1154,11 +1164,17 @@ def apply_target(inv: Inverter, action: str, power_w: int) -> None:
     still a bug (the plan wanted something this executor cannot do), so it is logged loudly
     instead of passing silently.
     """
-    if action == "charge":
+    if action == "hold":
+        # A planner hold means "do not charge; export the surplus", not physical freeze. Auto
+        # cannot preserve that exact intent, but is safer than pretending hold means freeze.
+        # New armed plans must not emit planner hold; this explicit fallback handles legacy rows.
+        log.warning("legacy planner hold is not a physical freeze — falling back to auto")
+        return_to_auto(inv)
+    elif action == "charge":
         force_charge(inv, power_w)
     elif action == "discharge":
         force_discharge(inv, power_w)
-    elif action == "hold":
+    elif action == "freeze":
         # A freeze that the inverter accepts but does not enforce is not a transient: it is the
         # documented pre-mode failure shape (MODBUS.md), i.e. this firmware does not do what the
         # recipe says. freeze_battery has already reverted to auto by the time it raises, so the
@@ -1398,14 +1414,14 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             # emulation, and a freeze (whose three-register combination is not probe-verified — the
             # expected failure is "stored but not enforced", which only a readback plus the measured
             # battery power can distinguish).
-            if applied_action == "hold" or (applied_action == "discharge" and "battery_save_w" in numbers):
+            if applied_action == "freeze" or (applied_action == "discharge" and "battery_save_w" in numbers):
                 try:
                     log_control_readback(con, slot_time, applied_action, applied_power, inv)
                 except Exception as exc:  # noqa: BLE001
                     # Readback telemetry is diagnostic only; never undo a successful inverter command
                     # because SQLite is busy, read-only, or temporarily unavailable.
                     log.warning("control readback logging failed for slot=%s: %s", slot_time, exc)
-        loop_in_auto = applied_action == "idle"
+        loop_in_auto = applied_action in AUTO_ACTIONS
         log_action(con, slot_time, applied_action, applied_power, outcome, detail, detail_json=numbers)
         log.info("slot=%s action=%s power=%dW armed=%s -> %s%s",
                   slot_time, applied_action, applied_power, ARMED, outcome,
