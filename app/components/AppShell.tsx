@@ -1,5 +1,6 @@
 import { stockholmDateOf } from '@/lib/economics';
 import AutoRefresh from '@/app/components/AutoRefresh';
+import LiveStatus from '@/app/components/LiveStatus';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const today = stockholmDateOf(new Date().toISOString());
@@ -26,13 +27,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <rect x="42" y="60" width="16" height="28" rx="3" fill="var(--node-bg)" />
             </svg>
           </div>
-          <div className="flex items-center gap-2 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-            <span className="relative h-[7px] w-[7px]">
-              <span className="absolute inset-0 rounded-full" style={{ background: 'var(--live-dot)' }} />
-              <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />
-            </span>
-            Live · uppdaterad nyss · {today}
-          </div>
+          <LiveStatus today={today} />
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { DispatchCardData, DispatchTone, GaugeTone, DecisionOutcome } from '@/lib/dispatch-card';
 import { gaugeFillPct, gaugeTone } from '@/lib/dispatch-card';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
@@ -51,8 +51,8 @@ function Gauge({ name, value, limit, unit }: { name: string; value: number; limi
   return (
     <div className="flex flex-col" style={{ gap: 4 }}>
       <div className="flex items-baseline justify-between">
-        <span className="text-[11px] font-semibold">{name}</span>
-        <span className="text-[10.5px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[12px] font-semibold min-[480px]:text-[11px]">{name}</span>
+        <span className="text-[11.5px] font-semibold min-[480px]:text-[10.5px]" style={{ color: 'var(--text-muted)' }}>
           {value.toFixed(1)} av {limit.toFixed(1)} {unit}
         </span>
       </div>
@@ -73,6 +73,27 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
   const [ageS, setAgeS] = useState<number | null>(
     initialData ? Math.round(initialData.current.secondsAgo) : null,
   );
+
+  // Right-edge fade on the timeline strip below — a visual cue that there's more to scroll to,
+  // since nothing else here hints a 12-bar-wide strip is scrollable on a narrow card. Only
+  // shown while there's actually unscrolled content to the right (recomputed on scroll/resize
+  // and whenever the decision list itself changes length).
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const [timelineOverflows, setTimelineOverflows] = useState(false);
+  const decisionsLength = data?.recentDecisions.length ?? 0;
+
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const check = () => setTimelineOverflows(el.scrollWidth - el.clientWidth - el.scrollLeft > 4);
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    window.addEventListener('resize', check);
+    return () => {
+      el.removeEventListener('scroll', check);
+      window.removeEventListener('resize', check);
+    };
+  }, [decisionsLength]);
 
   // Poll for fresh decisions — there's no push channel, and the underlying data changes at
   // most once per LOOP_INTERVAL_S server-side; polling on the shared dashboard cadence keeps
@@ -260,11 +281,30 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
           so the row still lines up with the rest of the card) is exactly the reach
           of the selected bar's ring (see boxShadow below) so it never gets clipped
           by the scroll container's own edge. */}
-      <div
-        className="flex items-end"
-        style={{ gap: 7, height: 44, overflowX: 'auto', padding: '0 4px', margin: '0 -4px' }}
-      >
-        {recentDecisions.map((d, i) => {
+      <div className="relative">
+        <div
+          ref={timelineRef}
+          className="flex items-end"
+          style={{
+            gap: 7,
+            height: 44,
+            overflowX: 'auto',
+            padding: '0 4px',
+            margin: '0 -4px',
+            // Fades the bars themselves near the right edge — a mask rather than an overlay
+            // box, so it doesn't need to match the card's background color (which is a
+            // gradient, not a flat color, in dark mode — see --card-bg-grad in globals.css).
+            // Only applied while there's unscrolled content (see the effect above); otherwise
+            // it would misleadingly fade the last bar even when nothing more exists to scroll to.
+            ...(timelineOverflows
+              ? {
+                  WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent 100%)',
+                  maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent 100%)',
+                }
+              : {}),
+          }}
+        >
+          {recentDecisions.map((d, i) => {
           const isSelected = i === activeIdx;
           const height = Math.min(40, Math.max(10, 8 + d.powerKw * 5.5));
           const color = OUTCOME_BAR_COLOR[d.outcome];
@@ -288,7 +328,8 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
               }}
             />
           );
-        })}
+          })}
+        </div>
       </div>
 
       {/* selected-item summary */}

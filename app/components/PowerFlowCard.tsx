@@ -123,11 +123,13 @@ function FlowNode({
       }}
     >
       <div style={{ width: 22, height: 22, color: active ? color : 'var(--node-idle-text)' }}>{icon}</div>
-      <div className="text-[9px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+      {/* Bumped a notch below 480px (then back to the original 9px at/above it) — this was
+          among the smallest text in the whole dashboard and hard to read on a phone. */}
+      <div className="text-[10px] font-semibold min-[480px]:text-[9px]" style={{ color: 'var(--text-muted)' }}>
         {label}
       </div>
       <div
-        className="text-[13px] font-bold tracking-tight"
+        className="text-[14px] font-bold tracking-tight min-[480px]:text-[13px]"
         style={{ color: active ? color : 'var(--node-idle-text)' }}
       >
         {value}

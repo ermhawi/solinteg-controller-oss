@@ -32,19 +32,19 @@ function Tile({ label, value, caption, sub }: { label: string; value: string; ca
       className="flex flex-1 flex-col gap-1 rounded-2xl"
       style={{ background: 'color-mix(in srgb, var(--econ-gray) 5%, transparent)', padding: '9px 12px 10px' }}
     >
-      <span className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+      <span className="text-[11.5px] font-bold uppercase tracking-wide min-[480px]:text-[10.5px]" style={{ color: 'var(--text-muted)' }}>
         {label}
       </span>
       <div className="flex items-baseline gap-1.5">
         <span className="text-[20px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
           {value}
         </span>
-        <span className="text-[9px] font-bold" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[10px] font-bold min-[480px]:text-[9px]" style={{ color: 'var(--text-muted)' }}>
           {caption}
         </span>
       </div>
       {sub && (
-        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[11px] font-semibold min-[480px]:text-[10px]" style={{ color: 'var(--text-muted)' }}>
           {sub}
         </span>
       )}

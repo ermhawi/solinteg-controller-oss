@@ -436,10 +436,18 @@ export default function PriceChart({
       <div
         ref={containerRef}
         className="relative"
-        style={{ touchAction: 'none' }}
+        // pan-y (not 'none'): lets the browser handle normal vertical page scroll when a
+        // single finger starts on the chart — 'none' used to trap scrolling inside this card,
+        // forcing a user to lift their finger and swipe outside it to keep scrolling the page.
+        // The 2-finger pinch-zoom handler below still calls preventDefault() itself, so pan-y
+        // doesn't interfere with pinch.
+        style={{ touchAction: 'pan-y' }}
         onMouseMove={(e) => updateHover(e.clientX, e.clientY)}
         onMouseLeave={clearHover}
         onTouchStart={(e) => {
+          // Single-finger touch: show the hover/tooltip immediately on first contact, not only
+          // once the finger moves (onTouchMove) — a still tap used to show nothing at all.
+          if (e.touches.length === 1) updateHover(e.touches[0].clientX, e.touches[0].clientY);
           if (e.touches.length < 2 || count < 2) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const [a, b] = [e.touches[0], e.touches[1]];

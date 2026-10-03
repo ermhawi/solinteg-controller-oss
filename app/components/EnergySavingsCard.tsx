@@ -80,9 +80,9 @@ function Metric({ label, value, detail, tone = 'neutral' }: { label: string; val
   const color = tone === 'good' ? 'var(--econ-green)' : tone === 'muted' ? 'var(--text-muted)' : 'var(--text)';
   return (
     <div className="min-w-0 rounded-2xl px-3 py-2.5" style={{ background: 'var(--badge-bg)' }}>
-      <div className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{label}</div>
+      <div className="text-[11px] font-bold uppercase tracking-wide min-[480px]:text-[10px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
       <div className="mt-0.5 truncate text-[18px] font-bold leading-tight" style={{ color, fontFamily: 'var(--font-heading)' }}>{value}</div>
-      {detail && <div className="mt-0.5 truncate text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>{detail}</div>}
+      {detail && <div className="mt-0.5 truncate text-[11px] font-medium min-[480px]:text-[10px]" style={{ color: 'var(--text-muted)' }}>{detail}</div>}
     </div>
   );
 }
@@ -159,7 +159,17 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
       <div className="mt-4 grid grid-cols-1 gap-4 min-[900px]:grid-cols-2">
         <div className="min-w-0 overflow-x-auto pb-1">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Kostnad jämfört med motkostnad</div>
-          <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Faktisk kostnad och motkostnad över tid">
+          <svg
+            viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`}
+            width="100%"
+            height={chartHeight + 30}
+            role="img"
+            aria-label="Faktisk kostnad och motkostnad över tid"
+            onTouchEnd={() => setHoveredKey(null)}
+          >
+          {/* onTouchEnd clears hover the same way onMouseLeave does for mouse — without this,
+              a tap would set hoveredKey via the bar's/point's onTouchStart below but never
+              clear it (no "mouse leave" equivalent exists for touch). */}
           {costTicks.map((tick, index) => {
             const y = chartHeight - ((tick - minCost) / costRange) * chartHeight;
             return (
@@ -181,6 +191,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
                 key={row.key}
                 onMouseEnter={() => setHoveredKey(row.key)}
                 onMouseLeave={() => setHoveredKey(null)}
+                onTouchStart={() => setHoveredKey(row.key)}
                 style={{ cursor: 'default' }}
               >
                 <rect x={center - barWidth - 2} y={actualY} width={barWidth} height={actualHeight} rx="2" fill="var(--econ-earned)" opacity="0.9" />
@@ -221,7 +232,14 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
         </div>
         <div className="min-w-0 overflow-x-auto pb-1">
           <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Besparing över tid</div>
-          <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`} width="100%" height={chartHeight + 30} role="img" aria-label="Besparing över tid">
+          <svg
+            viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`}
+            width="100%"
+            height={chartHeight + 30}
+            role="img"
+            aria-label="Besparing över tid"
+            onTouchEnd={() => setHoveredKey(null)}
+          >
             {savingsTicks.map((tick, index) => {
               const y = chartHeight - ((tick - savingsMin) / savingsRange) * chartHeight;
               return (
@@ -237,7 +255,12 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
               const center = chartLeft + index * groupWidth + groupWidth / 2;
               const y = chartHeight - ((row.savingsKr - savingsMin) / savingsRange) * chartHeight;
               return (
-                <g key={row.key} onMouseEnter={() => setHoveredKey(row.key)} onMouseLeave={() => setHoveredKey(null)}>
+                <g
+                  key={row.key}
+                  onMouseEnter={() => setHoveredKey(row.key)}
+                  onMouseLeave={() => setHoveredKey(null)}
+                  onTouchStart={() => setHoveredKey(row.key)}
+                >
                   <circle cx={center} cy={y} r="9" fill="transparent" />
                   <circle cx={center} cy={y} r={hoveredKey === row.key ? 4 : 2.5} fill={row.savingsKr >= 0 ? 'var(--econ-green)' : 'var(--econ-red)'} />
                   {(index === 0 || index === visible.length - 1 || index % Math.max(1, Math.ceil(visible.length / 6)) === 0) && (
