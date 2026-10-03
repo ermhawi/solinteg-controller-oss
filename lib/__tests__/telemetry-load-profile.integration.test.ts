@@ -49,6 +49,9 @@ function seed(days: number, loadForDayHour: (day: number, hourUtc: number) => nu
   // Anchored a whole number of days back from the pinned instant, which is itself on a whole
   // hour — so every reading lands at :00 or :30 of the hour it belongs to.
   const start = new Date(Date.now() - days * 86_400_000);
+  // Wrap all inserts in a single transaction: without it each row triggers a separate fsync,
+  // making the 672-row seed take ~9-10 s on IO-pressured disks and blow the beforeAll timeout.
+  db.exec('BEGIN');
   for (let d = 0; d < days; d++) {
     for (let h = 0; h < HOURS_PER_DAY; h++) {
       const t = new Date(start.getTime() + d * 86_400_000 + h * 3_600_000);
@@ -57,6 +60,7 @@ function seed(days: number, loadForDayHour: (day: number, hourUtc: number) => nu
       ins.run(new Date(t.getTime() + 1_800_000).toISOString(), loadForDayHour(d, t.getUTCHours()));
     }
   }
+  db.exec('COMMIT');
   db.close();
 }
 
