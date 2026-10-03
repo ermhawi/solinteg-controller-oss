@@ -128,8 +128,15 @@ echo "own while the destination is over its storage cap — rclone skips deletio
 echo "transfer errors, which is exactly what an over-cap upload is. Break that with one run that"
 echo "deletes before it uploads:"
 echo
+echo "  # First, see how many files rclone would delete (to pick a safe --max-delete cap):"
+echo "  See deploy/README.md section 12d for the credential-safe dry-run command."
+echo
+echo "  # Then run with --delete-before and a cap equal to that count plus 2 for margin:"
+echo "  # (Replace NNN with the dry-run count plus 2; /usr/bin/env VAR=val sets those vars"
+echo "  #  only for the python child process — the scheduled service is unaffected.)"
 echo "  sudo systemd-run --collect --wait --pipe --uid=solinteg \\"
-echo "    -p EnvironmentFile=/opt/solinteg/solinteg.env -E RCLONE_DELETE_BEFORE=1 \\"
+echo "    -p EnvironmentFile=/opt/solinteg/solinteg.env \\"
+echo "    /usr/bin/env RCLONE_DELETE_BEFORE=1 RCLONE_MAX_DELETE_CAP=NNN \\"
 echo "    /opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/backup_offsite.py"
 
 [ "$failed" -eq 0 ]

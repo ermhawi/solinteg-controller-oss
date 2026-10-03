@@ -298,7 +298,7 @@ rsync -av <you>@<your-node>.<your-tailnet>.ts.net:/opt/solinteg/backups/ ./solin
 
 Snapshots are gzipped (`telemetry-*.db.gz`, since 2026-09-03). Measured on the reference
 deployment 2026-09-04: a 364 MB `telemetry.db` gzips to 43 MB — **11.9%, an 8.4x reduction**. To
-restore one: `gunzip -c telemetry-<stamp>.db.gz > telemetry.db`.
+restore one: see the **Restore** procedure in §12d below.
 
 **Size the retention against your own DB, not against this figure.** An earlier version of this
 guide claimed nightly backups "run tens of MB … so 10 GB is years of headroom". At 364 MB per
@@ -386,10 +386,39 @@ sudo -u solinteg bash /opt/solinteg/app/scripts/tools/compress-backup-backlog.sh
 sudo -u solinteg bash /opt/solinteg/app/scripts/tools/compress-backup-backlog.sh
 
 # 2. One run that DELETES BEFORE it uploads, so the obsolete remote files go first and the
-#    uploads have room. Credentials stay in the env file; only the flag is on the command line.
+#    uploads have room. Print the destination-only files (lines prefixed '- ') and an
+#    explicit count; credentials are loaded from solinteg.env, not copied into the shell:
+( set -o pipefail
+  sudo systemd-run --collect --wait --pipe --uid=solinteg \
+    -p EnvironmentFile=/opt/solinteg/solinteg.env \
+    /bin/sh -c 'exec "${RCLONE_BIN:-rclone}" sync --dry-run --combined - /opt/solinteg/backups "$RCLONE_OFFSITE_DEST"' \
+    | tee /dev/stderr | grep '^- ' | wc -l
+)
+# Verify the same configured binary the service will use supports --combined:
 sudo systemd-run --collect --wait --pipe --uid=solinteg \
-  -p EnvironmentFile=/opt/solinteg/solinteg.env -E RCLONE_DELETE_BEFORE=1 \
+  -p EnvironmentFile=/opt/solinteg/solinteg.env \
+  /bin/sh -c '"${RCLONE_BIN:-rclone}" sync --help' | grep -F -- '--combined'
+#    The subshell prints each destination-only line to stderr and the final count to stdout.
+#    Add 2 to that count for margin; use the result as NNN in the recovery command below.
+#    Note: the count can grow if more backups rotate or you run compress-backup-backlog.sh
+#    before the recovery; re-run the dry run immediately before the recovery if in doubt.
+#    The default guard (cap 2) covers only one ordinary nightly retention step — one DB
+#    snapshot and one env backup — and has no backlog buffer; a significant backlog needs a
+#    higher cap. If the recovery command itself fails because the cap was exceeded, re-run
+#    the dry run to get the new count, add 2 for margin, and repeat with the updated cap.
+#    Replace NNN below with the dry-run count plus 2. /usr/bin/env VAR=val sets those
+#    variables only for the python child process, overriding any value from EnvironmentFile
+#    for that process only — the scheduled service and solinteg.env are unchanged. The
+#    override is transient: it exists only for this one systemd-run invocation.
+sudo systemd-run --collect --wait --pipe --uid=solinteg \
+  -p EnvironmentFile=/opt/solinteg/solinteg.env \
+  /usr/bin/env RCLONE_DELETE_BEFORE=1 RCLONE_MAX_DELETE_CAP=NNN \
   /opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/backup_offsite.py
+
+# Note: RCLONE_DELETE_BEFORE and RCLONE_MAX_DELETE_CAP above are passed as /usr/bin/env
+# arguments, not written to solinteg.env. They affect only the python child of this
+# one-shot systemd-run; the solinteg-backup-offsite.service scheduled at 03:35 is
+# unaffected. Do not add them to solinteg.env.
 ```
 
 `RCLONE_DELETE_BEFORE` is deliberately not the default and must not be left set: it opens a window
@@ -398,6 +427,46 @@ acceptable trade because step 1 leaves the local copies verified. On the referen
 pair took the bucket from 6.3 GB to well under 1 GB in one 26-second run, after two nights of
 identical failures.
 
+**Warning:** the first sync after running compress-backup-backlog.sh (or any backlog catch-up) may
+delete a large number of files at the destination — all the old, larger pre-compression filenames
+that the new compressed ones have replaced. This is expected and safe when the local directory is
+verified, but it is precisely why the dry run is important: the count can be much larger than the
+default cap (2). The recovery may not complete as intended if the cap is too low; check its result
+and inspect the remote state. The default cap covers only one ordinary nightly retention step —
+one DB snapshot and one env backup — with no backlog buffer.
+
+**A cap of 2 does not provide automatic catch-up after a missed run.** If the offsite sync does not run (or fails before rclone is invoked), the remote may retain files that local rotation has since removed. A later sync may request more deletions than the cap permits. Check the command result and actual remote state; do not assume the destination is unchanged or infer partial effects from the cap. Run a fresh dry run before retrying with an operator-reviewed cap. The nightly alert can continue until the backlog is reconciled. Raising the cap must be a deliberate, counted action. To recover:
+
+```bash
+# B3. Missed-run recovery: count the backlog, then run once with a raised cap.
+# Step 1 — count how many files rclone would delete (credential-safe dry run):
+( set -o pipefail
+  sudo systemd-run --collect --wait --pipe --uid=solinteg \
+    -p EnvironmentFile=/opt/solinteg/solinteg.env \
+    /bin/sh -c 'exec "${RCLONE_BIN:-rclone}" sync --dry-run --combined - /opt/solinteg/backups "$RCLONE_OFFSITE_DEST"' \
+    | tee /dev/stderr | grep '^- ' | wc -l
+)
+# Verify the same configured binary the service will use supports --combined:
+sudo systemd-run --collect --wait --pipe --uid=solinteg \
+  -p EnvironmentFile=/opt/solinteg/solinteg.env \
+  /bin/sh -c '"${RCLONE_BIN:-rclone}" sync --help' | grep -F -- '--combined'
+# The subshell prints each destination-only line to stderr and the count to stdout.
+# Add 2 to the count for margin; use that as NNN in the recovery command below.
+
+# Step 2 — run the sync once with the raised cap. If capacity is uncertain or you saw
+# upload errors, use the delete-before procedure above instead of this step.
+# Replace NNN below with the dry-run count plus 2. /usr/bin/env VAR=val sets those
+# variables only for the python child process, overriding any value from EnvironmentFile
+# for that process only — the scheduled service and solinteg.env are unchanged.
+sudo systemd-run --collect --wait --pipe --uid=solinteg \
+  -p EnvironmentFile=/opt/solinteg/solinteg.env \
+  /usr/bin/env RCLONE_MAX_DELETE_CAP=NNN \
+  /opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/backup_offsite.py
+
+# Step 3 — RCLONE_MAX_DELETE_CAP above was passed as a /usr/bin/env argument, not written
+# to solinteg.env, so there is nothing to remove. The scheduled service is unaffected.
+```
+
 **Restore from the offsite copy** (if the machine itself is gone, not just its disk):
 ```bash
 rclone copy b2:your-bucket-name ./solinteg-backups-restore/
@@ -405,14 +474,85 @@ rclone copy b2:your-bucket-name ./solinteg-backups-restore/
 ```
 
 **Restore** (only ever tested manually, do this once to be sure it actually works):
+
+Replace `STAMP` with the actual snapshot timestamp, e.g. `20260904-031503`. Never use
+angle-bracket tokens like `<stamp>` at a shell prompt — `<` is a redirection operator
+and the shell would try to open a file literally named `stamp>` rather than substitute a value.
+
+Paste and run the whole block below in one go — do NOT paste line-by-line into an
+interactive shell.  Each block runs as a child `bash -euo pipefail` process: every step
+must succeed or the block halts immediately, the live database is never touched on any
+validation failure, and your parent shell state is unaffected.
+
 ```bash
+bash -euo pipefail << 'EOF'
+# --- gzip snapshot (.db.gz, all snapshots since 2026-09-03) ---
+# bash -euo pipefail: the shell exits immediately on any non-zero command exit or pipeline
+# failure, so a failed gzip check, a failed gunzip, or a failing integrity_check pipe
+# will abort before systemctl stop and mv run.  The live database is not touched on any
+# validation failure.
+
+# Set the snapshot to restore — use an actual timestamp string, no angle brackets.
+STAMP=20260904-031503
+
+# 1. Confirm the file exists and passes gzip stream validation before touching anything.
+ls -lh /opt/solinteg/backups/telemetry-${STAMP}.db.gz
+# gzip -t is a standalone command: set -e halts the block immediately if the archive is
+# corrupt or unreadable, with no && coupling that could mask the exit code.
+gzip -t /opt/solinteg/backups/telemetry-${STAMP}.db.gz
+
+# 2. Decompress to a candidate path — NOT directly to the live DB.
+#    gunzip -c writes to stdout and leaves the backup itself intact.
+#    A failed or incomplete decompression affects only the candidate, not the live database.
+sudo -u solinteg sh -c "gunzip -c /opt/solinteg/backups/telemetry-${STAMP}.db.gz > /opt/solinteg/telemetry.db.candidate"
+
+# 3. Verify the candidate passes SQLite's integrity check before touching the live DB.
+#    The result must be exactly 'ok' — any other output means the snapshot is corrupt.
+#    With set -euo pipefail, a non-zero exit from grep (no 'ok' line) aborts here.
+sudo -u solinteg sqlite3 /opt/solinteg/telemetry.db.candidate "PRAGMA integrity_check;" | grep -x ok
+
+# 4. Verify the candidate is not an empty database — integrity_check passes for an empty
+#    SQLite file (no tables), which would silently wipe the live DB.  Require at least one
+#    non-internal (non-sqlite_%) table.
+count=$(sudo -u solinteg sqlite3 /opt/solinteg/telemetry.db.candidate \
+  "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+[ "$count" -gt 0 ]
+
+# 5. Stop services, then atomically move the verified candidate into place.
+#    mv on the same filesystem is an atomic rename at the kernel level.
+#    Reached only after steps 1–4 all succeeded.
 sudo systemctl stop solinteg-web solinteg-poller solinteg-dispatch solinteg-weather
-# Snapshots are gzipped since 2026-09-03. gunzip -c writes to stdout and leaves the backup
-# itself intact, so a botched restore does not also cost you the snapshot.
-sudo -u solinteg sh -c 'gunzip -c /opt/solinteg/backups/telemetry-<stamp>.db.gz > /opt/solinteg/telemetry.db'
-# For a pre-2026-09-03 snapshot with no .gz suffix, plain cp as before:
-#   sudo -u solinteg cp /opt/solinteg/backups/telemetry-<stamp>.db /opt/solinteg/telemetry.db
+sudo -u solinteg mv /opt/solinteg/telemetry.db.candidate /opt/solinteg/telemetry.db
 sudo systemctl start solinteg-poller solinteg-web solinteg-weather solinteg-dispatch
+EOF
+```
+
+```bash
+bash -euo pipefail << 'EOF'
+# --- legacy uncompressed snapshot (.db, pre-2026-09-03 only) ---
+# bash -euo pipefail: aborts on any non-zero command or pipeline failure, so a failed cp
+# or a failing integrity_check pipe will abort before systemctl stop and mv run.
+
+STAMP=20260817-031509
+
+# 1. Copy to a candidate path — do NOT copy directly to the live DB.
+sudo -u solinteg cp /opt/solinteg/backups/telemetry-${STAMP}.db /opt/solinteg/telemetry.db.candidate
+
+# 2. Verify the candidate before replacing the live DB.
+#    With set -euo pipefail, a non-zero exit from grep (no 'ok' line) aborts here.
+sudo -u solinteg sqlite3 /opt/solinteg/telemetry.db.candidate "PRAGMA integrity_check;" | grep -x ok
+
+# 3. Verify the candidate is not an empty database — require at least one non-internal table.
+count=$(sudo -u solinteg sqlite3 /opt/solinteg/telemetry.db.candidate \
+  "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+[ "$count" -gt 0 ]
+
+# 4. Stop services, then atomically move the verified candidate into place.
+#    Reached only after steps 1–3 all succeeded.
+sudo systemctl stop solinteg-web solinteg-poller solinteg-dispatch solinteg-weather
+sudo -u solinteg mv /opt/solinteg/telemetry.db.candidate /opt/solinteg/telemetry.db
+sudo systemctl start solinteg-poller solinteg-web solinteg-weather solinteg-dispatch
+EOF
 ```
 
 **12e. SMART disk monitoring** - alerts on the phone before the drive fails outright:
