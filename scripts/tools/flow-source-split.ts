@@ -10,17 +10,14 @@ import { stockholmMidnightUtc } from '../../lib/prices';
 import type { PriceSlot } from '../../lib/prices';
 import { readOracleReadings, readPriceSnapshot } from '../../lib/telemetry';
 import { bucketActuals, socAtInstant, socSeries, windowEnergyBalance, toOptimizerSlots } from '../../lib/oracle';
-import { optimizeDispatch, BATTERY_KWH } from '../../lib/optimizer';
+import { optimizeDispatch } from '../../lib/optimizer';
 import { BATTERY_RT_EFF } from '../../lib/constants';
 
-const SLOT_MS = 900_000;
 const ONE_WAY_EFF = Math.sqrt(BATTERY_RT_EFF);
 function addDays(d: string, n: number) { const [y,m,dd]=d.split('-').map(Number); return new Date(Date.UTC(y,m-1,dd+n)).toISOString().slice(0,10); }
 function midnightMs(d: string) { const [y,m,dd]=d.split('-').map(Number); return stockholmMidnightUtc(y,m-1,dd).getTime(); }
 function slotsForDay(p: PriceSlot[]|undefined, d: string) { return (p??[]).filter(x=>x.startTime.startsWith(d)); }
 function priceSlotsFor(d: string) { const own=slotsForDay(readPriceSnapshot(d)?.prices,d); if(own.length) return own; return slotsForDay(readPriceSnapshot(addDays(d,-1))?.prices,d); }
-function expectedSlots(d: string) { return (midnightMs(addDays(d,1))-midnightMs(d))/SLOT_MS; }
-
 function flows(soc: number, socNext: number, solarRem: number, loadRem: number) {
   const dE = socNext - soc;
   if (dE >= 0) {
