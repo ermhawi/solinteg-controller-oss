@@ -157,6 +157,13 @@ different market or vendor):
   UNBIASED: load-covering discharges (their timing is dictated by the load), and no seasonal
   logic anywhere — winter night-buying and "don't sell what the night load needs" remain
   emergent from prices/solar exactly as before.
+- **Refund-aware planning**: grid energy stored and fed back gets its energy tax refunded
+  (Swedish refund type 739; 36 öre/kWh in 2026). `opts.refundCreditOre` (set only by
+  `lib/plan.ts`, never the oracle) makes a second plan with that credit on exports in NO-solar
+  slots only, and keeps it only if true cash + the refund it really earns (`refundEarnedOre`)
+  beats the plain plan. Rate per calendar year in `ENERGY_TAX_REFUND_ORE_BY_YEAR`; a year
+  missing there earns nothing, so add each new year by hand. Kill switch
+  `SOLINTEG_REFUND_CREDIT=0` (use it outside Sweden, or if you don't file the refund claim).
 - **Battery wear cost**: every kWh of battery throughput (charge or discharge) carries a small
   cost (`BATTERY_WEAR_COST_ORE_PER_KWH` in `lib/constants.ts`) so the DP won't cycle the battery
   for a gain smaller than its degradation cost. Deliberately gentle — sized off the *fractional*

@@ -17,6 +17,8 @@ import {
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
   SOLAR_RISK_SURVIVAL,
   DEFERRAL_UNTIL_NEEDED,
+  REFUND_CREDIT_ENABLED,
+  energyTaxRefundOre,
   SOLAR_FORECAST_MODEL,
 } from './constants';
 
@@ -206,6 +208,7 @@ export async function producePlan(): Promise<PlanResult> {
         solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
         solarRiskSurvival: SOLAR_RISK_SURVIVAL,
         deferralUntilNeeded: DEFERRAL_UNTIL_NEEDED,
+        ...(REFUND_CREDIT_ENABLED ? { refundCreditOre: energyTaxRefundOre } : {}),
         holdEnabled:
           process.env.SOLINTEG_HOLD_ENABLED === '1' &&
           process.env.SOLINTEG_CONTROL_ARMED !== '1',

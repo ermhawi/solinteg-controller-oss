@@ -189,6 +189,11 @@ function computeFlows(soc: number, socNext: number, solarRem: number, loadRem: n
  *   house will have drawn back out before sunrise cannot be made redundant by tomorrow's
  *   solar, yet the plain form charges it in full. Daytime buys are unaffected (nothing to
  *   draw it out before the solar that is already here). Default off: plain form.
+ * @param opts.refundCreditOre  refund-aware planning (see REFUND_CREDIT_ENABLED in
+ *   lib/constants.ts): öre/kWh of energy-tax refund an export at that slot time would earn.
+ *   When set, a second plan is made with it credited on no-solar exports and kept only if its
+ *   true cash plus the refund it really earns (refundEarnedOre) beats the plain plan. Default
+ *   off.
  *   Both knobs are planning-only and default OFF: the oracle re-dispatches actual data in
  *   hindsight, where deferral/uncertainty have no meaning — biasing it would poison the
  *   regret-≥0 invariant (lib/oracle.ts). Only lib/plan.ts sets them, for live plans.
@@ -205,7 +210,54 @@ export function optimizeDispatch(
     solarRiskSurvival?: boolean;
     deferralUntilNeeded?: boolean;
     holdEnabled?: boolean;
+    refundCreditOre?: (startTime: string) => number;
   },
+): DispatchSlot[] {
+  const refundOre = opts?.refundCreditOre;
+  if (!refundOre || slots.length === 0) return planWithDeferralGuard(slots, startSoc, opts);
+  // Refund-aware planning: credit the refund only on exports in slots with no forecast solar,
+  // so solar-origin sales are never rewarded. The DP has no origin state, so the credited plan
+  // may still over-promise (sell energy that was never grid-charged); scoring both plans on
+  // true cash plus the refund each would really earn catches that, and the plain plan wins
+  // ties.
+  const credit = slots.map((s) => (s.solarKwh < SURVIVAL_SOLAR_SLOT_KWH ? refundOre(s.startTime) : 0));
+  const plain = planWithDeferralGuard(slots, startSoc, opts);
+  if (credit.every((c) => c <= 0)) return plain;
+  const creditedSlots = slots.map((s, i) => (credit[i] > 0 ? { ...s, sellPrice: s.sellPrice + credit[i] } : s));
+  const credited = planWithDeferralGuard(creditedSlots, startSoc, opts);
+  const score = (d: DispatchSlot[]) =>
+    evaluateDispatch(slots, d, startSoc).valueOre + refundEarnedOre(d, credit, startSoc);
+  return score(credited) > score(plain) + 1e-6 ? credited : plain;
+}
+
+/**
+ * The energy-tax refund (öre) a planned trajectory would earn, with the most favourable
+ * defensible bookkeeping for the refund claim: grid charge enters a grid-origin pool
+ * net of the charge loss, battery exports draw that pool first, the house draws solar-origin
+ * energy first, and the pool can never exceed what the battery holds above the floor. Energy
+ * already in the battery at the start counts as solar-origin (conservative: its origin is
+ * unknown), and only exports in credited slots (`creditOre[i] > 0`) earn anything.
+ */
+export function refundEarnedOre(dispatch: DispatchSlot[], creditOre: number[], startSoc: number): number {
+  let pool = 0; // stored kWh of grid origin
+  let ore = 0;
+  for (let i = 0; i < dispatch.length; i++) {
+    const d = dispatch[i];
+    pool += d.gridToBatteryKwh * ONE_WAY_EFF;
+    if (d.batteryToGridKwh > 0) {
+      const drawn = Math.min(pool, d.batteryToGridKwh / ONE_WAY_EFF);
+      pool -= drawn;
+      ore += drawn * ONE_WAY_EFF * creditOre[i];
+    }
+    pool = Math.min(pool, Math.max(0, d.socAfter - Math.min(MIN_SOC_KWH, startSoc)));
+  }
+  return ore;
+}
+
+function planWithDeferralGuard(
+  slots: OptimizerSlot[],
+  startSoc: number,
+  opts?: Parameters<typeof dpCore>[2] & { maxDeferralSacrificeOre?: number },
 ): DispatchSlot[] {
   if ((opts?.deferralRateOrePerKwhHour ?? 0) > 0 && slots.length > 0) {
     // Two-pass sacrifice guard: the deferral ramp is a planning fiction, so measure what it

@@ -197,6 +197,40 @@ export const SOLAR_RISK_SURVIVAL = (process.env.SOLINTEG_SOLAR_RISK_SURVIVAL ?? 
  */
 export const DEFERRAL_UNTIL_NEEDED = (process.env.SOLINTEG_DEFERRAL_UNTIL_NEEDED ?? '1') === '1';
 
+/**
+ * Swedish battery energy-tax refund (Skatteverket refund type 739, "Inmatad el efter lagring",
+ * from 2026-01-01): the energy tax paid on grid electricity is refunded when that electricity
+ * is stored in a battery and fed back to the grid. Excl. VAT, storage losses not refundable,
+ * solar-origin energy earns nothing. Claimed per calendar year.
+ *
+ * öre per exported kWh, by calendar year of the export. A year missing here earns NO credit
+ * (fail closed): the rate or the rule itself can change, so each new year must be added by
+ * hand once its rate is confirmed. 2026: 36.0 öre (Skatteverket "Skatt på el"). Outside Sweden,
+ * or without a refund claim, set SOLINTEG_REFUND_CREDIT=0.
+ */
+export const ENERGY_TAX_REFUND_ORE_BY_YEAR: Record<number, number> = { 2026: 36.0 };
+
+/**
+ * Refund-aware planning (optimizeDispatch's opts.refundCreditOre): the plan prices grid
+ * charging at the full energy tax, so a night buy re-sold before sunrise looks ~36 öre/kWh
+ * worse than it is. When on, lib/plan.ts lets the optimizer try a second plan with the refund
+ * credited on battery exports in no-solar slots only (so solar-origin sales are never
+ * rewarded, and every credited kWh is easy to document: grid meter exporting with PV at zero),
+ * scores both plans on true cash plus the refund each would actually earn, and keeps the
+ * credited one only if it really wins.
+ *
+ * ON by default. On the reference deployment's archived-forecast replay it gained a little in
+ * every season (most in spring/autumn) with cash unchanged: the gain is the refund itself,
+ * which only materialises if the yearly refund claim is filed. Env: SOLINTEG_REFUND_CREDIT=0
+ * to disable.
+ */
+export const REFUND_CREDIT_ENABLED = (process.env.SOLINTEG_REFUND_CREDIT ?? '1') === '1';
+
+/** The refund (öre/kWh) an export starting at this naive Stockholm-local slot time earns. */
+export function energyTaxRefundOre(startTime: string): number {
+  return ENERGY_TAX_REFUND_ORE_BY_YEAR[+startTime.slice(0, 4)] ?? 0;
+}
+
 // ---- Hold mode (opt-in, shadow-only — see lib/plan.ts's holdEnabled wiring) ----
 // Gate parameters for the DP's 'hold' action: freeze SoC and export the solar surplus instead
 // of storing it. Slot-unit conversions (kW → kWh/slot, hours → slots) happen at the use site

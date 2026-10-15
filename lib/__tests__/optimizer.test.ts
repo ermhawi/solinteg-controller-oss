@@ -2,12 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   optimizeDispatch,
   evaluateDispatch,
+  refundEarnedOre,
   BATTERY_KWH,
   GRID_KW,
   BATTERY_MAX_KW,
   BATTERY_MIN_SOC_KWH,
 } from '../optimizer';
-import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH } from '../constants';
+import { BATTERY_RT_EFF, BATTERY_WEAR_COST_ORE_PER_KWH, energyTaxRefundOre } from '../constants';
 import type { OptimizerSlot } from '../optimizer';
 
 const SLOT_MAX_KWH = Math.min(GRID_KW, BATTERY_MAX_KW) / 4; // 2.75 kWh/slot
@@ -860,5 +861,64 @@ describe('risk-aware planning (deferral bias + solar risk premium — the 2026-0
     expect(
       optimizeDispatch(slots, 12, { deferralRateOrePerKwhHour: 0, solarRiskPremiumOre: 0 }),
     ).toEqual(plain);
+  });
+});
+
+describe('refund-aware planning (energy-tax refund on grid-charged energy fed back)', () => {
+  const refund36 = () => 36;
+  const bought = (d: ReturnType<typeof optimizeDispatch>) => d.reduce((s, r) => s + r.gridToBatteryKwh, 0);
+  // The 2026-10-14 shape: a cheap night, a morning sell peak before sunrise. 157 -> 166 is under
+  // the ~168 öre a re-sold kWh costs (losses + wear), so only the refund makes it worth doing.
+  const nightThenMorningPeak = (solarAtPeak = 0): OptimizerSlot[] => [
+    ...Array.from({ length: 16 }, (_, i) => makeSlot(2 + Math.floor(i / 4), i % 4, { buyPrice: 157, sellPrice: 62 })),
+    ...Array.from({ length: 8 }, (_, i) =>
+      makeSlot(7 + Math.floor(i / 4), i % 4, { buyPrice: 295, sellPrice: 166, solarKwh: solarAtPeak }),
+    ),
+  ];
+
+  it('buys at night for a pre-sunrise sell that only the refund makes profitable', () => {
+    const slots = nightThenMorningPeak();
+    expect(bought(optimizeDispatch(slots, MIN_SOC))).toBeLessThan(0.1);
+    const d = optimizeDispatch(slots, MIN_SOC, { refundCreditOre: refund36 });
+    expect(bought(d)).toBeGreaterThan(10);
+    const credit = slots.map(() => 36);
+    expect(refundEarnedOre(d, credit, MIN_SOC)).toBeGreaterThan(300);
+  });
+
+  it('gives no credit to exports in slots with forecast solar (solar-origin sales earn nothing)', () => {
+    const slots = nightThenMorningPeak(0.5);
+    expect(optimizeDispatch(slots, MIN_SOC, { refundCreditOre: refund36 })).toEqual(optimizeDispatch(slots, MIN_SOC));
+  });
+
+  it('never credits selling energy that was already in the battery (unknown origin counts as solar)', () => {
+    // Nothing cheap to buy: the only way to "earn" the credit would be selling the starting
+    // energy harder, which the true-refund scoring rejects.
+    const slots = Array.from({ length: 24 }, (_, i) =>
+      makeSlot(Math.floor(i / 4), i % 4, { buyPrice: 300, sellPrice: i >= 16 ? 150 : 120, consumptionKwh: 0.3 }),
+    );
+    expect(optimizeDispatch(slots, 20, { refundCreditOre: refund36 })).toEqual(optimizeDispatch(slots, 20));
+  });
+
+  it('a year with no confirmed refund rate earns nothing (fail closed)', () => {
+    const slots = nightThenMorningPeak().map((s) => ({ ...s, startTime: s.startTime.replace('2026', '2031') }));
+    expect(energyTaxRefundOre('2031-01-01T03:00:00')).toBe(0);
+    expect(energyTaxRefundOre('2026-12-31T23:45:00')).toBe(36);
+    expect(optimizeDispatch(slots, MIN_SOC, { refundCreditOre: energyTaxRefundOre })).toEqual(
+      optimizeDispatch(slots, MIN_SOC),
+    );
+  });
+
+  it('refundEarnedOre: losses are not refundable, and the house eats solar-origin energy first', () => {
+    const eff = Math.sqrt(BATTERY_RT_EFF);
+    const row = (g2b: number, b2g: number, socAfter: number) => ({
+      startTime: '', action: 'idle' as const, gridKwh: 0, solarExportKwh: 0, batteryToGridKwh: b2g,
+      gridToBatteryKwh: g2b, batteryToLoadKwh: 0, loadFromGridKwh: 0, socAfter,
+    });
+    // 10 kWh bought on top of 8 kWh (unknown origin), house takes 4, then everything left is sold
+    const d = [row(10, 0, 8 + 10 * eff), row(0, 0, 4 + 10 * eff), row(0, 20, MIN_SOC)];
+    expect(refundEarnedOre(d, [1, 1, 1], 8)).toBeCloseTo(10 * eff * eff, 6);
+    // the house draining below the grid-origin pool cuts it
+    const drained = [row(10, 0, 5 + 10 * eff), row(0, 0, MIN_SOC + 3), row(0, 20, MIN_SOC)];
+    expect(refundEarnedOre(drained, [1, 1, 1], 5)).toBeCloseTo(3 * eff, 6);
   });
 });

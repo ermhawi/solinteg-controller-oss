@@ -70,6 +70,7 @@ import {
   SOLAR_RISK_SURVIVAL,
   DEFERRAL_UNTIL_NEEDED,
   LIVE_LOAD_PROFILE_DAYS,
+  energyTaxRefundOre,
 } from '../constants';
 import { producePlan } from '../plan';
 
@@ -173,6 +174,7 @@ describe('producePlan — happy path wiring', () => {
       solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
       solarRiskSurvival: SOLAR_RISK_SURVIVAL,
       deferralUntilNeeded: DEFERRAL_UNTIL_NEEDED,
+      refundCreditOre: energyTaxRefundOre,
       holdEnabled: false,
     });
 
