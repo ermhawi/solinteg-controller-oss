@@ -619,6 +619,16 @@ class NeedsApplyTests(unittest.TestCase):
         last = ("t0", "discharge", 50)
         self.assertTrue(dl.needs_apply(("t1", "charge", 2100), last, "charge", 2100, False))
 
+    def test_soc_recovery_overrides_mid_slot_discharge_block_even_when_reassert_not_due(self):
+        last = ("t0", "discharge", 50)
+        target = ("t0", "charge", dl.SOC_FLOOR_RECOVERY_W)
+        self.assertTrue(dl.needs_apply(target, last, "charge", target[2], False, soc_recovery=True))
+
+    def test_soc_recovery_switches_from_regular_discharge_in_same_slot(self):
+        last = ("t0", "discharge", 3800)
+        target = ("t0", "charge", dl.SOC_FLOOR_RECOVERY_W)
+        self.assertTrue(dl.needs_apply(target, last, "charge", target[2], True, soc_recovery=True))
+
 
 class NextLastTargetTests(unittest.TestCase):
     """What gets recorded as "the inverter is now at this target" after an apply.
@@ -671,10 +681,14 @@ class NextLastTargetTests(unittest.TestCase):
 class FakeInverter:
     """Stands in for inverter_control.Inverter in apply_decision tests."""
 
-    def __init__(self, soc_pct=50.0, fail_on=None):
+    def __init__(self, soc_pct=50.0, fail_on=None, battery_w=0):
         self._soc_pct = soc_pct
+        self._battery_w = battery_w
         self.closed = False
         self.fail_on = fail_on or set()
+
+    def battery_power_w(self):
+        return self._battery_w
 
     def soc_pct(self):
         if "soc" in self.fail_on:
@@ -704,11 +718,13 @@ class ApplyDecisionTests(unittest.TestCase):
         self.revert_fails = False
 
         def _make_inverter():
-            inv = FakeInverter(soc_pct=self.soc_pct, fail_on=self.inverter_fail_on)
+            inv = FakeInverter(soc_pct=self.soc_pct, fail_on=self.inverter_fail_on,
+                               battery_w=self.battery_w)
             self.inverters.append(inv)
             return inv
 
         self.soc_pct = 50.0
+        self.battery_w = 0
         self.inverter_fail_on = set()
         self._orig = (dl.Inverter, dl.apply_target, dl.return_to_auto, dl.maybe_request_replan)
         dl.Inverter = _make_inverter
@@ -742,6 +758,27 @@ class ApplyDecisionTests(unittest.TestCase):
         self.assertEqual(outcome, "applied")
         self.assertFalse(in_auto)
         self.assertEqual(self.applied, [("discharge", 3000)])
+
+    def test_recovery_charge_is_pending_when_modbus_accepts_but_battery_has_zero_power(self):
+        with mock.patch.object(dl, "log_control_readback"):
+            outcome, in_auto = dl.apply_decision(
+                self.con, "t0", "charge", dl.SOC_FLOOR_RECOVERY_W, expected_soc_kwh=None,
+                solar_skipped_now=False, detail="recovery", numbers={"soc_recovery": True},
+                loop_in_auto=False)
+        self.assertEqual(outcome, "accepted_pending_physical_confirmation")
+        self.assertFalse(in_auto)
+        self.assertEqual(self.applied, [("charge", dl.SOC_FLOOR_RECOVERY_W)])
+        self.assertEqual(self.rows()[0][2], outcome)  # not misleadingly "applied"
+
+    def test_recovery_charge_with_actual_battery_input_is_confirmed(self):
+        self.battery_w = -300
+        with mock.patch.object(dl, "log_control_readback"):
+            outcome, in_auto = dl.apply_decision(
+                self.con, "t0", "charge", 300, expected_soc_kwh=None,
+                solar_skipped_now=False, detail="recovery", numbers={"soc_recovery": True},
+                loop_in_auto=False)
+        self.assertEqual(outcome, "applied")
+        self.assertFalse(in_auto)
 
     def test_normal_charge_applies_and_logs_one_row(self):
         # expected SoC matches actual (50% of 25.6 = 12.8 kWh) — no drift, no guard.
@@ -1102,15 +1139,15 @@ class SocFloorGuardTests(unittest.TestCase):
         self.assertEqual(action, "idle")
         self.assertEqual(power_w, 0)
 
-    def test_soc_floor_recovery_leaves_non_idle_actions_unchanged(self):
-        # charge/discharge decisions from the optimizer are never touched.
-        low_soc_kwh = dl.BATTERY_FLOOR_KWH  # extreme — doesn't matter
-        self.assertEqual(
-            dl.soc_floor_recovery_target("charge", 3000, low_soc_kwh), ("charge", 3000)
-        )
-        self.assertEqual(
-            dl.soc_floor_recovery_target("discharge", 2000, low_soc_kwh), ("discharge", 2000)
-        )
+    def test_soc_floor_recovery_overrides_all_optimizer_actions(self):
+        # Safety recovery wins over economical charge, discharge, save and freeze.
+        low_soc_kwh = dl.BATTERY_FLOOR_KWH
+        for action, power_w in (("charge", 3000), ("discharge", 2000), ("freeze", 0), ("idle", 0)):
+            with self.subTest(action=action):
+                self.assertEqual(
+                    dl.soc_floor_recovery_target(action, power_w, low_soc_kwh),
+                    ("charge", dl.SOC_FLOOR_RECOVERY_W),
+                )
 
     def test_soc_floor_recovery_with_none_soc_leaves_action_unchanged(self):
         # live.json missing/stale — cannot read SoC, must not escalate blind.
@@ -1167,6 +1204,160 @@ class SocFloorGuardTests(unittest.TestCase):
         action, power_w = dl.soc_floor_recovery_target("idle", 0, safe_soc_kwh, surplus_w=2000)
         self.assertEqual(action, "idle")
         self.assertEqual(power_w, 0)
+
+
+class RecoveryEnforcementTests(unittest.TestCase):
+    """The actual-power check uses multiple poller readings, not register readback."""
+
+    def setUp(self):
+        self.con = dl.init_db(":memory:")
+        self.con.execute("CREATE TABLE readings (timestamp TEXT, battery_w INTEGER)")
+        self.previous_report = dl._last_recovery_nonresponse_report
+        dl._last_recovery_nonresponse_report = 0
+        self.now = datetime.now(UTC)
+        self.target = ("t0", "charge", 300)
+
+    def tearDown(self):
+        dl._last_recovery_nonresponse_report = self.previous_report
+        self.con.close()
+
+    def samples(self, battery_w: int):
+        for seconds_ago in (100, 75, 50, 25):
+            self.con.execute("INSERT INTO readings VALUES (?, ?)",
+                             ((self.now - timedelta(seconds=seconds_ago)).isoformat(), battery_w))
+        self.con.commit()
+
+    def check(self, elapsed=150):
+        with mock.patch.object(dl, "ARMED", True), \
+             mock.patch.object(dl.time, "monotonic", return_value=1000):
+            return dl.monitor_soc_recovery_enforcement(
+                self.con, self.now, self.target, self.target, 1000 - elapsed,
+                {"soc_recovery": True})
+
+    def test_three_or_more_noncharging_samples_log_a_distinct_failure(self):
+        self.samples(0)
+        with self.assertLogs("solinteg.dispatch", level="ERROR"):
+            self.assertTrue(self.check())
+        row = self.con.execute(
+            "SELECT outcome, detail_json FROM control_actions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(row[0], "command_accepted_but_not_enforced")
+        self.assertEqual(json.loads(row[1])["sample_count"], 4)
+        self.assertFalse(self.check())  # cooldown; one alert per reassert interval
+
+    def test_actual_charging_is_never_reported_as_unenforced(self):
+        self.samples(-300)
+        self.assertFalse(self.check())
+        self.assertEqual(self.con.execute("SELECT COUNT(*) FROM control_actions").fetchone()[0], 0)
+
+    def test_waits_two_minutes_after_write_before_deciding(self):
+        self.samples(0)
+        self.assertFalse(self.check(elapsed=60))
+
+    def test_insufficient_samples_are_not_claimed_as_hardware_failure(self):
+        self.con.execute("INSERT INTO readings VALUES (?, 0)", (self.now.isoformat(),))
+        self.assertFalse(self.check())
+
+    def test_nonrecovery_and_disarmed_targets_do_not_trigger_the_monitor(self):
+        self.samples(0)
+        with mock.patch.object(dl, "ARMED", False), \
+             mock.patch.object(dl.time, "monotonic", return_value=1000):
+            self.assertFalse(dl.monitor_soc_recovery_enforcement(
+                self.con, self.now, self.target, self.target, 800, {"soc_recovery": True}))
+        with mock.patch.object(dl, "ARMED", True), \
+             mock.patch.object(dl.time, "monotonic", return_value=1000):
+            self.assertFalse(dl.monitor_soc_recovery_enforcement(
+                self.con, self.now, self.target, self.target, 800, {}))
+
+
+class PrioritizeSocRecoveryTests(unittest.TestCase):
+    """Regression for the low-SoC incident: plan/dispatch must not undo recovery."""
+
+    def setUp(self):
+        self.previous_active = dl._soc_recovery_active
+        dl._soc_recovery_active = True  # restart conservatively in the hysteresis band
+
+    def tearDown(self):
+        dl._soc_recovery_active = self.previous_active
+
+    def run_decision(self, soc_pct: float, action: str = "discharge", power_w: int = 3800,
+                     *, solar_skip: bool = False, expected_soc_kwh=9.0, surplus_w=0):
+        with mock.patch.object(dl, "read_live_soc_kwh", return_value=soc_pct / 100 * dl.BATTERY_KWH), \
+             mock.patch.object(dl, "read_live_solar_surplus_w", return_value=surplus_w):
+            return dl.prioritize_soc_recovery(action, power_w, expected_soc_kwh, solar_skip,
+                                               "planned", {}, datetime.now(UTC))
+
+    def test_plan_discharge_is_overridden_and_bypasses_stale_plan_guard(self):
+        a, w, expected, skip, detail, numbers = self.run_decision(dl.SOC_RECOVERY_ENTRY_PCT - 1)
+        self.assertEqual((a, w, expected, skip), ("charge", dl.SOC_FLOOR_RECOVERY_W, None, False))
+        self.assertTrue(numbers["soc_recovery"])
+        self.assertIn("forcing", detail)
+
+    def test_battery_save_does_not_win_over_recovery(self):
+        a, w, *_ = self.run_decision(dl.SOC_RECOVERY_ENTRY_PCT - 1,
+                                     action="discharge", power_w=50)
+        self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+
+    def test_live_load_demoted_charge_cannot_return_to_auto_at_low_soc(self):
+        a, w, expected, skip, *_ = self.run_decision(
+            dl.SOC_RECOVERY_ENTRY_PCT - 1, action="idle", power_w=0, solar_skip=True)
+        self.assertEqual((a, w, expected, skip), ("charge", dl.SOC_FLOOR_RECOVERY_W, None, False))
+
+    def test_recovery_runs_even_when_optimizer_plan_is_missing(self):
+        with mock.patch.object(dl, "load_latest_plan", return_value=(None, None, None, None)), \
+             mock.patch.object(dl, "maybe_request_replan"):
+            no_plan = dl.decide(object(), datetime.now(UTC))
+        self.assertEqual(no_plan[1], "idle")
+        a, w, expected, skip, *_ = self.run_decision(
+            dl.SOC_RECOVERY_ENTRY_PCT - 1, action=no_plan[1], power_w=no_plan[2])
+        self.assertEqual((a, w, expected, skip), ("charge", dl.SOC_FLOOR_RECOVERY_W, None, False))
+
+    def test_latched_recovery_continues_above_entry_until_exit(self):
+        mid = (dl.SOC_RECOVERY_ENTRY_PCT + dl.SOC_RECOVERY_EXIT_PCT) / 2
+        a, w, *_ = self.run_decision(mid, action="idle", power_w=0)
+        self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+        self.assertTrue(dl._soc_recovery_active)
+
+        a, w, *_ = self.run_decision(dl.SOC_RECOVERY_EXIT_PCT, action="idle", power_w=0)
+        self.assertEqual((a, w), ("idle", 0))
+        self.assertFalse(dl._soc_recovery_active)
+
+        a, w, *_ = self.run_decision(mid, action="discharge", power_w=500)
+        self.assertEqual((a, w), ("discharge", 500))
+        self.assertFalse(dl._soc_recovery_active)
+
+    def test_recovery_absorbs_solar_surplus_instead_of_grid_minimum(self):
+        a, w, *_ = self.run_decision(dl.SOC_RECOVERY_ENTRY_PCT - 1,
+                                     action="freeze", power_w=0, surplus_w=2000)
+        self.assertEqual((a, w), ("charge", 2000))
+
+    def test_stale_poller_read_uses_direct_modbus_soc_when_armed(self):
+        inv = FakeInverter(soc_pct=dl.SOC_RECOVERY_ENTRY_PCT - 1)
+        with mock.patch.object(dl, "ARMED", True), \
+             mock.patch.object(dl, "read_live_soc_kwh", return_value=None), \
+             mock.patch.object(dl, "read_live_solar_surplus_w", return_value=0), \
+             mock.patch.object(dl, "Inverter", return_value=inv):
+            a, w, *_ = dl.prioritize_soc_recovery(
+                "idle", 0, None, False, "missing live.json", {}, datetime.now(UTC))
+        self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+        self.assertTrue(inv.closed)
+
+    def test_shadow_mode_does_not_open_modbus_for_stale_soc(self):
+        with mock.patch.object(dl, "ARMED", False), \
+             mock.patch.object(dl, "read_live_soc_kwh", return_value=None), \
+             mock.patch.object(dl, "Inverter") as inv:
+            a, w, *_ = dl.prioritize_soc_recovery(
+                "idle", 0, None, False, "", {}, datetime.now(UTC))
+        self.assertEqual((a, w), ("idle", 0))
+        inv.assert_not_called()
+
+    def test_realistic_recovery_transition_is_immediate_in_the_same_slot(self):
+        a, w, expected, skip, detail, numbers = self.run_decision(
+            dl.SOC_RECOVERY_ENTRY_PCT - 1, action="idle", power_w=0, solar_skip=True)
+        effective_a, effective_w, _ = dl.effective_target(a, w, skip)
+        self.assertTrue(dl.needs_apply(("18:15", effective_a, effective_w),
+                                       ("18:15", "discharge", 50), effective_a, effective_w, False,
+                                       soc_recovery=bool(numbers.get("soc_recovery"))))
 
 
 if __name__ == "__main__":

@@ -273,6 +273,7 @@ from inverter_control import (
     return_to_auto,
     clamp_power_w,
     set_import_limit,
+    SOC_FLOOR_RECOVERY_W,
     REG_BATT_POWER_TARGET,
     target_raw_for_action,
 )
@@ -380,7 +381,18 @@ _freeze_unavailable = False
 # timing and can avoid buying at peak price. SOC_FLOOR_RECOVERY_W is chosen to raise SoC
 # gently (~0.28 kWh/h) without grid-import spikes. Must be a positive multiple of 10 W.
 SOC_FLOOR_GUARD_HEADROOM_KWH = float(os.environ.get("DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH", "0.5"))
-SOC_FLOOR_RECOVERY_W = max(10, int(os.environ.get("DISPATCH_SOC_FLOOR_RECOVERY_W", "300")) // 10 * 10)
+# Keep charging past the entry threshold: Sunwoda's discharge restart may require a higher SoC
+# than the inverter's minimum. This is an operational target, not a claimed BMS setting.
+SOC_RECOVERY_EXIT_PCT = float(os.environ.get("DISPATCH_SOC_RECOVERY_EXIT_PCT", str(SOC_FLOOR_PCT + 8)))
+SOC_RECOVERY_ENTRY_PCT = (BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH) / BATTERY_KWH * 100
+if not SOC_RECOVERY_ENTRY_PCT < SOC_RECOVERY_EXIT_PCT < 98:
+    raise ValueError("DISPATCH_SOC_RECOVERY_EXIT_PCT must exceed the recovery entry and be below 98%")
+# Start conservatively: after a restart the old process may have been recovering between the
+# entry and exit levels; do not silently abandon that charge.
+_soc_recovery_active = True
+RECOVERY_RESPONSE_TOL_W = 60
+RECOVERY_RESPONSE_CHECK_S = 120
+_last_recovery_nonresponse_report = 0.0
 # Site-level (utility-meter) import limit, applied ONCE at startup via registers 50007/50009 --
 # the only cap that counts house load together with a forced charge. Unset/0 = never written,
 # which is the default because these two registers are not probe-verified on the reference unit
@@ -968,19 +980,8 @@ def decide(con: sqlite3.Connection, now: datetime):
         log.warning("legacy planner hold at slot=%s cannot be realized — falling back to idle/auto", slot_time)
         action, power_w = "idle", 0
     save_mode = planned_action == "idle" and action in ("discharge", "freeze")
-    if not save_mode:
-        # SoC-floor guard: when idle and live SoC is near the floor, escalate to a
-        # recovery charge BEFORE the inverter's BMS triggers its own uncontrolled buy.
-        # battery_save (save_mode) already won the idle comparison — skip so we don't
-        # replace a deliberate drift-discharge with a recovery charge.
-        live_soc_kwh = read_live_soc_kwh(now)
-        live_surplus_for_guard = read_live_solar_surplus_w(now)
-        action, power_w = soc_floor_recovery_target(action, power_w, live_soc_kwh, surplus_w=live_surplus_for_guard)
-        if action == "charge" and planned_action == "idle":
-            log.info("soc-floor guard: live SoC %.2f kWh below floor+headroom (%.2f kWh) "
-                     "— escalating idle to %d W recovery charge (surplus %.0f W)",
-                     live_soc_kwh, BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH,
-                     power_w, live_surplus_for_guard or 0)
+    # Recovery is applied AFTER all planner/live-load corrections in main(), including
+    # no-plan and battery-save paths, so none of them can demote its charge to Auto.
 
     numbers: dict = {}
     if inputs and idx < len(inputs):
@@ -1124,36 +1125,73 @@ def battery_save_target(action: str, power_w: int, slot: dict | None = None):
     return action, power_w
 
 
-def soc_floor_recovery_target(action: str, power_w: int, live_soc_kwh, surplus_w=None):
-    """Escalate an idle action to a small recovery charge when live SoC is near the floor.
+def soc_floor_recovery_target(action: str, power_w: int, live_soc_kwh, surplus_w=None,
+                              *, recovery_active: bool = False):
+    """Override ANY planned action below the recovery threshold, with exit hysteresis.
 
-    When SoC drifts below BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH while the plan
-    says idle, the inverter's own BMS will eventually trigger a forceful charge at whatever
-    the current spot price is. This guard intercepts earlier: by escalating to a charge
-    the optimizer (not the BMS) owns the timing.
-
-    The charge target is max(SOC_FLOOR_RECOVERY_W, surplus_w) — if live PV surplus exceeds
-    the minimum floor, absorb the full surplus into the battery instead of exporting it.
-    The target is quantised to 10 W (register 50207 resolution) and clamped to the
-    inverter's hardware limits. When surplus_w is None or unavailable, falls back to the
-    minimum SOC_FLOOR_RECOVERY_W, preserving the original behaviour.
-
-    Only triggers for idle actions — charge/discharge decisions from the optimizer are
-    never touched. Returns (action, power_w) unchanged when live SoC is unavailable
-    (live.json missing/stale), so the guard never escalates blind.
+    Charging must take priority over discharge, freeze, idle and normal optimizer charging.
+    When recovery_active, do not resume optimization until SOC_RECOVERY_EXIT_PCT is reached;
+    otherwise a BMS discharge-restart interlock can leave the battery stranded at low SoC.
     """
-    if action != "idle":
-        return action, power_w
     if live_soc_kwh is None:
         return action, power_w
-    if live_soc_kwh < BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH:
-        if surplus_w is not None and surplus_w > SOC_FLOOR_RECOVERY_W:
-            target_w = int(clamp_power_w(surplus_w) // 10 * 10)
-            target_w = max(target_w, SOC_FLOOR_RECOVERY_W)
-        else:
-            target_w = SOC_FLOOR_RECOVERY_W
-        return "charge", target_w
-    return action, power_w
+    entry_kwh = BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH
+    exit_kwh = BATTERY_KWH * SOC_RECOVERY_EXIT_PCT / 100
+    if live_soc_kwh >= entry_kwh and (not recovery_active or live_soc_kwh >= exit_kwh):
+        return action, power_w
+    target_w = SOC_FLOOR_RECOVERY_W
+    if surplus_w is not None and surplus_w > target_w:
+        target_w = max(target_w, int(clamp_power_w(surplus_w) // 10 * 10))
+    return "charge", target_w
+
+
+def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_skip: bool,
+                            detail: str, numbers: dict, now: datetime):
+    """Last-stage safety override, after all optimizer and live-load corrections.
+
+    Also runs for a missing plan. Recovery cannot be vetoed by solar-funding, SoC-drift,
+    battery-save or the charge-side grid-position tracker. Live SoC comes from the poller;
+    on a stale sample, read the inverter directly rather than letting stale data trigger
+    an unsafe Auto/discharge decision.
+    """
+    global _soc_recovery_active
+    live_soc_kwh = read_live_soc_kwh(now)
+    if live_soc_kwh is None and ARMED:
+        inv = None
+        try:
+            inv = Inverter()
+            live_soc_kwh = inv.soc_pct() / 100 * BATTERY_KWH
+        except Exception as exc:  # noqa: BLE001
+            log.warning("SoC recovery: live sample stale and direct Modbus read failed: %s", exc)
+        finally:
+            if inv is not None:
+                inv.close()
+    if live_soc_kwh is None:
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    entry_kwh = BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH
+    exit_kwh = BATTERY_KWH * SOC_RECOVERY_EXIT_PCT / 100
+    was_active = _soc_recovery_active
+    _soc_recovery_active = live_soc_kwh < entry_kwh or (was_active and live_soc_kwh < exit_kwh)
+    if not _soc_recovery_active:
+        if was_active:
+            log.info("SoC recovery complete: %.2f%% (exit %.2f%%)", live_soc_kwh / BATTERY_KWH * 100,
+                     SOC_RECOVERY_EXIT_PCT)
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    surplus_w = read_live_solar_surplus_w(now)
+    _, recovery_w = soc_floor_recovery_target("idle", 0, live_soc_kwh, surplus_w,
+                                              recovery_active=True)
+    soc_pct = live_soc_kwh / BATTERY_KWH * 100
+    numbers["soc_recovery"] = True
+    numbers["soc_pct"] = round(soc_pct, 2)
+    numbers["soc_recovery_exit_pct"] = SOC_RECOVERY_EXIT_PCT
+    if not was_active:
+        log.warning("SoC recovery activated at %.2f%%; charging until %.2f%%", soc_pct,
+                    SOC_RECOVERY_EXIT_PCT)
+    detail = (f"SoC recovery {soc_pct:.2f}% -> {SOC_RECOVERY_EXIT_PCT:.1f}%: "
+              f"forcing {recovery_w} W charge regardless of optimizer ({action} {power_w} W); {detail}")
+    return "charge", recovery_w, None, False, detail, numbers
 
 
 def apply_target(inv: Inverter, action: str, power_w: int) -> None:
@@ -1248,7 +1286,7 @@ def effective_target(action: str, power_w: int, solar_skip: bool):
 
 
 def needs_apply(target, last_target, effective_action: str, effective_power: int,
-                due_for_reassert: bool) -> bool:
+                due_for_reassert: bool, *, soc_recovery: bool = False) -> bool:
     """Does this tick warrant actually writing a register?
 
     Three rules, in tension:
@@ -1266,18 +1304,15 @@ def needs_apply(target, last_target, effective_action: str, effective_power: int
         unaffected. The caller keeps the APPLIED power in last_target while suppressing, so slow
         creep accumulates against it and still applies once it sums past the band.
     """
-    # A replan may publish a different action for the slot that is already being
-    # executed. Do not let a battery-save discharge be replaced by a charge in
-    # the middle of that same 15-minute slot: the next tick would otherwise see
-    # a genuine action change and apply it immediately. The next slot may still
-    # change direction normally.
+    # Keep the deliberate battery-save direction through an economic mid-slot replan,
+    # but NEVER block a recovery charge when the live SoC has crossed the safety threshold.
     mid_slot_drift_to_charge = (
         last_target is not None
         and target[0] == last_target[0]
         and last_target[1] == "discharge"
         and target[1] == "charge"
     )
-    if mid_slot_drift_to_charge:
+    if mid_slot_drift_to_charge and not soc_recovery:
         return False
 
     small_power_move = (
@@ -1414,13 +1449,26 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             # emulation, and a freeze (whose three-register combination is not probe-verified — the
             # expected failure is "stored but not enforced", which only a readback plus the measured
             # battery power can distinguish).
-            if applied_action == "freeze" or (applied_action == "discharge" and "battery_save_w" in numbers):
+            if (applied_action == "freeze"
+                    or (applied_action == "discharge" and "battery_save_w" in numbers)
+                    or numbers.get("soc_recovery")):
                 try:
                     log_control_readback(con, slot_time, applied_action, applied_power, inv)
                 except Exception as exc:  # noqa: BLE001
-                    # Readback telemetry is diagnostic only; never undo a successful inverter command
-                    # because SQLite is busy, read-only, or temporarily unavailable.
+                    # Diagnostic-only: never undo a successful write because SQLite is busy.
                     log.warning("control readback logging failed for slot=%s: %s", slot_time, exc)
+            if numbers.get("soc_recovery") and applied_action == "charge":
+                # Modbus setpoint readback is not proof that the battery is actually charging.
+                # Give the BMS time to respond; monitor_soc_recovery_enforcement checks the
+                # following two minutes of independent poller readings before reporting failure.
+                try:
+                    battery_w = inv.battery_power_w()
+                    numbers["battery_w_after_apply"] = battery_w
+                    if battery_w >= -RECOVERY_RESPONSE_TOL_W:
+                        outcome = "accepted_pending_physical_confirmation"
+                except Exception as exc:  # noqa: BLE001 — feedback must not cancel recovery
+                    numbers["battery_feedback_error"] = str(exc)
+                    outcome = "accepted_pending_physical_confirmation"
         loop_in_auto = applied_action in AUTO_ACTIONS
         log_action(con, slot_time, applied_action, applied_power, outcome, detail, detail_json=numbers)
         log.info("slot=%s action=%s power=%dW armed=%s -> %s%s",
@@ -1447,6 +1495,46 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
         if inv is not None:
             inv.close()
     return outcome, loop_in_auto
+
+
+def monitor_soc_recovery_enforcement(con: sqlite3.Connection, now: datetime, target,
+                                     last_target, last_write_monotonic: float,
+                                     numbers: dict) -> bool:
+    """Report a charge that was register-accepted but physically absent for two minutes.
+
+    Three independent poller samples are required, not one instantaneous read immediately
+    after mode switching. This is observational only: the commanded protective charge stays
+    active and may start later when the BMS releases its interlock.
+    """
+    global _last_recovery_nonresponse_report
+    if (not ARMED or not numbers.get("soc_recovery") or target != last_target
+            or target[1] != "charge"):
+        return False
+    elapsed = time.monotonic() - last_write_monotonic
+    if elapsed < RECOVERY_RESPONSE_CHECK_S:
+        return False
+    if time.monotonic() - _last_recovery_nonresponse_report < REASSERT_S:
+        return False
+    try:
+        since = (now - timedelta(seconds=RECOVERY_RESPONSE_CHECK_S)).isoformat()
+        count, min_power = con.execute(
+            """SELECT COUNT(*), MIN(battery_w) FROM readings
+               WHERE timestamp >= ? AND timestamp <= ? AND battery_w IS NOT NULL""",
+            (since, now.isoformat()),
+        ).fetchone()
+        if count < 3 or min_power is None or min_power < -RECOVERY_RESPONSE_TOL_W:
+            return False
+        _last_recovery_nonresponse_report = time.monotonic()
+        detail = (f"recovery charge {target[2]} W accepted but {count} poller samples over "
+                  f"{RECOVERY_RESPONSE_CHECK_S}s show no charging (min battery {min_power} W)")
+        log.error("slot=%s %s", target[0], detail)
+        log_action(con, target[0], "charge", target[2], "command_accepted_but_not_enforced",
+                   detail, detail_json={**numbers, "battery_w_min": min_power,
+                                       "sample_count": count})
+        return True
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never stop dispatch
+        log.warning("SoC recovery physical verification failed: %s", exc)
+        return False
 
 
 def apply_import_limit() -> None:
@@ -1526,11 +1614,14 @@ def main() -> None:
             if decide_failure_reverted:
                 decide_failure_reverted = False
                 last_target = None
+            action, power_w, expected_soc_kwh, solar_skip, detail, numbers = prioritize_soc_recovery(
+                action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
             effective_action, effective_power, solar_skipped_now = effective_target(
                 action, power_w, solar_skip)
             target = (slot_time, effective_action, effective_power)
             due_for_reassert = (time.monotonic() - last_write_monotonic) >= REASSERT_S
-            if needs_apply(target, last_target, effective_action, effective_power, due_for_reassert):
+            if needs_apply(target, last_target, effective_action, effective_power, due_for_reassert,
+                           soc_recovery=bool(numbers.get("soc_recovery"))):
                 outcome, loop_in_auto = apply_decision(
                     con, slot_time, action, power_w, expected_soc_kwh, solar_skipped_now,
                     detail, numbers, loop_in_auto)
@@ -1539,6 +1630,8 @@ def main() -> None:
                 # must leave it unset so the next tick retries.
                 last_target = next_last_target(outcome, target)
                 last_write_monotonic = time.monotonic()
+            monitor_soc_recovery_enforcement(con, iteration_now, target, last_target,
+                                             last_write_monotonic, numbers)
         except Exception as exc:  # noqa: BLE001
             # decide() itself failed (e.g. a corrupt dispatch_json row) — we don't know
             # the intended action, but we must not leave a previous slot's forced setpoint

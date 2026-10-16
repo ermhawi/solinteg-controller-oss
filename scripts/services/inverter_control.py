@@ -67,6 +67,8 @@ GRID_CAP_W = int(os.environ.get("SOLINTEG_GRID_CAP_W", "11000"))
 # lib/__tests__/constants-cross-language.test.ts).
 SOC_FLOOR_PCT = float(os.environ.get("SOLINTEG_SOC_FLOOR_PCT", "8"))
 SOC_CEILING_PCT = float(os.environ.get("SOLINTEG_SOC_CEILING_PCT", "98"))
+# Emergency charge used by both the dispatch recovery and force_discharge's last-resort guard.
+SOC_FLOOR_RECOVERY_W = max(10, int(os.environ.get("DISPATCH_SOC_FLOOR_RECOVERY_W", "300")) // 10 * 10)
 
 # ── Registers (verified — see MODBUS.md) ──
 REG_WORK_MODE = 50000          # U16 enum
@@ -499,8 +501,11 @@ def force_discharge(inv: Inverter, power_w: int) -> None:
         return
     soc = inv.soc_pct()
     if soc <= SOC_FLOOR_PCT:
-        log.info("force_discharge: SoC %.1f%% <= floor %.1f%% — returning to auto instead", soc, SOC_FLOOR_PCT)
-        return_to_auto(inv)
+        # General/Auto can keep draining down to the inverter's LOWER native floor. Never
+        # substitute Auto for a refused discharge at low SoC: actively recover instead.
+        log.warning("force_discharge: SoC %.1f%% <= floor %.1f%% — protective charge %d W, NOT auto",
+                    soc, SOC_FLOOR_PCT, SOC_FLOOR_RECOVERY_W)
+        force_charge(inv, SOC_FLOOR_RECOVERY_W)
         return
     raw = target_raw_for_action("discharge", power_w)
     already_set = _already_set_for(inv, priority=1)

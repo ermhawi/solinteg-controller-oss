@@ -137,14 +137,16 @@ class ForceDischargeTests(InverterControlTestCase):
         written_addrs = {addr for addr, _ in inv.client.write_calls()}
         self.assertEqual(written_addrs, {ic.REG_BATT_POWER_TARGET})
 
-    def test_at_or_below_soc_floor_returns_to_auto_instead_of_discharging(self):
+    def test_at_or_below_soc_floor_recovers_instead_of_returning_to_auto(self):
         inv = make_inverter(soc_pct=ic.SOC_FLOOR_PCT)
         ic.force_discharge(inv, 2000)
 
         writes = dict(inv.client.write_calls())
-        self.assertEqual(writes.get(ic.REG_WORK_MODE), ic.WORK_MODE_GENERAL)
-        self.assertNotIn(ic.REG_PRIORITY, writes)
-        self.assertFalse(ic._forced_active)
+        self.assertEqual(writes.get(ic.REG_WORK_MODE), ic.WORK_MODE_EMS_BATTCTRL)
+        self.assertEqual(writes.get(ic.REG_BATT_POWER_TARGET),
+                         (-ic.SOC_FLOOR_RECOVERY_W // 10) & 0xFFFF)
+        self.assertEqual(writes.get(ic.REG_PRIORITY), 0)  # charging
+        self.assertTrue(ic._forced_active)
 
 
 class ReturnToAutoCapRestoreTests(InverterControlTestCase):
