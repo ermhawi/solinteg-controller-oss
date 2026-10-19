@@ -103,10 +103,13 @@ echo "\$SOLPW" | sudo -S systemctl is-active solinteg-dispatch
 # the old code; the reference deployment hit exactly that when the per-phase meter columns
 # were added. A poller restart costs one missed sample, so just always do it.
 for unit in solinteg-poller solinteg-weather; do
-  echo "\$SOLPW" | sudo -S systemctl restart "\$unit"
+  if systemctl is-active --quiet "\$unit"; then
+    echo "\$SOLPW" | sudo -S systemctl restart "\$unit"
+    echo "\$SOLPW" | sudo -S systemctl is-active "\$unit"
+  else
+    echo "Skipping inactive optional service: \$unit"
+  fi
 done
-sleep 2
-echo "\$SOLPW" | sudo -S systemctl is-active solinteg-poller solinteg-weather
 
 rm -rf /tmp/solinteg-deploy
 curl -s -o /dev/null -w "local curl on NUC: %{http_code}\n" http://localhost:3000/

@@ -23,7 +23,8 @@ Local base: `Sundsvall` at `f399cd5`. Integrated by a merge commit, **not** a re
 - Fixed the candidate-scoring discrepancy: `evaluateDispatch` keeps its historic honest
   forecast valuation by default, and has `useConsumptionReserve: true` for DP candidate
   comparisons, matching the DP's effective load. Hindsight/oracle remains unchanged.
-- Both deploy variants restart poller/weather after code replacement (when present locally).
+- Both deploy variants restart the poller after code replacement; an optional inactive
+  weather service stays inactive (the Sundsvall installation has no active weather unit).
 
 ## Explicitly not enabled or copied
 

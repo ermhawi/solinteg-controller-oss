@@ -64,9 +64,11 @@ sleep 2
 sudo systemctl is-active solinteg-dispatch
 # Poller and weather are long-running Python services too: code changes are not hot-reloaded.
 for unit in solinteg-poller solinteg-weather; do
-  if systemctl cat "$unit" >/dev/null 2>&1; then
+  if systemctl is-active --quiet "$unit"; then
     sudo systemctl restart "$unit"
     sudo systemctl is-active "$unit"
+  else
+    echo "==> Skipping inactive optional service: $unit"
   fi
 done
 
