@@ -7,6 +7,8 @@ import PowerFlowCard from '@/app/components/PowerFlowCard';
 import DispatchCard from '@/app/components/DispatchCard';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
 import { apiPath } from '@/lib/base-path';
+import { classifyInverterResponse } from '@/lib/inverter-api-status';
+import type { InverterApiStatus } from '@/lib/inverter-api-status';
 
 // Keeps Systemstatus live between page loads by polling the existing /api/inverter route
 // (same readLiveInverterData() the server render used for the first paint). DispatchCard
@@ -24,6 +26,7 @@ export default function LiveInverterPanel({
   initialDispatchData: DispatchCardData | null;
 }) {
   const [data, setData] = useState(initialData);
+  const [status, setStatus] = useState<InverterApiStatus>(initialData ? 'live' : 'inverter-offline');
 
   // ON FAILURE: blank, deliberately — unlike the two cards beside it, which keep their last
   // known value (see poll-cadence.ts). Instantaneous power is only meaningful as of NOW; a
@@ -34,11 +37,25 @@ export default function LiveInverterPanel({
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch(apiPath('/api/inverter'), { cache: 'no-store' });
-        const next = res.ok ? ((await res.json()) as InverterLiveData) : null;
-        if (!cancelled) setData(next);
+        const res = await fetch(apiPath('/api/inverter'), { cache: 'no-store', redirect: 'manual' });
+        const nextStatus = classifyInverterResponse(res);
+        if (nextStatus !== 'live') {
+          if (!cancelled) {
+            setData(null);
+            setStatus(nextStatus);
+          }
+          return;
+        }
+        const next = await res.json().catch(() => null) as InverterLiveData | null;
+        if (!cancelled) {
+          setData(next);
+          setStatus(next ? 'live' : 'service-error');
+        }
       } catch {
-        if (!cancelled) setData(null);
+        if (!cancelled) {
+          setData(null);
+          setStatus('network-error');
+        }
       }
     };
     const id = setInterval(tick, DASHBOARD_POLL_MS);
@@ -56,7 +73,7 @@ export default function LiveInverterPanel({
   // left, Dispatch keeps its natural height below it.
   return (
     <div className="contents min-[1600px]:flex min-[1600px]:flex-col min-[1600px]:gap-5 min-[1600px]:[grid-column:3] min-[1600px]:[grid-row:1/span_2]">
-      <PowerFlowCard data={data} />
+      <PowerFlowCard data={data} status={status} />
       <DispatchCard initialData={initialDispatchData} />
     </div>
   );

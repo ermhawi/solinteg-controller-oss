@@ -3,31 +3,31 @@
 import { useEffect, useState } from 'react';
 import { apiPath } from '@/lib/base-path';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
+import { classifyInverterResponse, INVERTER_STATUS_TEXT } from '@/lib/inverter-api-status';
+import type { InverterApiStatus } from '@/lib/inverter-api-status';
 
 /**
  * Header "Live" indicator, polling the same /api/inverter route LiveInverterPanel uses — so the
  * global status line can no longer disagree with Systemstatus. Before this, the header's
- * "Live · uppdaterad nyss" text was static JSX in AppShell: it kept saying "Live" even while
- * PowerFlowCard showed its own "no current data" empty state after a poll failure, which looked
- * self-contradictory. /api/inverter returns 503 when readLiveInverterData() has nothing fresh
- * (see that route), so res.ok here is the same live/offline signal the rest of the dashboard
- * already uses.
+ * "Live · uppdaterad nyss" text was static JSX in AppShell even when the inverter had no
+ * current data. Distinguish /api/inverter's 503 (stale telemetry) from authentication,
+ * network, and server failures so a session timeout is not mistaken for a dead inverter.
  *
- * Starts optimistic (ok=true) rather than "checking…" — avoids a flash of the offline state on
+ * Starts optimistic (status='live') rather than "checking…" — avoids a flash of the offline state on
  * every normal load while the first poll is in flight; the first real poll (fired immediately,
  * not just on the interval) corrects it within a second or two if the inverter is actually down.
  */
 export default function LiveStatus({ today }: { today: string }) {
-  const [ok, setOk] = useState(true);
+  const [status, setStatus] = useState<InverterApiStatus>('live');
 
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch(apiPath('/api/inverter'), { cache: 'no-store' });
-        if (!cancelled) setOk(res.ok);
+        const res = await fetch(apiPath('/api/inverter'), { cache: 'no-store', redirect: 'manual' });
+        if (!cancelled) setStatus(classifyInverterResponse(res));
       } catch {
-        if (!cancelled) setOk(false);
+        if (!cancelled) setStatus('network-error');
       }
     };
     tick();
@@ -43,11 +43,11 @@ export default function LiveStatus({ today }: { today: string }) {
       <span className="relative h-[7px] w-[7px]">
         <span
           className="absolute inset-0 rounded-full"
-          style={{ background: ok ? 'var(--live-dot)' : 'var(--color-warning)' }}
+          style={{ background: status === 'live' ? 'var(--live-dot)' : 'var(--color-warning)' }}
         />
-        {ok && <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />}
+        {status === 'live' && <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />}
       </span>
-      {ok ? `Live · uppdaterad nyss · ${today}` : `Frånkopplad från växelriktaren · ${today}`}
+      {INVERTER_STATUS_TEXT[status]} · {today}
     </div>
   );
 }

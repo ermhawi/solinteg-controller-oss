@@ -1,6 +1,8 @@
 'use client';
 
 import type { InverterLiveData } from '@/lib/inverter';
+import { INVERTER_STATUS_TEXT } from '@/lib/inverter-api-status';
+import type { InverterApiStatus } from '@/lib/inverter-api-status';
 
 // Ignore sub-threshold dribbles so a line/node doesn't flicker state near 0 W.
 const FLOW_THRESHOLD_W = 20;
@@ -182,7 +184,7 @@ const GridIcon = (
   </svg>
 );
 
-function CardChrome({ children }: { children: React.ReactNode }) {
+function CardChrome({ children, live = true }: { children: React.ReactNode; live?: boolean }) {
   return (
     <div
       className="card-surface box-border flex w-full max-w-[380px] min-[1600px]:max-w-none min-[1600px]:flex-1 min-[1600px]:min-h-[380px] flex-col overflow-hidden order-2 min-[1600px]:order-none"
@@ -214,10 +216,10 @@ function CardChrome({ children }: { children: React.ReactNode }) {
         </div>
         <div className="flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>
           <span className="relative h-[7px] w-[7px]">
-            <span className="absolute inset-0 rounded-full" style={{ background: 'var(--live-dot)' }} />
-            <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />
+            <span className="absolute inset-0 rounded-full" style={{ background: live ? 'var(--live-dot)' : 'var(--color-warning)' }} />
+            {live && <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />}
           </span>
-          Live
+          {live ? 'Live' : 'Ej live'}
         </div>
       </div>
       {/* No wrapping flex-1/centering div here anymore (v5) — header, diagram, divider, and
@@ -229,15 +231,20 @@ function CardChrome({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function PowerFlowCard({ data }: { data: InverterLiveData | null }) {
+export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter-offline' }: {
+  data: InverterLiveData | null;
+  status?: InverterApiStatus;
+}) {
   if (!data) {
     return (
-      <CardChrome>
+      <CardChrome live={false}>
         <div
           className="flex flex-1 items-center justify-center px-8 pb-[18px] text-center text-sm"
           style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-body)' }}
         >
-          Ingen aktuell data från växelriktaren (offline eller mer än 2 min gammal).
+          {status === 'inverter-offline'
+            ? 'Ingen aktuell data från växelriktaren (offline eller mer än 2 min gammal).'
+            : INVERTER_STATUS_TEXT[status]}
         </div>
       </CardChrome>
     );

@@ -16,6 +16,7 @@
  * labels the series "Plan:" for exactly that reason. Consumers must treat slots in the past
  * (plan computed a while ago) as stale and filter on epochSec >= now.
  */
+import { connection } from 'next/server';
 import { BATTERY_KWH } from '@/lib/optimizer';
 import { readLatestOptimizerRun } from '@/lib/telemetry';
 
@@ -23,6 +24,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const SLOTS_PER_HOUR = 4;
 
 export async function GET() {
+  // SQLite reads are synchronous; without this Next.js can freeze the response at build time.
+  await connection();
   if (!process.env.TELEMETRY_DB_PATH) {
     return Response.json({ error: 'telemetry disabled (TELEMETRY_DB_PATH unset)' }, { status: 503 });
   }
