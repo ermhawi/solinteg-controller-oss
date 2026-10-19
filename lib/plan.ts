@@ -23,6 +23,10 @@ import {
   LOAD_FORECAST_MARGIN,
   DEFERRAL_RATE_ORE_PER_KWH_HOUR,
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+  SOLAR_RISK_SURVIVAL,
+  DEFERRAL_UNTIL_NEEDED,
+  REFUND_CREDIT_ENABLED,
+  energyTaxRefundOre,
   FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
   BATTERY_SAVE_FORECAST_DRAIN_W,
@@ -249,6 +253,9 @@ export async function producePlan(): Promise<PlanResult> {
         loadFactor: LOAD_FORECAST_MARGIN,
         deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
         solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+        solarRiskSurvival: SOLAR_RISK_SURVIVAL,
+        deferralUntilNeeded: DEFERRAL_UNTIL_NEEDED,
+        ...(REFUND_CREDIT_ENABLED ? { refundCreditOre: energyTaxRefundOre } : {}),
         holdEnabled:
           process.env.SOLINTEG_HOLD_ENABLED === '1' &&
           process.env.SOLINTEG_CONTROL_ARMED !== '1',

@@ -69,6 +69,8 @@ import {
   LOAD_FORECAST_MARGIN,
   DEFERRAL_RATE_ORE_PER_KWH_HOUR,
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+  SOLAR_RISK_SURVIVAL,
+  DEFERRAL_UNTIL_NEEDED,
   MAX_RISK_SACRIFICE_ORE,
 } from '../../lib/constants';
 
@@ -163,6 +165,8 @@ function analyse(run: Run): Analysed {
     loadFactor: LOAD_FORECAST_MARGIN,
     deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
     solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+    solarRiskSurvival: SOLAR_RISK_SURVIVAL,
+    deferralUntilNeeded: DEFERRAL_UNTIL_NEEDED,
   };
   const kept = optimizeDispatch(run.slots, run.startSoc, opts);
   // The two candidates the guard chooses between. maxRiskSacrificeOre=Infinity forces the
@@ -173,8 +177,8 @@ function analyse(run: Run): Analysed {
     maxRiskSacrificeOre: Number.POSITIVE_INFINITY,
   });
   const sacrificeOre =
-    evaluateDispatch(run.slots, undeferred, run.startSoc).valueOre -
-    evaluateDispatch(run.slots, deferred, run.startSoc).valueOre;
+    evaluateDispatch(run.slots, undeferred, run.startSoc, { loadFactor: LOAD_FORECAST_MARGIN, useConsumptionReserve: true }).valueOre -
+    evaluateDispatch(run.slots, deferred, run.startSoc, { loadFactor: LOAD_FORECAST_MARGIN, useConsumptionReserve: true }).valueOre;
 
   const lenOk = kept.length === run.stored.length;
   const actionsMatch = lenOk && kept.every((s, i) => s.action === run.stored[i].action);

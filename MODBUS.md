@@ -76,6 +76,7 @@ still a list of things to confirm on **your** hardware, and that script is there
 | 33001 | Battery SoH | U16 | ×0.01 % | Source-verified 2026-07-02 against `plugin_solinteg.py` @ `350266f`, same commit as the rest of this file. Ground truth for the wear-cost model's assumed degradation curve. |
 | 33003 | Battery Temperature | U16 | ×0.1 °C | Plain unsigned register, no offset for negative temps in the source plugin — unconfirmed whether this pack can ever report sub-zero (a negative reading would wrap to a huge nonsensical positive value, not a sane negative one). (33002 is unused/reserved.) |
 | 30258 | Battery power (W) | S32 | 1 | **−ve = charging, +ve = discharging** (as reported) |
+| 10994 / 10996 / 10998 | Meter L1 / L2 / L3 power (W) | S32 | 1 | Same sign as 11000, and they sum to it (probed live: −66 −60 −51 = −177). Polled as `meter_l1_w..meter_l3_w`; a phase stuck at exactly 0 is a dead CT (`check_meter_phase_dead`). 10990/10992 return values too (208 / 573 at probe time), meaning unknown. |
 | 11000 | Meter (grid) power (W) | S32 | 1 | **+ve = export, −ve = import** (as reported) |
 | 11028 | Total PV power (W) | U32 | 1 | |
 | 11016 | Inverter AC output (W) | S32 | 1 | **NOT house load** |
@@ -298,6 +299,35 @@ answered the hard way in production. Still gated behind `DISPATCH_FREEZE_HOLDS` 
 confirms the rule here rather than assuming it. The economic-displacement finding under
 the control-register table does **not** transfer to the freeze case: it comes from a nonzero
 charge target outbidding the house for PV, and a freeze commands `50207 = 0`.
+
+**UPSTREAM REFERENCE UNIT ONLY — NOT VERIFIED ON SUNDVALL.** The following 2026-10-03
+probe used another inverter/firmware. Its soft hold (0x303 + 50207=0 with OPEN caps) differs
+from the failed three-register freeze above. Our dispatch loop deliberately does NOT call
+`force_hold`; `DISPATCH_FREEZE_HOLDS` must remain OFF until a new, disarmed physical probe.
+
+**HOLD PROBED ON THE UPSTREAM REFERENCE (`scripts/tools/probe_hold_freeze.py`, dark, SoC ~63 %,
+house ~700-840 W): both recipes held on that device; the simple one was enough.**
+
+| phase | battery | grid | house | grid L1/L2/L3 |
+|---|---|---|---|---|
+| 0 self-use (baseline) | +692 W | +4 W | 684 W | ~0 / ~0 / ~0 |
+| A **soft hold**: 0x303 + 50207=0, caps OPEN | **+0 W** | −706 W | 706 W | −237 / −235 / −234 |
+| B full freeze: + 50209=0, 50208=0 in-mode | +0 W | −840 W | 840 W | −290 / −261 / −288 |
+
+SoC did not move in either; the grid carried the whole house evenly on all three phases; the
+in-mode cap writes read back as stored; the restore verified. So:
+- **A no-solar hold needs NO restrictive caps.** `0x303` with `50207 = 0` freezes the battery by
+  itself on the upstream unit. `inverter_control.force_hold` is imported for reference but
+  our local dispatcher does not invoke it without separate firmware validation.
+  Power 0 also blocks charging from a PV surplus, so the executor holds only in no-solar slots.
+  A hold WITH a solar surplus to export (lib/plan.ts's gated hold mode) is unprobed.
+- **`50208 = 0` is probed** (Phase B) and behaves as documented, with nothing on the EPS/backup
+  port. Check yours before running the probe: with 50208 = 0 the inverter delivers no AC.
+- **The floor question below is mostly moot for a soft hold:** AC input stays open and a frozen
+  battery does not discharge. The executor still refuses to hold below a minimum SoC.
+- Probe lessons: the dongle occasionally garbles a reply, so a one-shot probe must retry each
+  call on a fresh connection; and a dropped SSH session sends SIGHUP, which the inverter_control
+  fail-safe does not catch, so the probe handles it itself.
 
 **OPEN, and worth answering before shipping any restrictive-cap mode: can the inverter's own SoC
 floor still act with AC input blocked?** 52502/52503 hold an on-grid floor and the inverter actively

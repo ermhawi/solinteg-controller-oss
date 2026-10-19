@@ -37,6 +37,8 @@ export { BATTERY_KWH, BATTERY_MAX_KW, GRID_KW, BATTERY_MIN_SOC_KWH }; // re-expo
  */
 const BATTERY_SLOT_KWH = BATTERY_MAX_KW / 4; // battery charge/discharge throughput per 15-min slot
 const GRID_SLOT_KWH = GRID_KW / 4; // grid import AND export per 15-min slot (house load included)
+// A dawn/dusk trickle below 200 W average is not meaningful solar for premium survival.
+const SURVIVAL_SOLAR_SLOT_KWH = 0.05;
 // The METER-to-stored per-leg efficiency (see EFF_ONE_WAY in lib/constants.ts). This used to be
 // derived from the battery-terminal DC round trip alone, while every use of it here sits between
 // GRID energy and stored energy — so the inverter's own conversion losses were missing entirely:
@@ -397,6 +399,8 @@ export function optimizeDispatch(
      *  MAX_RISK_SACRIFICE_ORE. */
     maxRiskSacrificeOre?: number;
     solarRiskPremiumOre?: number;
+    solarRiskSurvival?: boolean;
+    deferralUntilNeeded?: boolean;
     holdEnabled?: boolean;
     /** Hours ahead over which the solar risk premium counts forecast solar. Defaults to
      *  SOLAR_RISK_LOOKAHEAD_HOURS. */
@@ -408,7 +412,58 @@ export function optimizeDispatch(
      *  the hindsight oracle and every existing test rely on. Ignored when endSoc is set — an
      *  explicit terminal constraint already says what the trajectory must end at. */
     terminalValueOrePerKwh?: number;
+    /** Annual energy-tax refund credit, only when eligibility and the paid rate are verified. */
+    refundCreditOre?: (startTime: string) => number;
   },
+): DispatchSlot[] {
+  const refundOre = opts?.refundCreditOre;
+  if (!refundOre || slots.length === 0) return planWithRiskGuard(slots, startSoc, opts);
+
+  // Keep our site's risk-sacrifice guard, physical constraints, forecast premium, and
+  // terminal-value economics in BOTH candidates. A notional credit must never change the
+  // plan unless the conservatively-attributable actual refund improves total value.
+  const credit = slots.map((s) => (s.solarKwh < SURVIVAL_SOLAR_SLOT_KWH ? Math.max(0, refundOre(s.startTime)) : 0));
+  const plain = planWithRiskGuard(slots, startSoc, opts);
+  if (credit.every((c) => c === 0)) return plain;
+  const creditedSlots = slots.map((s, i) => (
+    credit[i] > 0 ? { ...s, sellPrice: s.sellPrice + credit[i] } : s
+  ));
+  const credited = planWithRiskGuard(creditedSlots, startSoc, opts);
+  const pricing = {
+    loadFactor: opts?.loadFactor,
+    terminalValueOrePerKwh: opts?.terminalValueOrePerKwh,
+    useConsumptionReserve: true,
+  };
+  const score = (d: DispatchSlot[]) =>
+    evaluateDispatch(slots, d, startSoc, pricing).valueOre + refundEarnedOre(d, credit);
+  return score(credited) > score(plain) + 1e-6 ? credited : plain;
+}
+
+/** Conservative grid-origin tracking for *potential* energy-tax refunds.
+ *  Starting energy and solar are NOT credited; grid import is credited net of
+ *  charging loss; household discharge consumes credited stock before any export.
+ *  This is deliberately conservative until measured provenance can be audited.
+ */
+export function refundEarnedOre(dispatch: DispatchSlot[], creditOre: number[]): number {
+  let gridPoolDcKwh = 0;
+  let earnedOre = 0;
+  for (let i = 0; i < dispatch.length; i++) {
+    const slot = dispatch[i];
+    gridPoolDcKwh += Math.max(0, slot.gridToBatteryKwh) * ONE_WAY_EFF;
+    // Assume household consumption draws grid-origin energy first, to avoid over-crediting.
+    gridPoolDcKwh = Math.max(0, gridPoolDcKwh - Math.max(0, slot.batteryToLoadKwh) / ONE_WAY_EFF);
+    const eligibleDcKwh = Math.min(gridPoolDcKwh, Math.max(0, slot.batteryToGridKwh) / ONE_WAY_EFF);
+    gridPoolDcKwh -= eligibleDcKwh;
+    earnedOre += eligibleDcKwh * ONE_WAY_EFF * (creditOre[i] ?? 0);
+    gridPoolDcKwh = Math.min(gridPoolDcKwh, Math.max(0, slot.socAfter - MIN_SOC_KWH));
+  }
+  return earnedOre;
+}
+
+function planWithRiskGuard(
+  slots: OptimizerSlot[],
+  startSoc: number,
+  opts?: Parameters<typeof dpCore>[2] & { maxRiskSacrificeOre?: number },
 ): DispatchSlot[] {
   // Two-pass sacrifice guard. Every risk knob is a planning fiction — a surcharge or a price
   // haircut that exists to buy robustness, not because the money is real — so measure what the
@@ -438,6 +493,7 @@ export function optimizeDispatch(
     const pricing = {
       loadFactor: opts?.loadFactor,
       terminalValueOrePerKwh: opts?.terminalValueOrePerKwh,
+      useConsumptionReserve: true,
     };
     const sacrifice =
       evaluateDispatch(slots, fearless, startSoc, pricing).valueOre -
@@ -456,6 +512,8 @@ function dpCore(
     deferralRateOrePerKwhHour?: number;
     deferralHorizonHours?: number;
     solarRiskPremiumOre?: number;
+    solarRiskSurvival?: boolean;
+    deferralUntilNeeded?: boolean;
     holdEnabled?: boolean;
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
@@ -545,6 +603,37 @@ function dpCore(
   );
   for (let i = 0; i <= n; i++) {
     windowSolarKwh[i] = suffixSolarKwh[i] - suffixSolarKwh[Math.min(n, i + solarWindowSlots)];
+  }
+
+  // Need-window deferral: cap by our existing 12-hour horizon, even when the forecast
+  // deficit that needs this energy would happen much later.
+  const needWindow = deferralRate > 0 && opts?.deferralUntilNeeded === true;
+  const prefixDeficit = new Float64Array(n + 1);
+  if (needWindow) {
+    for (let i = 0; i < n; i++) prefixDeficit[i + 1] = prefixDeficit[i] + loadRem[i];
+  }
+  const hoursUntilNeeded = (i: number, held: number): number => {
+    const target = prefixDeficit[i + 1] + held;
+    if (prefixDeficit[n] <= target) return 0.25 * (n - 1 - i);
+    let lo = i + 1;
+    let hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (prefixDeficit[mid + 1] > target) hi = mid;
+      else lo = mid + 1;
+    }
+    return 0.25 * (lo - i);
+  };
+
+  // A grid-funded buy competes with the next solar only if still stored at its arrival.
+  const survival = solarRiskPremiumOre > 0 && opts?.solarRiskSurvival === true;
+  const deficitToSolarKwh = new Float64Array(n);
+  if (survival) {
+    let acc = 0;
+    for (let i = n - 1; i >= 0; i--) {
+      deficitToSolarKwh[i] = acc;
+      acc = slots[i].solarKwh >= SURVIVAL_SOLAR_SLOT_KWH ? 0 : acc + loadRem[i];
+    }
   }
 
   // Hold gates (opt-in). Precompute per-slot whether the DP MAY freeze SoC and export solar
@@ -667,7 +756,21 @@ function dpCore(
           gImp = gridToBattery + lr;
           gExp = curtail ? 0 : sr - fromSolar;
           if (gExp > GRID_SLOT_KWH) gExp = GRID_SLOT_KWH;
-          riskOre = gridToBattery * (deferOre[i] + solarRiskOre + forecastOre);
+          let premiumKwh = gridToBattery;
+          if (survival && gridToBattery > 0) {
+            const after = socOf(j) - deficitToSolarKwh[i];
+            const without = after - gridToBattery * ONE_WAY_EFF;
+            const survives = Math.max(MIN_SOC_KWH, after) - Math.max(MIN_SOC_KWH, without);
+            premiumKwh = Math.min(gridToBattery, Math.max(0, survives) / ONE_WAY_EFF);
+          }
+          const buyDeferOre =
+            needWindow && gridToBattery > 0
+              ? deferralRate * Math.min(
+                  Math.max(0, deferralHorizonH - 0.25 * i),
+                  hoursUntilNeeded(i, Math.max(0, soc - MIN_SOC_KWH)),
+                )
+              : deferOre[i];
+          riskOre = gridToBattery * (buyDeferOre + forecastOre) + premiumKwh * solarRiskOre;
         } else {
           const out = -dE * ONE_WAY_EFF;
           const toLoad = out < lr ? out : lr;
@@ -832,6 +935,9 @@ export function evaluateDispatch(
     /** öre per stored kWh left above the floor at the end of `dispatch`, credited to the value.
      *  Pass the same figure the plan was solved with, or omit for the raw cash-and-wear value. */
     terminalValueOrePerKwh?: number;
+    /** Use measured high-quantile load reserve ONLY when comparing two planning candidates.
+     *  Default false preserves honest forecast valuation and hindsight-oracle scoring. */
+    useConsumptionReserve?: boolean;
   },
 ): DispatchEconomics {
   const loadFactor = opts?.loadFactor ?? 1;
@@ -839,7 +945,11 @@ export function evaluateDispatch(
   let wearOre = 0;
   let soc = startSoc;
   for (let i = 0; i < dispatch.length; i++) {
-    const load = (slots[i].consumptionKwh ?? 0) * loadFactor;
+    // Default: honest forecast valuation. For a risk/refund candidate comparison, explicitly
+    // use the same high-quantile planning reserve the DP was solved against.
+    const marginedLoad = (slots[i].consumptionKwh ?? 0) * loadFactor;
+    const reserve = opts?.useConsumptionReserve ? slots[i].consumptionReserveKwh : undefined;
+    const load = reserve !== undefined ? Math.max(marginedLoad, reserve) : marginedLoad;
     const s2l = Math.min(slots[i].solarKwh, load);
     const solarRem = slots[i].solarKwh - s2l;
     const f = computeFlows(soc, dispatch[i].socAfter, solarRem, load - s2l, slots[i].sellPrice < 0);

@@ -272,6 +272,71 @@ export const MAX_RISK_SACRIFICE_ORE = numEnv(
  */
 export const SOLAR_RISK_PREMIUM_ORE_PER_KWH = numEnv('SOLINTEG_SOLAR_RISK_PREMIUM_ORE', 20);
 
+/**
+ * Survival form of the solar-risk premium (optimizeDispatch's opts.solarRiskSurvival): charge
+ * the premium only on the part of a grid buy still in the battery when the next solar arrives,
+ * after self-use has drawn the forecast house deficit out of it. The plain form charges every
+ * bought kWh, so a winter night buy that the heat pump uses up before dawn pays a premium
+ * against tomorrow's solar it can never overlap with. Daytime buys are priced exactly as
+ * before; a summer night buy (little night load, so it survives to sunrise) keeps the full
+ * premium, which is the case the premium exists for.
+ *
+ * Disabled by default on the Sundsvall installation until local replay validates it.
+ * Set SOLINTEG_SOLAR_RISK_SURVIVAL=1 to opt in.
+ */
+export const SOLAR_RISK_SURVIVAL = process.env.SOLINTEG_SOLAR_RISK_SURVIVAL === '1';
+
+/**
+ * Need-window form of the deferral bias (optimizeDispatch's opts.deferralUntilNeeded): a
+ * grid-funded charge's earliness is measured to when the bought energy would be NEEDED (the
+ * first slot where the forecast house deficit since the buy exceeds what the battery already
+ * holds above the floor), not to the horizon end. The slope that makes the planner prefer the
+ * later of near-equal slots is unchanged; what goes is the LEVEL, which on a long plan reaches
+ * many öre/kWh and taxed buys that cannot be deferred at all (a winter night buy feeding the
+ * heat pump within the hour paid as if it could wait until tomorrow night). A morning buy for
+ * an evening sell on a solar day is not needed until evening, so it keeps its protection.
+ * Sells keep the full ramp.
+ *
+ * Disabled by default here until tested against the local 12-hour deferral horizon.
+ * Set SOLINTEG_DEFERRAL_UNTIL_NEEDED=1 to opt in.
+ */
+export const DEFERRAL_UNTIL_NEEDED = process.env.SOLINTEG_DEFERRAL_UNTIL_NEEDED === '1';
+
+/**
+ * Swedish battery energy-tax refund (Skatteverket refund type 739, "Inmatad el efter lagring",
+ * from 2026-01-01): the energy tax paid on grid electricity is refunded when that electricity
+ * is stored in a battery and fed back to the grid. Excl. VAT, storage losses not refundable,
+ * solar-origin energy earns nothing. Claimed per calendar year.
+ *
+ * öre per exported kWh, by calendar year of the export. A year missing here earns NO credit
+ * (fail closed): the rate or the rule itself can change, so each new year must be added by
+ * hand once its rate is confirmed. 2026: 36.0 öre (Skatteverket "Skatt på el"). Outside Sweden,
+ * or without a refund claim, set SOLINTEG_REFUND_CREDIT=0.
+ */
+export const ENERGY_TAX_REFUND_ORE_BY_YEAR: Record<number, number> = { 2026: 36.0 };
+
+/**
+ * Refund-aware planning (optimizeDispatch's opts.refundCreditOre): the plan prices grid
+ * charging at the full energy tax, so a night buy re-sold before sunrise looks ~36 öre/kWh
+ * worse than it is. When on, lib/plan.ts lets the optimizer try a second plan with the refund
+ * credited on battery exports in no-solar slots only (so solar-origin sales are never
+ * rewarded, and every credited kWh is easy to document: grid meter exporting with PV at zero),
+ * scores both plans on true cash plus the refund each would actually earn, and keeps the
+ * credited one only if it really wins.
+ *
+ * Opt-in only. The rate paid by this household must be documented separately (regional
+ * energy-tax reductions can apply); default paid-tax value 0 prevents speculative credits.
+ * Enable with SOLINTEG_REFUND_CREDIT=1 AND SOLINTEG_REFUND_TAX_PAID_ORE=<verified öre/kWh>,
+ * only when eligible for and intending to submit the annual Skatteverket 739 claim.
+ */
+export const REFUND_CREDIT_ENABLED = process.env.SOLINTEG_REFUND_CREDIT === '1';
+const REFUND_TAX_PAID_ORE = Math.max(0, numEnv('SOLINTEG_REFUND_TAX_PAID_ORE', 0));
+
+/** Refund credit never exceeds either confirmed general rate or actual site tax paid. */
+export function energyTaxRefundOre(startTime: string): number {
+  return Math.min(ENERGY_TAX_REFUND_ORE_BY_YEAR[+startTime.slice(0, 4)] ?? 0, REFUND_TAX_PAID_ORE);
+}
+
 // ---- Hold mode (opt-in, shadow-only — see lib/plan.ts's holdEnabled wiring) ----
 // Gate parameters for the DP's 'hold' action: freeze SoC and export the solar surplus instead
 // of storing it. Slot-unit conversions (kW → kWh/slot, hours → slots) happen at the use site

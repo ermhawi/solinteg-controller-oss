@@ -157,6 +157,17 @@ different market or vendor):
   UNBIASED: load-covering discharges (their timing is dictated by the load), and no seasonal
   logic anywhere — winter night-buying and "don't sell what the night load needs" remain
   emergent from prices/solar exactly as before.
+- **Refund-aware planning (Sundsvall: OFF by default)**: Skatteverket's 739 refund applies only
+  to eligible grid-sourced energy exported after battery storage (not losses or solar energy).
+  `opts.refundCreditOre` compares two plans with the SAME risk guard, load reserve and terminal
+  value. Actual eligible export is conservatively attributed by `refundEarnedOre`. Explicitly
+  set `SOLINTEG_REFUND_CREDIT=1` and `SOLINTEG_REFUND_TAX_PAID_ORE=<verified actual tax paid>`
+  *only* when this installation intends to file the annual 739 claim; the general 2026 rate
+  (36 öre/kWh) may exceed the tax actually paid under a regional reduction. Missing years
+  or missing site tax default to zero credit. This is planning logic, not a claim calculator.
+  `SOLINTEG_SOLAR_RISK_SURVIVAL=1` and `SOLINTEG_DEFERRAL_UNTIL_NEEDED=1` opt into two other
+  upstream risk refinements (both OFF pending Sundsvall replay); neither bypasses our 12 h
+  deferral cap, 12 h solar-risk window or joint risk-sacrifice guard.
 - **Battery wear cost**: every kWh of battery throughput (charge or discharge) carries a small
   cost (`BATTERY_WEAR_COST_ORE_PER_KWH` in `lib/constants.ts`) so the DP won't cycle the battery
   for a gain smaller than its degradation cost. Deliberately gentle — sized off the *fractional*
