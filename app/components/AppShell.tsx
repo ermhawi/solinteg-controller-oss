@@ -2,7 +2,9 @@ import { stockholmDateOf } from '@/lib/economics';
 import AutoRefresh from '@/app/components/AutoRefresh';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const today = stockholmDateOf(new Date().toISOString());
+  const updatedAt = new Date();
+  const today = stockholmDateOf(updatedAt.toISOString());
+  const updatedTime = updatedAt.toLocaleTimeString('sv-SE', { timeZone: 'Europe/Stockholm' });
 
   return (
     <div
@@ -11,7 +13,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     >
       {/* Keeps the server props (chart/plan/SoC overlay) from freezing at load time —
           the "Live" header below is only honest because of this. */}
-      <AutoRefresh />
+      <AutoRefresh renderedAt={updatedAt.toISOString()} />
       {/* Slimmed header (title text dropped) — just a small house-icon mark next to the
           live-status line, no more two-line title/subtitle stack. */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -31,7 +33,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <span className="absolute inset-0 rounded-full" style={{ background: 'var(--live-dot)' }} />
               <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />
             </span>
-            Live · uppdaterad nyss · {today}
+            Live · hämtad {updatedTime} · {today}
           </div>
         </div>
       </div>
