@@ -137,7 +137,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
   if (!data) {
     return (
       <div
-        className="card-surface box-border flex flex-col gap-2 order-4 min-[1600px]:order-none min-[1600px]:flex-none"
+        className="card-surface box-border flex flex-col gap-2 order-3 min-[1600px]:order-none min-[1600px]:flex-none"
         style={{ padding: '18px 20px' }}
       >
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
@@ -154,7 +154,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
 
   return (
     <div
-      className="card-surface box-border flex flex-col order-4 min-[1600px]:order-none min-[1600px]:flex-none"
+      className="card-surface box-border flex flex-col order-3 min-[1600px]:order-none min-[1600px]:flex-none"
       style={{ padding: '18px 20px', gap: 8 }}
     >
       {/* header */}
@@ -182,7 +182,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
           Dispatch
         </span>
         <span
-          className="rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase"
+          className="rounded-full px-2 py-0.5 text-[11px] font-bold uppercase"
           style={{ letterSpacing: '0.4px', background: tone.bg, color: tone.color }}
         >
           {current.badge}
@@ -193,7 +193,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
       </div>
 
       {/* reasoning (Layer 1, always visible) */}
-      <p className="text-[13.5px] leading-[1.45]" style={{ fontFamily: 'var(--font-body)' }}>
+      <p className="text-[14px] leading-[1.5]" style={{ fontFamily: 'var(--font-body)' }}>
         {current.reason}
       </p>
 
@@ -223,8 +223,9 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
       <button
         type="button"
         onClick={() => setExpanded((e) => !e)}
-        className="chip flex items-center gap-1 self-start rounded text-[11.5px] font-bold"
-        style={{ color: 'var(--color-soc)', background: 'none', border: 'none', padding: '2px 4px', margin: '-2px -4px' }}
+        className="chip flex min-h-11 items-center gap-1 self-start rounded-lg px-2 text-[13px] font-bold"
+        aria-expanded={expanded}
+        style={{ color: 'var(--color-soc)', background: 'none', border: 'none' }}
       >
         {expanded ? 'Dölj detaljer' : 'Visa detaljer'}
         <svg
@@ -269,24 +270,20 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
         <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
           Senaste besluten
         </span>
-        <span className="text-[10.5px] font-medium" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
           Senaste ~4 h · tryck för detaljer
         </span>
       </div>
 
-      {/* timeline strip — horizontally scrollable, not shrink-to-fit: up to 12 fixed
-          22px bars (plus 7px gaps) need ~340px, more than this card is wide on a
-          narrow viewport. Scrolling keeps every bar at its spec'd size instead of
-          squeezing them to fit. The 4px inset (padding + matching negative margin,
-          so the row still lines up with the rest of the card) is exactly the reach
-          of the selected bar's ring (see boxShadow below) so it never gets clipped
-          by the scroll container's own edge. */}
+      {/* Timeline bars keep their original visual width, with 44px touch targets.
+          Scrolling exposes the full history without squeezing controls. The 4px
+          inset leaves room for the selected bar's ring at either edge. */}
       <div className="relative">
         <div
           ref={timelineRef}
           className="flex items-end"
           style={{
-            gap: 7,
+            gap: 2,
             height: 44,
             overflowX: 'auto',
             padding: '0 4px',
@@ -313,20 +310,26 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
               key={i}
               type="button"
               title={`${d.time} · ${d.action} · ${d.powerKw.toFixed(1)} kW`}
+              aria-label={`${d.time} · ${d.action} · ${d.powerKw.toFixed(1)} kW`}
+              aria-pressed={isSelected}
               onClick={() => setSelectedIdx(i)}
               style={{
-                width: 22,
-                height,
-                borderRadius: 5,
+                width: 44,
+                height: 44,
                 border: 'none',
-                background: color,
-                opacity: isSelected ? 1 : 0.55,
-                boxShadow: isSelected ? `0 0 0 2px var(--card-bg), 0 0 0 4px ${color}` : 'none',
+                background: 'transparent',
                 cursor: 'pointer',
                 padding: 0,
                 flexShrink: 0,
+                display: 'flex',
+                alignItems: 'flex-end',
+                justifyContent: 'center',
               }}
-            />
+            >
+              <span aria-hidden="true" style={{ width: 22, height, borderRadius: 5, background: color,
+                opacity: isSelected ? 1 : 0.55,
+                boxShadow: isSelected ? `0 0 0 2px var(--card-bg), 0 0 0 4px ${color}` : 'none' }} />
+            </button>
           );
           })}
         </div>
@@ -335,7 +338,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
       {/* selected-item summary */}
       {selected && (
         <div style={{ borderTop: '1px solid var(--divider)', paddingTop: 9 }}>
-          <span className="text-[11px] font-semibold">
+          <span className="text-[12px] font-semibold">
             {selected.time} · {selected.action} · {selected.powerKw.toFixed(1)} kW
           </span>
         </div>

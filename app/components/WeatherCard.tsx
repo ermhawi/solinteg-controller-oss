@@ -18,14 +18,14 @@ function Metric({
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-2xl" style={{ padding: '9px 12px 10px', background: 'var(--badge-bg)' }}>
-      <span className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+      <span className="text-[12px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
         {label}
       </span>
       <span className="text-[20px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
         {liveValue}
       </span>
       {forecastValue && (
-        <span className="text-[10.5px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
           Prognos: {forecastValue}
         </span>
       )}
@@ -36,7 +36,7 @@ function Metric({
 export default function WeatherCard({ data }: { data: WeatherCardData | null }) {
   if (!data) {
     return (
-      <div className="card-surface box-border min-w-0 p-5 order-6 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:4]">
+      <div className="card-surface box-border min-w-0 p-5 order-6 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:4]">
         <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
           Väder
         </h2>
@@ -49,7 +49,7 @@ export default function WeatherCard({ data }: { data: WeatherCardData | null }) 
 
   return (
     <div
-      className="card-surface box-border flex min-w-0 flex-col order-6 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:4]"
+      className="card-surface box-border flex min-w-0 flex-col order-6 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:4]"
       style={{ padding: '15px 20px 13px' }}
     >
       <div className="mb-3.5 flex items-center justify-between">
@@ -72,7 +72,7 @@ export default function WeatherCard({ data }: { data: WeatherCardData | null }) 
             <div className="text-[14px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
               Väder
             </div>
-            <div className="text-[10.5px] font-medium" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
               Egen station, live
             </div>
           </div>
@@ -102,7 +102,7 @@ export default function WeatherCard({ data }: { data: WeatherCardData | null }) 
       </div>
 
       <div
-        className="mt-3.5 border-t pt-2.5 text-[10.5px] font-semibold"
+        className="mt-3.5 border-t pt-2.5 text-[12px] font-semibold"
         style={{ borderColor: 'var(--divider)', color: 'var(--text-muted)' }}
       >
         Endast information — stationens mätvärden styr inte batteriets planering. Solprognosen

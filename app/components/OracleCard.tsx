@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { useMobileViewport } from './useResponsiveLayout';
 import type { OracleCardData, OracleTrendDay } from '@/lib/oracle-card';
 
 function kr(n: number, digits = 2): string {
@@ -32,19 +33,19 @@ function Tile({ label, value, caption, sub }: { label: string; value: string; ca
       className="flex flex-1 flex-col gap-1 rounded-2xl"
       style={{ background: 'color-mix(in srgb, var(--econ-gray) 5%, transparent)', padding: '9px 12px 10px' }}
     >
-      <span className="text-[11.5px] font-bold uppercase tracking-wide min-[480px]:text-[10.5px]" style={{ color: 'var(--text-muted)' }}>
+      <span className="text-[12px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
         {label}
       </span>
       <div className="flex items-baseline gap-1.5">
         <span className="text-[20px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
           {value}
         </span>
-        <span className="text-[10px] font-bold min-[480px]:text-[9px]" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
           {caption}
         </span>
       </div>
       {sub && (
-        <span className="text-[11px] font-semibold min-[480px]:text-[10px]" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
           {sub}
         </span>
       )}
@@ -70,7 +71,7 @@ const PLOT_H = BASE_Y - PAD_T;
 
 function TrendRow({ color, label, value }: { color?: string; label: string; value: string }) {
   return (
-    <div className="flex items-center gap-1.5 whitespace-nowrap">
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-[700px]:flex-nowrap">
       {color && <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />}
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
       <span className="ml-auto pl-3 font-semibold">{value}</span>
@@ -79,12 +80,14 @@ function TrendRow({ color, label, value }: { color?: string; label: string; valu
 }
 
 export default function OracleCard({ data }: { data: OracleCardData | null }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<SVGSVGElement>(null);
+  const isMobile = useMobileViewport();
   const [hover, setHover] = useState<HoverState | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   if (!data) {
     return (
-      <div className="card-surface box-border min-w-0 p-5 order-5 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:3]">
+      <div className="card-surface box-border min-w-0 p-5 order-5 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:3]">
         <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
           Facit
         </h2>
@@ -130,7 +133,7 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
 
   return (
     <div
-      className="card-surface box-border flex min-w-0 flex-col order-5 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:3]"
+      className="card-surface box-border flex min-w-0 flex-col order-5 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3] min-[1600px]:[grid-row:3]"
       style={{ padding: '15px 20px 13px', fontFamily: 'var(--font-body)' }}
     >
       <div className="mb-3.5 flex items-center justify-between">
@@ -149,7 +152,7 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
             <div className="text-[14px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
               Facit
             </div>
-            <div className="text-[10.5px] font-medium" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
               Batteristyrning jämförd med optimal styrning i efterhand
             </div>
           </div>
@@ -171,6 +174,7 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
               caption="tappat vs facit"
               sub={split}
             />
+            <div className={expanded ? 'contents' : 'hidden min-[700px]:contents'}>
             <Tile label={`Median · ${data.okDays} dygn`} value={kr(data.medianRegretKr)} caption="tappat per dygn" />
             <Tile
               label={`Planbenchmark · ${dayLabel(data.latest.date)}`}
@@ -187,25 +191,27 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
               value={data.medianCapturedPct == null ? '–' : `${Math.round(data.medianCapturedPct)} %`}
               caption="av teoretiskt max"
             />
+            </div>
           </div>
         </div>
 
-        <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+        <div className={expanded ? 'contents' : 'hidden min-[700px]:contents'}>
+        <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1 text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
           <span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: 'var(--badge-color)' }} />Uppnått</span>
           <span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: 'var(--color-buy)' }} />Planbenchmark</span>
           <span><i className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: 'var(--color-sell)' }} />Facit</span>
         </div>
-        <div className="relative flex-1" ref={containerRef}>
-          <svg
+        <div className="relative min-w-0 flex-1 overflow-x-auto">
+          <svg ref={containerRef}
             viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-            width="100%"
+            width={isMobile ? VIEW_W : '100%'}
             style={{ display: 'block', height: 'auto' }}
             onMouseMove={(e) => updateHover(e.clientX)}
             onMouseLeave={() => setHover(null)}
+            onTouchStart={(e) => { if (e.touches[0]) updateHover(e.touches[0].clientX); }}
             onTouchMove={(e) => {
               if (e.touches[0]) updateHover(e.touches[0].clientX);
             }}
-            onTouchEnd={() => setHover(null)}
           >
             <line x1={PAD_L} y1={zeroY} x2={PAD_L + PLOT_W} y2={zeroY} stroke="var(--divider)" strokeWidth={1} />
             {days.map((d, i) => {
@@ -232,7 +238,7 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
             })}
             {days.length > 0 && (
               <>
-                <text x={xAt(0) + (barW * series.length) / 2} y={BASE_Y + 13} textAnchor="middle" fontSize={9.5} fill="var(--axis-text)">
+                <text x={xAt(0) + (barW * series.length) / 2} y={BASE_Y + 13} textAnchor="middle" fontSize={11} fill="var(--axis-text)">
                   {dayLabel(days[0].date)}
                 </text>
                 {days.length > 1 && (
@@ -240,7 +246,7 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
                     x={xAt(days.length - 1) + (barW * series.length) / 2}
                     y={BASE_Y + 13}
                     textAnchor="middle"
-                    fontSize={9.5}
+                    fontSize={11}
                     fill="var(--axis-text)"
                   >
                     {dayLabel(days[days.length - 1].date)}
@@ -248,20 +254,22 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
                 )}
               </>
             )}
-            <text x={PAD_L} y={PAD_T - 10} fontSize={9} fontWeight={700} fill="var(--axis-text)">
+            <text x={PAD_L} y={PAD_T - 10} fontSize={11} fontWeight={700} fill="var(--axis-text)">
               Värde per dygn, kr
             </text>
           </svg>
 
           {hover && hoverDay && (
             <div
-              className="pointer-events-none absolute z-20 flex flex-col gap-1 rounded-lg p-2.5 text-xs"
+              className={isMobile ? 'relative z-20 flex min-w-[240px] flex-col gap-1 rounded-xl p-3 text-[13px]' : 'pointer-events-none absolute z-20 flex flex-col gap-1 rounded-lg p-2.5 text-xs'}
               style={{
+                ...(!isMobile ? {
                 ...(hover.x > hover.containerWidth * 0.6
                   ? { right: hover.containerWidth - hover.x + 12 }
                   : { left: hover.x + 12 }),
                 top: 0,
                 minWidth: 168,
+                } : {}),
                 background: 'var(--card-bg-grad, var(--card-bg))',
                 border: '1px solid var(--card-border)',
                 boxShadow: 'var(--card-shadow)',
@@ -291,10 +299,15 @@ export default function OracleCard({ data }: { data: OracleCardData | null }) {
             </div>
           )}
         </div>
+        </div>
       </div>
+      <button type="button" className="chip mt-2 min-h-11 rounded-xl px-3 text-left text-[13px] font-semibold min-[700px]:hidden"
+        style={{ border: '1px solid var(--divider)' }} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        {expanded ? 'Dölj fördjupning' : 'Visa facit och historik'}
+      </button>
 
       <div
-        className="mt-3.5 border-t pt-2.5 text-[10.5px] font-semibold"
+        className={`mt-3.5 border-t pt-2.5 text-[12px] font-medium ${expanded ? '' : 'hidden min-[700px]:block'}`}
         style={{ borderColor: 'var(--divider)', color: 'var(--text-muted)' }}
       >
         Facit = bästa möjliga styrning beräknad i efterhand med facit i hand (verkliga priser, sol och

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import type { InverterLiveData } from '@/lib/inverter';
 import { INVERTER_STATUS_TEXT } from '@/lib/inverter-api-status';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
@@ -125,13 +126,12 @@ function FlowNode({
       }}
     >
       <div style={{ width: 22, height: 22, color: active ? color : 'var(--node-idle-text)' }}>{icon}</div>
-      {/* Bumped a notch below 480px (then back to the original 9px at/above it) — this was
-          among the smallest text in the whole dashboard and hard to read on a phone. */}
-      <div className="text-[10px] font-semibold min-[480px]:text-[9px]" style={{ color: 'var(--text-muted)' }}>
+      {/* Diagram labels remain legible even when the 360px diagram scales down on mobile. */}
+      <div className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
         {label}
       </div>
       <div
-        className="text-[14px] font-bold tracking-tight min-[480px]:text-[13px]"
+        className="text-[15px] font-bold tracking-tight"
         style={{ color: active ? color : 'var(--node-idle-text)' }}
       >
         {value}
@@ -187,7 +187,7 @@ const GridIcon = (
 function CardChrome({ children, live = true }: { children: React.ReactNode; live?: boolean }) {
   return (
     <div
-      className="card-surface box-border flex w-full max-w-[380px] min-[1600px]:max-w-none min-[1600px]:flex-1 min-[1600px]:min-h-[380px] flex-col overflow-hidden order-2 min-[1600px]:order-none"
+      className="card-surface box-border flex w-full max-w-none min-[1600px]:flex-1 min-[1600px]:min-h-[380px] flex-col overflow-hidden order-2 min-[1600px]:order-none"
       style={{ borderRadius: 22, fontFamily: 'var(--font-heading)', gap: 8 }}
     >
       <div className="flex items-center justify-between px-5 pt-[12px]">
@@ -209,7 +209,7 @@ function CardChrome({ children, live = true }: { children: React.ReactNode; live
           </div>
           <div className="flex flex-col gap-px">
             <div className="text-[15px] font-bold leading-tight tracking-tight">Systemstatus</div>
-            <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
               Effektflöde nu
             </div>
           </div>
@@ -235,6 +235,8 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
   data: InverterLiveData | null;
   status?: InverterApiStatus;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
   if (!data) {
     return (
       <CardChrome live={false}>
@@ -273,6 +275,10 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
 
   return (
     <CardChrome>
+      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="mx-4 mb-3 min-h-11 rounded-xl border px-3 text-left text-sm font-semibold min-[700px]:hidden" style={{ borderColor: 'var(--divider)' }}>
+        {expanded ? 'Dölj flöde och batterihälsa' : 'Visa flöde och batterihälsa'}
+      </button>
+      <div className={expanded ? 'block' : 'hidden min-[700px]:block'}>
       {/* Fixed 360x284 design, scaled down uniformly (via aspect-ratio + %-based FlowNode
           positions, both keyed off DESIGN_W/DESIGN_H) below that width instead of overflowing —
           this card can be well under 360px wide on a phone once the page's own padding is
@@ -353,7 +359,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
             <div className="text-[15px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
               Batterihälsa
             </div>
-            <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
               Tillstånd &amp; laddning
             </div>
           </div>
@@ -404,6 +410,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
             </span>
           </div>
         </div>
+      </div>
       </div>
     </CardChrome>
   );

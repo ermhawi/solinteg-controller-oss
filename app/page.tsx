@@ -150,7 +150,7 @@ export default async function Home() {
           Systemstatus sit between them there instead. */}
       {/* Row 3 (added 2026-07-11): Facit spans all three columns under everything — column 3's
           LiveInverterPanel still spans only rows 1-2, so the full width is free there. */}
-      <div className="grid grid-cols-1 gap-x-5 gap-y-5 min-[1600px]:grid-cols-[minmax(640px,1fr)_380px_minmax(640px,1fr)] min-[1600px]:grid-rows-[auto_auto_auto_auto] min-[1600px]:items-start min-[1600px]:gap-y-2">
+      <div className="grid grid-cols-1 gap-x-5 gap-y-5 min-[700px]:grid-cols-2 min-[1600px]:grid-cols-[minmax(0,1fr)_minmax(0,380px)_minmax(0,1fr)] min-[1600px]:grid-rows-[auto_auto_auto_auto] min-[1600px]:items-start min-[1600px]:gap-y-2">
         {data ? (
           <PriceChart
             data={data}
@@ -169,7 +169,7 @@ export default async function Home() {
             batteryFloorKwh={BATTERY_MIN_SOC_KWH}
           />
         ) : (
-          <section className="card-surface box-border min-w-0 p-5 order-1 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:1]">
+          <section className="card-surface box-border min-w-0 p-5 order-1 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:1]">
             <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
               Elpriser
             </h2>

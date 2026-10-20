@@ -47,7 +47,8 @@ export default function LiveStatus({ today, updatedTime }: { today: string; upda
         />
         {status === 'live' && <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />}
       </span>
-      {INVERTER_STATUS_TEXT[status]} · graf hämtad {updatedTime} · {today}
+      <span className="min-[700px]:hidden">{status === 'live' ? 'Live' : INVERTER_STATUS_TEXT[status]} · {updatedTime}</span>
+      <span className="hidden min-[700px]:inline">{INVERTER_STATUS_TEXT[status]} · graf hämtad {updatedTime} · {today}</span>
     </div>
   );
 }

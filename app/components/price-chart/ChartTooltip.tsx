@@ -26,10 +26,10 @@ const DECISION_ROWS = {
 
 function TooltipRow({ color, label, value, bold }: { color: string; label: string; value: string; bold?: boolean }) {
   return (
-    <div className="flex items-center gap-1.5 whitespace-nowrap">
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-[700px]:flex-nowrap">
       <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
-      <span className={`ml-auto pl-3 ${bold ? 'font-bold' : 'font-semibold'}`}>{value}</span>
+      <span className={`ml-auto break-words text-right ${bold ? 'font-bold' : 'font-semibold'}`}>{value}</span>
     </div>
   );
 }
@@ -47,12 +47,14 @@ export default function ChartTooltip({
   bandActual,
   placement,
   hasPlan,
+  inline = false,
 }: {
   point: ChartPoint;
   band: ActionBand | null;
   bandActual: BandActualSummary | null;
   placement: TooltipPlacement;
   hasPlan: boolean;
+  inline?: boolean;
 }) {
   // Resolves the hovered slot's decision to the one quantity block to show (see DECISION_ROWS).
   // Null for a hold, for a slot with no deliberate decision, and for a buy/sell zone whose own
@@ -67,15 +69,17 @@ export default function ChartTooltip({
 
   return (
     <div
-      className="pointer-events-none absolute z-20 flex flex-col gap-1 rounded-lg p-2.5 text-xs"
+      className={inline ? 'relative z-20 flex min-w-0 flex-col gap-1.5 rounded-xl p-3 text-[13px]' : 'pointer-events-none absolute z-20 flex flex-col gap-1 rounded-lg p-2.5 text-xs'}
       style={{
         // Flip to the cursor's left once past 60% of the width, so the panel never runs off the
         // right edge of the card on a narrow viewport.
-        ...(placement.x > placement.containerWidth * 0.6
-          ? { right: placement.containerWidth - placement.x + 14 }
-          : { left: placement.x + 14 }),
-        top: Math.max(0, placement.y - 60),
-        minWidth: 168,
+        ...(!inline ? {
+          ...(placement.x > placement.containerWidth * 0.6
+            ? { right: placement.containerWidth - placement.x + 14 }
+            : { left: placement.x + 14 }),
+          top: Math.max(0, placement.y - 60),
+          minWidth: 168,
+        } : {}),
         background: 'var(--card-bg-grad, var(--card-bg))',
         border: '1px solid var(--card-border)',
         boxShadow: 'var(--card-shadow)',

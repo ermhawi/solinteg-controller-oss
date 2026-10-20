@@ -1,12 +1,8 @@
 'use client';
 
 /**
- * The key above the plot, and the three layer toggles.
- *
- * Price is a legend only — Köp and Sälj are the point of the chart and can't be turned off.
- * The other three are switchable because they compete for the same plot area: on a busy day
- * the solar area, the SoC lines and the decision zones together can bury the price curves the
- * user came to read. SoC and zones only appear at all when there is a plan to show.
+ * The buy/sell series always stay visible. Additional layers can be hidden when
+ * they compete for space, especially on the narrow mobile chart.
  */
 export interface ChartLayers {
   solar: boolean;
@@ -26,12 +22,40 @@ function ToggleChip({
   return (
     <button
       type="button"
+      aria-pressed={on}
       onClick={onClick}
-      className="chip flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-      style={on ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.6 }}
+      className="chip flex min-h-11 items-center gap-1.5 rounded-full px-3 py-2 text-[13px] font-semibold min-[900px]:min-h-0 min-[700px]:px-2.5 min-[700px]:py-1"
+      style={on ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.75 }}
     >
       {children}
     </button>
+  );
+}
+
+function LayerControls({ layers, setLayers, hasPlan }: {
+  layers: ChartLayers;
+  setLayers: React.Dispatch<React.SetStateAction<ChartLayers>>;
+  hasPlan: boolean;
+}) {
+  return (
+    <>
+      <ToggleChip on={layers.solar} onClick={() => setLayers((s) => ({ ...s, solar: !s.solar }))}>
+        <span className="h-[11px] w-[13px] rounded-sm" style={{ background: 'var(--color-solar)' }} />
+        Sol
+      </ToggleChip>
+      {hasPlan && (
+        <ToggleChip on={layers.soc} onClick={() => setLayers((s) => ({ ...s, soc: !s.soc }))}>
+          <span className="w-[18px] border-t-2" style={{ borderColor: 'var(--color-soc)', borderStyle: 'dashed' }} />
+          Batteri-SoC
+        </ToggleChip>
+      )}
+      {hasPlan && (
+        <ToggleChip on={layers.zones} onClick={() => setLayers((s) => ({ ...s, zones: !s.zones }))}>
+          <span className="h-[11px] w-[9px] rounded-sm" style={{ background: 'var(--color-charge-band)' }} />
+          Ladda / Sälj / Sparar
+        </ToggleChip>
+      )}
+    </>
   );
 }
 
@@ -47,79 +71,42 @@ export default function ChartLegend({
   hasMixedPriceSources: boolean;
 }) {
   return (
-    <div className="mb-1.5 flex flex-wrap items-center gap-3">
-      <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-        Pris
-      </span>
-      <span className="flex items-center gap-1.5 text-xs font-semibold">
-        <span className="inline-block h-[3px] w-[18px] rounded" style={{ background: 'var(--color-buy)' }} />
-        Köp
-      </span>
-      <span className="flex items-center gap-1.5 text-xs font-semibold">
-        <span className="inline-block h-[3px] w-[18px] rounded" style={{ background: 'var(--color-sell)' }} />
-        Sälj
-      </span>
-      {hasMixedPriceSources && (
-        <>
-          <span className="mx-0.5 h-4 w-px" style={{ background: 'var(--divider)' }} />
-          <span className="flex items-center gap-1.5 text-xs font-semibold">
-            <span className="inline-block h-3 w-px border-l-2 border-dashed" style={{ borderColor: 'var(--color-now)' }} />
-            <span>Faktiskt pris</span>
-          </span>
-          <span className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>
-            <span className="inline-block h-3 w-[18px] rounded-sm" style={{ background: 'color-mix(in srgb, var(--color-now) 12%, transparent)' }} />
+    <div className="mb-2">
+      <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] font-semibold">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-[3px] w-[18px] rounded" style={{ background: 'var(--color-buy)' }} />
+          Köp
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-[3px] w-[18px] rounded" style={{ background: 'var(--color-sell)' }} />
+          Sälj
+        </span>
+        {hasMixedPriceSources && (
+          <span className="hidden items-center gap-1.5 min-[700px]:flex" style={{ color: 'var(--text-muted)' }}>
+            <span className="h-3 w-[18px] rounded-sm" style={{ background: 'color-mix(in srgb, var(--color-now) 18%, transparent)' }} />
             Prognos
           </span>
-        </>
-      )}
+        )}
+        <div className="hidden flex-wrap items-center gap-2 min-[700px]:flex">
+          <span className="text-xs font-bold uppercase" style={{ color: 'var(--text-muted)' }}>Lager</span>
+          <LayerControls layers={layers} setLayers={setLayers} hasPlan={hasPlan} />
+        </div>
+      </div>
 
-      <span className="mx-0.5 h-4 w-px" style={{ background: 'var(--divider)' }} />
-
-      <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-        Lager
-      </span>
-      <ToggleChip on={layers.solar} onClick={() => setLayers((s) => ({ ...s, solar: !s.solar }))}>
-        <span
-          className="h-[11px] w-[13px] rounded-sm"
-          style={{ background: 'color-mix(in srgb, var(--color-solar) 60%, transparent)' }}
-        />
-        Sol
-      </ToggleChip>
-
-      {hasPlan && (
-        <ToggleChip on={layers.soc} onClick={() => setLayers((s) => ({ ...s, soc: !s.soc }))}>
-          <span className="w-[18px] border-t-2" style={{ borderColor: 'var(--color-soc)', borderStyle: 'dashed' }} />
-          Batteri-SoC
-        </ToggleChip>
-      )}
-
-      {hasPlan && (
-        <ToggleChip on={layers.zones} onClick={() => setLayers((s) => ({ ...s, zones: !s.zones }))}>
-          {/* one swatch+label per zone kind, mirroring the in-chart band pills (BAND_LABEL) */}
-          <span className="flex items-center gap-1">
-            <span className="h-[11px] w-[9px] rounded-sm" style={{ background: 'var(--color-charge-band)' }} />
-            Ladda
-          </span>
-          <span className="flex items-center gap-1">
-            <span
-              className="h-[11px] w-[9px] rounded-sm"
-              style={{ background: 'color-mix(in srgb, var(--color-charge-band) var(--decision-minor-charge-fill), transparent)' }}
-            />
-            Liten laddning
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="h-[11px] w-[9px] rounded-sm" style={{ background: 'var(--color-sell-band)' }} />
-            Sälj
-          </span>
-          <span className="flex items-center gap-1">
-            <span
-              className="h-[11px] w-[9px] rounded-sm"
-              style={{ background: 'color-mix(in srgb, var(--color-hold-band) 55%, transparent)' }}
-            />
-            Sparar
-          </span>
-        </ToggleChip>
-      )}
+      <details className="mt-1 min-[700px]:hidden">
+        <summary className="chip flex min-h-11 cursor-pointer items-center rounded-xl px-3 text-[13px] font-semibold" style={{ background: 'var(--badge-bg)' }}>
+          Visning och lager
+          <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>· Anpassa grafen</span>
+        </summary>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <LayerControls layers={layers} setLayers={setLayers} hasPlan={hasPlan} />
+          {hasMixedPriceSources && (
+            <span className="flex items-center text-xs" style={{ color: 'var(--text-muted)' }}>
+              Gul bakgrund = prisprognos
+            </span>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

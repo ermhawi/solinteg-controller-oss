@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMobileViewport } from './useResponsiveLayout';
 import type { SystemDailyTotals } from '@/lib/economics';
 
 type Period = 'dag' | 'månad' | 'år';
@@ -80,9 +81,9 @@ function Metric({ label, value, detail, tone = 'neutral' }: { label: string; val
   const color = tone === 'good' ? 'var(--econ-green)' : tone === 'muted' ? 'var(--text-muted)' : 'var(--text)';
   return (
     <div className="min-w-0 rounded-2xl px-3 py-2.5" style={{ background: 'var(--badge-bg)' }}>
-      <div className="text-[11px] font-bold uppercase tracking-wide min-[480px]:text-[10px]" style={{ color: 'var(--text-muted)' }}>{label}</div>
+      <div className="text-[12px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{label}</div>
       <div className="mt-0.5 truncate text-[18px] font-bold leading-tight" style={{ color, fontFamily: 'var(--font-heading)' }}>{value}</div>
-      {detail && <div className="mt-0.5 truncate text-[11px] font-medium min-[480px]:text-[10px]" style={{ color: 'var(--text-muted)' }}>{detail}</div>}
+      {detail && <div className="mt-0.5 line-clamp-2 text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>{detail}</div>}
     </div>
   );
 }
@@ -90,14 +91,25 @@ function Metric({ label, value, detail, tone = 'neutral' }: { label: string; val
 export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const [period, setPeriod] = useState<Period>('dag');
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const isMobile = useMobileViewport();
+  const costScrollRef = useRef<HTMLDivElement>(null);
+  const savingsScrollRef = useRef<HTMLDivElement>(null);
   const periods = useMemo(() => aggregate(daily, period), [daily, period]);
   const visible = periods.slice(-31);
   const latest = periods[periods.length - 1];
   const total = latest ?? emptyTotals();
 
+  useEffect(() => {
+    if (!isMobile || !expanded) return;
+    for (const node of [costScrollRef.current, savingsScrollRef.current]) {
+      if (node) node.scrollLeft = node.scrollWidth - node.clientWidth;
+    }
+  }, [isMobile, expanded, period]);
+
   if (daily.length === 0) {
     return (
-      <section className="card-surface box-border min-w-0 p-5 order-7 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3]">
+      <section className="card-surface box-border min-w-0 p-5 order-7 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3]">
         <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>Besparing från sol och batteri</h2>
         <p className="mt-1 text-sm" style={{ color: 'var(--text-muted)' }}>Inväntar tillräckligt med mätdata.</p>
       </section>
@@ -126,7 +138,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
   const hovered = visible.find((row) => row.key === hoveredKey) ?? null;
 
   return (
-    <section className="card-surface box-border min-w-0 p-5 order-7 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3]" aria-label="Besparing från sol och batteri">
+    <section className="card-surface box-border min-w-0 p-5 order-7 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_3]" aria-label="Besparing från sol och batteri">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>Besparing från sol och batteri</h2>
@@ -139,7 +151,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
             <button
               key={value}
               type="button"
-              className="rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+              className="min-h-11 min-w-11 rounded-lg px-3 text-[13px] font-semibold min-[900px]:min-h-0 min-[700px]:py-1"
               style={period === value ? { background: 'var(--card-bg)', boxShadow: 'var(--card-shadow)' } : { color: 'var(--text-muted)' }}
               onClick={() => setPeriod(value)}
             >
@@ -156,26 +168,28 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
         <Metric label="Solproduktion" value={kwh(total.solarKwh)} detail={`${kwh(total.batteryChargeKwh)} laddat · ${kwh(total.batteryDischargeKwh)} urladdat`} tone="muted" />
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 min-[900px]:grid-cols-2">
-        <div className="min-w-0 overflow-x-auto pb-1">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Kostnad jämfört med motkostnad</div>
+      <button type="button" className="chip mt-3 min-h-11 w-full rounded-xl px-3 text-left text-[13px] font-semibold min-[700px]:hidden"
+        style={{ border: '1px solid var(--divider)' }} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        {expanded ? 'Dölj historik' : 'Visa historik och grafer'}
+      </button>
+      <div className={expanded ? 'mt-4 grid grid-cols-1 gap-4 min-[900px]:grid-cols-2' : 'mt-4 hidden grid-cols-1 gap-4 min-[700px]:grid min-[900px]:grid-cols-2'}>
+        <div className="min-w-0 overflow-x-auto pb-1" ref={costScrollRef} tabIndex={0} aria-label="Kostnad över tid, svep för att se tidigare dagar">
+          <div className="mb-1 text-[12px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Kostnad jämfört med motkostnad</div>
           <svg
             viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`}
-            width="100%"
+            width={isMobile ? chartWidth : '100%'}
             height={chartHeight + 30}
             role="img"
             aria-label="Faktisk kostnad och motkostnad över tid"
-            onTouchEnd={() => setHoveredKey(null)}
+
           >
-          {/* onTouchEnd clears hover the same way onMouseLeave does for mouse — without this,
-              a tap would set hoveredKey via the bar's/point's onTouchStart below but never
-              clear it (no "mouse leave" equivalent exists for touch). */}
+          {/* Touch selection is retained until another point is tapped, so mobile detail stays readable. */}
           {costTicks.map((tick, index) => {
             const y = chartHeight - ((tick - minCost) / costRange) * chartHeight;
             return (
               <g key={`cost-axis-${index}`}>
                 <line x1={chartLeft} y1={y} x2={chartWidth} y2={y} stroke="var(--grid-line)" strokeWidth="1" />
-                <text x={chartLeft - 6} y={y + 3} textAnchor="end" fontSize="9" fill="var(--text-muted)">{axisLabel(tick)}</text>
+                <text x={chartLeft - 6} y={y + 3} textAnchor="end" fontSize="11" fill="var(--text-muted)">{axisLabel(tick)}</text>
               </g>
             );
           })}
@@ -208,7 +222,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
                   />
                 )}
                 {(index === 0 || index === visible.length - 1 || index % Math.max(1, Math.ceil(visible.length / 6)) === 0) && (
-                  <text x={center} y={chartHeight + 16} textAnchor="middle" fontSize="9" fill="var(--text-muted)">{row.label}</text>
+                  <text x={center} y={chartHeight + 16} textAnchor="middle" fontSize="11" fill="var(--text-muted)">{row.label}</text>
                 )}
               </g>
             );
@@ -222,30 +236,30 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
               <g pointerEvents="none">
                 <rect x={tooltipX} y={5} width={tooltipWidth} height={58} rx="7" fill="var(--node-bg)" stroke="var(--card-border)" />
                 <text x={tooltipX + 9} y={19} fontSize="10" fontWeight="700" fill="var(--text)">{hovered.label}</text>
-                <text x={tooltipX + 9} y={33} fontSize="9" fill="var(--text-muted)">Faktiskt: {kr(hovered.actualCostKr)}</text>
-                <text x={tooltipX + 9} y={45} fontSize="9" fill="var(--text-muted)">Utan sol/batteri: {kr(hovered.baselineCostKr)}</text>
-                <text x={tooltipX + 9} y={57} fontSize="9" fontWeight="700" fill="var(--econ-green)">Skillnad: {kr(hovered.savingsKr)}</text>
+                <text x={tooltipX + 9} y={33} fontSize="11" fill="var(--text-muted)">Faktiskt: {kr(hovered.actualCostKr)}</text>
+                <text x={tooltipX + 9} y={45} fontSize="11" fill="var(--text-muted)">Utan sol/batteri: {kr(hovered.baselineCostKr)}</text>
+                <text x={tooltipX + 9} y={57} fontSize="11" fontWeight="700" fill="var(--econ-green)">Skillnad: {kr(hovered.savingsKr)}</text>
               </g>
             );
           })()}
           </svg>
         </div>
-        <div className="min-w-0 overflow-x-auto pb-1">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Besparing över tid</div>
+        <div className="min-w-0 overflow-x-auto pb-1" ref={savingsScrollRef} tabIndex={0} aria-label="Besparing över tid, svep för att se tidigare dagar">
+          <div className="mb-1 text-[12px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Besparing över tid</div>
           <svg
             viewBox={`0 0 ${chartWidth} ${chartHeight + 30}`}
-            width="100%"
+            width={isMobile ? chartWidth : '100%'}
             height={chartHeight + 30}
             role="img"
             aria-label="Besparing över tid"
-            onTouchEnd={() => setHoveredKey(null)}
+
           >
             {savingsTicks.map((tick, index) => {
               const y = chartHeight - ((tick - savingsMin) / savingsRange) * chartHeight;
               return (
                 <g key={`savings-axis-${index}`}>
                   <line x1={chartLeft} y1={y} x2={chartWidth} y2={y} stroke="var(--grid-line)" strokeWidth="1" />
-                  <text x={chartLeft - 6} y={y + 3} textAnchor="end" fontSize="9" fill="var(--text-muted)">{axisLabel(tick)}</text>
+                  <text x={chartLeft - 6} y={y + 3} textAnchor="end" fontSize="11" fill="var(--text-muted)">{axisLabel(tick)}</text>
                 </g>
               );
             })}
@@ -264,7 +278,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
                   <circle cx={center} cy={y} r="9" fill="transparent" />
                   <circle cx={center} cy={y} r={hoveredKey === row.key ? 4 : 2.5} fill={row.savingsKr >= 0 ? 'var(--econ-green)' : 'var(--econ-red)'} />
                   {(index === 0 || index === visible.length - 1 || index % Math.max(1, Math.ceil(visible.length / 6)) === 0) && (
-                    <text x={center} y={chartHeight + 16} textAnchor="middle" fontSize="9" fill="var(--text-muted)">{row.label}</text>
+                    <text x={center} y={chartHeight + 16} textAnchor="middle" fontSize="11" fill="var(--text-muted)">{row.label}</text>
                   )}
                 </g>
               );
@@ -272,7 +286,7 @@ export default function EnergySavingsCard({ daily }: { daily: DailyEnergy[] }) {
           </svg>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-3 text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+      <div className={`flex flex-wrap items-center gap-3 text-[12px] font-semibold ${expanded ? '' : 'hidden min-[700px]:flex'}`} style={{ color: 'var(--text-muted)' }}>
         <span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--econ-earned)' }} />Faktisk nettokostnad</span>
         <span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: 'var(--econ-red)', opacity: 0.8 }} />Utan sol + batteri</span>
         {latest && <span className="ml-auto">Senaste period: {latest.label} · {kr(latest.savingsKr)} sparat</span>}

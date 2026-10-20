@@ -38,7 +38,7 @@ export function PriceAxis({ frame }: { frame: ChartFrame }) {
             x={geo.padL - 6}
             y={priceYScale(v, priceMax, geo, priceMin) + 3.5}
             textAnchor="end"
-            fontSize={10}
+            fontSize={11}
             fill="var(--axis-text)"
             style={{ fontFamily: 'var(--font-body)' }}
           >
@@ -63,7 +63,7 @@ export function PriceAxis({ frame }: { frame: ChartFrame }) {
         x={geo.padL - 6}
         y={geo.padT - 8}
         textAnchor="end"
-        fontSize={9}
+        fontSize={11}
         fontWeight={700}
         fill="var(--axis-text)"
         style={{ fontFamily: 'var(--font-body)' }}
@@ -86,7 +86,7 @@ export function SocAxis({ frame }: { frame: ChartFrame }) {
           x={geo.padL + geo.plotW + 7}
           y={socYScale(v, geo) + 3.5}
           textAnchor="start"
-          fontSize={10}
+          fontSize={11}
           fill="color-mix(in srgb, var(--color-soc) 80%, transparent)"
           style={{ fontFamily: 'var(--font-body)' }}
         >
@@ -97,7 +97,7 @@ export function SocAxis({ frame }: { frame: ChartFrame }) {
         x={geo.padL + geo.plotW + 7}
         y={geo.padT - 8}
         textAnchor="start"
-        fontSize={9}
+        fontSize={11}
         fontWeight={700}
         fill="color-mix(in srgb, var(--color-soc) 80%, transparent)"
         style={{ fontFamily: 'var(--font-body)' }}
@@ -123,7 +123,7 @@ export function TimeAxis({ frame, ticks }: { frame: ChartFrame; ticks: string[] 
             x={x}
             y={geo.baseY + 15}
             textAnchor="middle"
-            fontSize={9.5}
+            fontSize={11}
             fill="var(--axis-text)"
             style={{ fontFamily: 'var(--font-body)' }}
           >

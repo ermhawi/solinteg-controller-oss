@@ -37,7 +37,7 @@ function Tile({ label, totals, digits }: { label: string; totals: EconTotals; di
       className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-2xl"
       style={{ background: tint, padding: '9px 12px 10px' }}
     >
-      <span className="text-[10.5px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+      <span className="text-[12px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
         {label}
       </span>
 
@@ -47,7 +47,7 @@ function Tile({ label, totals, digits }: { label: string; totals: EconTotals; di
           {sign}
           {kr(Math.abs(net), digits)}
         </span>
-        <span className="text-[9px] font-bold" style={{ color: netColor }}>
+        <span className="text-[12px] font-bold" style={{ color: netColor }}>
           {caption}
         </span>
       </div>
@@ -62,11 +62,11 @@ function Tile({ label, totals, digits }: { label: string; totals: EconTotals; di
           <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, color: 'var(--econ-spent)', flex: 'none' }}>
             <path d={DOWN_ARROW} fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="text-[10.5px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
             Köpt
           </span>
-          <span className="ml-auto text-[10.5px] font-bold">{fmtKwh(totals.boughtKwh)}</span>
-          <span className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+          <span className="ml-auto text-[12px] font-bold">{fmtKwh(totals.boughtKwh)}</span>
+          <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
             · {kr(totals.costKr, digits)}
           </span>
         </div>
@@ -74,11 +74,11 @@ function Tile({ label, totals, digits }: { label: string; totals: EconTotals; di
           <svg viewBox="0 0 24 24" style={{ width: 13, height: 13, color: 'var(--econ-earned)', flex: 'none' }}>
             <path d={UP_ARROW} fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="text-[10.5px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
             Sålt
           </span>
-          <span className="ml-auto text-[10.5px] font-bold">{fmtKwh(totals.soldKwh)}</span>
-          <span className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+          <span className="ml-auto text-[12px] font-bold">{fmtKwh(totals.soldKwh)}</span>
+          <span className="text-[12px] font-semibold" style={{ color: 'var(--text-muted)' }}>
             · {kr(totals.incomeKr, digits)}
           </span>
         </div>
@@ -90,7 +90,7 @@ function Tile({ label, totals, digits }: { label: string; totals: EconTotals; di
 export default function EarningsCard({ summary }: { summary: EconSummary | null }) {
   if (!summary || summary.allTime.readingCount === 0) {
     return (
-      <div className="card-surface box-border min-w-0 p-5 order-4 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:2]">
+      <div className="card-surface box-border min-w-0 p-5 order-4 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:2]">
         <h2 className="text-[15px] font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
           Elhandel
         </h2>
@@ -103,7 +103,7 @@ export default function EarningsCard({ summary }: { summary: EconSummary | null 
 
   return (
     <div
-      className="card-surface box-border flex min-w-0 flex-col order-4 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:2]"
+      className="card-surface box-border flex min-w-0 flex-col order-4 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:2]"
       style={{ padding: '15px 20px 13px' }}
     >
       <div className="mb-3.5 flex items-center justify-between">
@@ -137,14 +137,18 @@ export default function EarningsCard({ summary }: { summary: EconSummary | null 
         <div className="flex flex-col gap-2.5 @min-[600px]:flex-row @min-[600px]:items-stretch @min-[600px]:gap-3.5">
           <Tile label="Idag" totals={summary.today} digits={2} />
           <Tile label="Denna månad" totals={summary.month} digits={0} />
-          <Tile label="Totalt" totals={summary.allTime} digits={0} />
+          <div className="hidden flex-1 min-[700px]:flex"><Tile label="Totalt" totals={summary.allTime} digits={0} /></div>
         </div>
       </div>
+      <details className="mt-2 min-[700px]:hidden">
+        <summary className="chip flex min-h-11 cursor-pointer items-center rounded-lg px-2 text-[13px] font-semibold" style={{ color: 'var(--text-muted)' }}>Visa totalt för hela perioden</summary>
+        <Tile label="Totalt" totals={summary.allTime} digits={0} />
+      </details>
 
       {/* Legend chips removed (v5) — the arrows + net-number color already make the color
           coding self-evident once the card has more horizontal room to read clearly. */}
       <div
-        className="mt-3.5 border-t pt-2.5 text-[10.5px] font-semibold"
+        className="mt-3.5 hidden border-t pt-2.5 text-[12px] font-semibold min-[700px]:block"
         style={{ borderColor: 'var(--divider)', color: 'var(--text-muted)' }}
       >
         Netto = intäkt (sålt) − kostnad (köpt) till periodens priser.

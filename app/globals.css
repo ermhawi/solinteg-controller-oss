@@ -6,7 +6,7 @@
   --card-border: #e6ebf2;
   --card-shadow: 0 22px 48px -30px rgba(60, 80, 120, 0.28), inset 0 1px 0 #fff;
   --text: #1e2733;
-  --text-muted: #8a97a8;
+  --text-muted: #5f6b7b;
   --divider: #e2e7ee;
   --track-bg: #eef1f6;
   --badge-bg: #eef2f8;
@@ -31,7 +31,7 @@
   --color-now: #f5a623;
   --color-now-text: #231a08;
   --grid-line: #eef1f6;
-  --axis-text: #98a2b3;
+  --axis-text: #667085;
   --zone-today: rgba(0, 0, 0, 0.014);
   --zone-tomorrow: rgba(70, 100, 170, 0.055);
   --decision-band-fill: 11%;
@@ -67,7 +67,7 @@
     --card-border: rgba(255, 255, 255, 0.08);
     --card-shadow: 0 24px 50px -26px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     --text: #eaf0f7;
-    --text-muted: rgba(255, 255, 255, 0.5);
+    --text-muted: rgba(255, 255, 255, 0.78);
     --divider: rgba(255, 255, 255, 0.09);
     --track-bg: rgba(255, 255, 255, 0.1);
     --badge-bg: rgba(255, 255, 255, 0.08);
@@ -87,7 +87,7 @@
     --color-sell-band: #5b8cff;
     --color-hold-band: #a58bff;
     --grid-line: rgba(255, 255, 255, 0.07);
-    --axis-text: rgba(255, 255, 255, 0.42);
+    --axis-text: rgba(255, 255, 255, 0.72);
     --zone-today: rgba(255, 255, 255, 0.018);
     --zone-tomorrow: rgba(96, 120, 180, 0.1);
     --decision-band-fill: 22%;

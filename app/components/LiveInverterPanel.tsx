@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import type { InverterLiveData } from '@/lib/inverter';
 import type { DispatchCardData } from '@/lib/dispatch-card';
 import PowerFlowCard from '@/app/components/PowerFlowCard';
+import MobileOverview from '@/app/components/MobileOverview';
 import DispatchCard from '@/app/components/DispatchCard';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
 import { apiPath } from '@/lib/base-path';
@@ -73,6 +74,7 @@ export default function LiveInverterPanel({
   // left, Dispatch keeps its natural height below it.
   return (
     <div className="contents min-[1600px]:flex min-[1600px]:flex-col min-[1600px]:gap-5 min-[1600px]:[grid-column:3] min-[1600px]:[grid-row:1/span_2]">
+      <MobileOverview data={data} status={status} />
       <PowerFlowCard data={data} status={status} />
       <DispatchCard initialData={initialDispatchData} />
     </div>

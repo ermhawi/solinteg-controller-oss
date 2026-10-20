@@ -5,6 +5,7 @@ import type { PriceData } from '@/lib/prices';
 import type { DispatchSlot } from '@/lib/optimizer';
 import {
   buildAreaPath,
+  buildChartGeometry,
   buildLinePath,
   buildStepLinePath,
   computeNowSlotTime,
@@ -17,6 +18,8 @@ import {
 import type { ActualSlotFlows } from '@/lib/actual-flows';
 import { useChartData } from './useChartData';
 import { buildFrame } from './price-chart/frame';
+import { useContainerWidth, useMobileViewport } from './useResponsiveLayout';
+import { mobileChartWindow } from '@/lib/mobile-chart';
 import { DayZones, DecisionBands, MinorChargeBands } from './price-chart/ChartBands';
 import { PriceAxis, SocAxis, TimeAxis } from './price-chart/ChartAxes';
 import ChartLegend from './price-chart/ChartLegend';
@@ -166,25 +169,16 @@ export default function PriceChart({
 
   const hasActualSoc = chartData.some((d) => d.actualSocPct != null);
   const hasPlan = !!dispatchSchedule;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const containerWidth = useContainerWidth(containerRef);
+  const isMobile = useMobileViewport();
+  const geo = useMemo(() => containerWidth != null && containerWidth < 800 ? buildChartGeometry(containerWidth, 270) : geometry, [containerWidth, geometry]);
 
   const [layers, setLayers] = useState<ChartLayers>({ solar: true, soc: true, zones: true });
   const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null);
+  const [rangePreset, setRangePreset] = useState<'now' | 'today' | 'tomorrow' | 'all' | 'custom'>('now');
   const count = chartData.length;
   const fullEnd = Math.max(0, count - 1);
-  const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
-  const todayEnd = tomorrowIndex > 0 ? tomorrowIndex - 1 : fullEnd;
-  // The first forecast slot is the exact handover from published day-ahead prices to
-  // PlaneraElen's estimate. Keep this derived from provenance, not from a date boundary:
-  // the forecast may begin part-way through a day when only some actual slots are available.
-  const forecastStartIndex = chartData.findIndex((point) => point.priceSource === 'forecast');
-  const hasMixedPriceSources = forecastStartIndex > 0;
-  const viewStartIndex = Math.max(0, Math.min(zoomRange?.start ?? 0, fullEnd));
-  const viewEndIndex = Math.max(viewStartIndex, Math.min(zoomRange?.end ?? fullEnd, fullEnd));
-  const forecastStartVisible =
-    hasMixedPriceSources && forecastStartIndex <= viewEndIndex;
-  const forecastOverlayStartIndex = Math.max(viewStartIndex, forecastStartIndex);
-
-  // "Now" marker: recomputed every minute so a dashboard left open stays accurate.
   const [nowTime, setNowTime] = useState<string | null>(null);
   useEffect(() => {
     const times = chartData.map((d) => d.time);
@@ -196,23 +190,38 @@ export default function PriceChart({
 
   const nowPoint = nowTime ? chartData.find((d) => d.time === nowTime) : undefined;
   const nowIndex = nowPoint ? timeIndex.get(nowPoint.time) : undefined;
+  const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
+  const todayEnd = tomorrowIndex > 0 ? tomorrowIndex - 1 : fullEnd;
+  // The first forecast slot is the exact handover from published day-ahead prices to
+  // PlaneraElen's estimate. Keep this derived from provenance, not from a date boundary:
+  // the forecast may begin part-way through a day when only some actual slots are available.
+  const forecastStartIndex = chartData.findIndex((point) => point.priceSource === 'forecast');
+  const hasMixedPriceSources = forecastStartIndex > 0;
+  const defaultMobileRange = mobileChartWindow(nowIndex ?? 0, count);
+  const effectiveZoom = zoomRange ?? (isMobile && rangePreset === 'now' ? defaultMobileRange : null);
+  const viewStartIndex = Math.max(0, Math.min(effectiveZoom?.start ?? 0, fullEnd));
+  const viewEndIndex = Math.max(viewStartIndex, Math.min(effectiveZoom?.end ?? fullEnd, fullEnd));
+  const forecastStartVisible =
+    hasMixedPriceSources && forecastStartIndex <= viewEndIndex;
+  const forecastOverlayStartIndex = Math.max(viewStartIndex, forecastStartIndex);
+
+  // Keep the live marker accurate without shifting a user-selected chart window.
   const nowVisible = nowIndex != null && nowIndex >= viewStartIndex && nowIndex <= viewEndIndex;
 
   // Everything the layers draw against: data, box, scales (see price-chart/frame.ts).
   const frame = useMemo(
-    () => buildFrame(chartData, geometry, timeIndex, priceMin, priceMax, solarMax, viewStartIndex, viewEndIndex),
-    [chartData, geometry, timeIndex, priceMin, priceMax, solarMax, viewStartIndex, viewEndIndex],
+    () => buildFrame(chartData, geo, timeIndex, priceMin, priceMax, solarMax, viewStartIndex, viewEndIndex),
+    [chartData, geo, timeIndex, priceMin, priceMax, solarMax, viewStartIndex, viewEndIndex],
   );
-  const geo = geometry;
   const { xAt, tx } = frame;
 
-  const visibleXTicks = useMemo(
-    () => xTicks.filter((tick) => {
+  const visibleXTicks = useMemo(() => {
+    const ticks = xTicks.filter((tick) => {
       const index = timeIndex.get(tick);
       return index != null && index >= viewStartIndex && index <= viewEndIndex;
-    }),
-    [xTicks, timeIndex, viewStartIndex, viewEndIndex],
-  );
+    });
+    return isMobile && ticks.length > 6 ? ticks.filter((_, index) => index % Math.ceil(ticks.length / 6) === 0) : ticks;
+  }, [xTicks, timeIndex, viewStartIndex, viewEndIndex, isMobile]);
 
   const buyPath = useMemo(
     () => buildStepLinePath(chartData.slice(viewStartIndex, viewEndIndex + 1).map((d, offset): Point => {
@@ -276,7 +285,6 @@ export default function PriceChart({
   // full-height hit area over the chart maps cursor x -> nearest slot index, independent of
   // the SVG's rendered size (it's scaled by viewBox, so we go through the container's actual
   // pixel width rather than SVG-space coordinates).
-  const containerRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
   const pinchRef = useRef<{ distance: number; centerFraction: number; viewStart: number; viewEnd: number } | null>(null);
 
@@ -308,18 +316,21 @@ export default function PriceChart({
     const requestedSpan = Math.round(currentSpan * (event.deltaY < 0 ? 0.75 : 1.33));
     const nextSpan = Math.max(8, Math.min(maxSpan, requestedSpan));
     if (nextSpan >= maxSpan) {
-      setZoomRange(null);
+      setRangePreset('all');
+      setZoomRange({ start: 0, end: fullEnd });
       return;
     }
     const cursorIndex = viewStartIndex + fraction * currentSpan;
     let nextStart = Math.round(cursorIndex - fraction * nextSpan);
     nextStart = Math.max(0, Math.min(nextStart, fullEnd - nextSpan));
+    setRangePreset('custom');
     setZoomRange({ start: nextStart, end: nextStart + nextSpan });
   };
 
-  const setVisibleRange = (start: number, end: number) => {
-    if (start <= 0 && end >= fullEnd) setZoomRange(null);
-    else setZoomRange({ start, end });
+  const setVisibleRange = (start: number, end: number, preset: 'today' | 'tomorrow' | 'all') => {
+    setRangePreset(preset);
+    setZoomRange({ start, end });
+    setHover(null);
   };
 
   const hoverPoint = hover ? chartData[hover.index] : null;
@@ -340,7 +351,7 @@ export default function PriceChart({
 
   return (
     <div
-      className="card-surface box-border flex min-w-0 flex-col p-5 order-1 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:1]"
+      className="card-surface box-border flex min-w-0 flex-col p-4 min-[700px]:p-5 order-1 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:1]"
       style={{ fontFamily: 'var(--font-body)' }}
     >
       <div className="mb-3.5 flex flex-wrap items-start justify-between gap-4">
@@ -361,10 +372,10 @@ export default function PriceChart({
             </svg>
           </div>
           <div className="flex flex-col gap-px">
-            <div className="text-[15px] font-bold leading-tight tracking-tight" style={{ fontFamily: 'var(--font-heading)' }}>
+            <div className="text-[17px] font-bold leading-tight tracking-tight min-[700px]:text-[15px]" style={{ fontFamily: 'var(--font-heading)' }}>
               Elpriser
             </div>
-            <div className="text-[11px] font-medium" style={{ color: 'var(--text-muted)' }}>
+            <div className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
               {data.today} · idag{data.hasTomorrow ? ' & imorgon' : ''}
               {!data.hasTomorrow && (
                 <span className="ml-2" style={{ color: 'var(--color-now)' }}>
@@ -377,7 +388,7 @@ export default function PriceChart({
         {nowPoint && (
           <div className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: 'var(--badge-bg)' }}>
             <span className="h-2 w-2 rounded-full" style={{ background: 'var(--color-now)' }} />
-            <span className="text-[11px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+            <span className="text-[13px] font-semibold" style={{ color: 'var(--text-muted)' }}>
               Nu
             </span>
             <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-heading)', color: 'var(--color-buy)' }}>
@@ -389,7 +400,7 @@ export default function PriceChart({
             <span className="text-[13px] font-bold" style={{ fontFamily: 'var(--font-heading)', color: 'var(--color-sell)' }}>
               {Math.round(nowPoint.sell)}
             </span>
-            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>
               öre
             </span>
           </div>
@@ -398,52 +409,69 @@ export default function PriceChart({
 
       <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasMixedPriceSources={hasMixedPriceSources} />
 
-      <div className="mb-2 flex items-center justify-end gap-1.5" aria-label="Zooma grafens tidsintervall">
-        <span className="mr-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+      <div className="mb-2 flex flex-wrap items-center justify-start gap-1.5 min-[700px]:justify-end" aria-label="Zooma grafens tidsintervall">
+        <span className="mr-1 hidden text-[11px] font-bold uppercase tracking-wide min-[700px]:inline" style={{ color: 'var(--text-muted)' }}>
           Zoom
         </span>
+        <button type="button" className="chip min-h-11 rounded-xl px-2.5 text-[13px] font-semibold min-[700px]:hidden"
+          aria-label="12 timmar kring nu"
+          style={rangePreset === 'now' && zoomRange == null ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)' }}
+          onClick={() => { setRangePreset('now'); setZoomRange(null); setHover(null); }}>
+          12 h
+        </button>
         <button
           type="button"
-          className="chip rounded-full px-2 py-1 text-[11px] font-semibold"
-          style={zoomRange == null ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
-          onClick={() => setVisibleRange(0, fullEnd)}
+          className="chip min-h-11 rounded-xl px-3 text-[13px] font-semibold min-[900px]:min-h-0 min-[700px]:py-1"
+          style={rangePreset === 'all' || (!isMobile && zoomRange == null) ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.75 }}
+          onClick={() => setVisibleRange(0, fullEnd, 'all')}
         >
           Hela
         </button>
         <button
           type="button"
-          className="chip rounded-full px-2 py-1 text-[11px] font-semibold"
-          style={zoomRange?.start === 0 && zoomRange?.end === todayEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
-          onClick={() => setVisibleRange(0, todayEnd)}
+          className="chip min-h-11 rounded-xl px-3 text-[13px] font-semibold min-[900px]:min-h-0 min-[700px]:py-1"
+          style={rangePreset === 'today' && zoomRange?.start === 0 && zoomRange?.end === todayEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
+          onClick={() => setVisibleRange(0, todayEnd, 'today')}
         >
           Idag
         </button>
         {tomorrowIndex > 0 && (
           <button
             type="button"
-            className="chip rounded-full px-2 py-1 text-[11px] font-semibold"
-            style={zoomRange?.start === tomorrowIndex && zoomRange?.end === fullEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
-            onClick={() => setVisibleRange(tomorrowIndex, fullEnd)}
+            className="chip min-h-11 rounded-xl px-3 text-[13px] font-semibold min-[900px]:min-h-0 min-[700px]:py-1"
+            style={rangePreset === 'tomorrow' && zoomRange?.start === tomorrowIndex && zoomRange?.end === fullEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
+            onClick={() => setVisibleRange(tomorrowIndex, fullEnd, 'tomorrow')}
           >
             Imorgon
           </button>
         )}
-        <span className="ml-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+        <span className="ml-1 hidden text-[11px] min-[900px]:inline" style={{ color: 'var(--text-muted)' }}>
           Mushjul för stegvis zoom
         </span>
       </div>
 
       <div
         ref={containerRef}
-        className="relative"
+        className="relative rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2"
+        tabIndex={0}
+        role="group"
+        aria-label="Prisgraf. Använd piltangenter för att välja kvart eller tryck på grafen."
+        onKeyDown={(e) => {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+          e.preventDefault();
+          const index = Math.max(viewStartIndex, Math.min(viewEndIndex, (hover?.index ?? viewStartIndex) + (e.key === 'ArrowRight' ? 1 : -1)));
+          const width = containerRef.current?.clientWidth ?? geo.width;
+          setHover({ index, x: xAt(index) / geo.width * width, y: 50, containerWidth: width });
+        }}
         // pan-y (not 'none'): lets the browser handle normal vertical page scroll when a
         // single finger starts on the chart — 'none' used to trap scrolling inside this card,
         // forcing a user to lift their finger and swipe outside it to keep scrolling the page.
         // The 2-finger pinch-zoom handler below still calls preventDefault() itself, so pan-y
         // doesn't interfere with pinch.
         style={{ touchAction: 'pan-y' }}
-        onMouseMove={(e) => updateHover(e.clientX, e.clientY)}
-        onMouseLeave={clearHover}
+        onMouseMove={(e) => { if (!isMobile) updateHover(e.clientX, e.clientY); }}
+        onMouseLeave={() => { if (!isMobile) clearHover(); }}
+        onClick={(e) => { if (isMobile) updateHover(e.clientX, e.clientY); }}
         onTouchStart={(e) => {
           // Single-finger touch: show the hover/tooltip immediately on first contact, not only
           // once the finger moves (onTouchMove) — a still tap used to show nothing at all.
@@ -471,6 +499,7 @@ export default function PriceChart({
               touchDistance(a, b),
               pinchRef.current.centerFraction,
             );
+            setRangePreset('custom');
             setZoomRange(range);
             return;
           }
@@ -478,7 +507,7 @@ export default function PriceChart({
         }}
         onTouchEnd={(e) => {
           if (e.touches.length < 2) pinchRef.current = null;
-          if (e.touches.length === 0) clearHover();
+          if (e.touches.length === 0 && !isMobile) clearHover();
         }}
         onWheel={handleWheel}
       >
@@ -655,7 +684,7 @@ export default function PriceChart({
           )}
         </svg>
 
-        {hover && hoverPoint && (
+        {!isMobile && hover && hoverPoint && (
           <ChartTooltip
             point={hoverPoint}
             band={hoverBand}
@@ -666,13 +695,27 @@ export default function PriceChart({
         )}
       </div>
 
+      {isMobile && (hover && hoverPoint ? (
+        <div className="mt-3" aria-live="polite">
+          <ChartTooltip point={hoverPoint} band={hoverBand} bandActual={hoverBandActual}
+            placement={{ x: hover.x, y: hover.y, containerWidth: hover.containerWidth }} hasPlan={hasPlan} inline />
+        </div>
+      ) : <p className="mt-2 text-[13px]" style={{ color: 'var(--text-muted)' }}>Tryck på grafen för pris och batteriplan per kvart.</p>)}
+
       {hasPlan && (
-        <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-          {socIsLive && startSocKwh != null
-            ? `Batteri-rekommendationer baserade på aktuell laddning ${Math.round(
-                (startSocKwh / batteryKwh) * 100,
-              )} % (${startSocKwh.toFixed(1)} kWh).`
-            : 'Batteri-rekommendationer baserade på antaget 50 % (växelriktardata saknas).'}
+        <p className="mt-3 text-[13px]" style={{ color: 'var(--text-muted)' }}>
+          <span className="min-[700px]:hidden">
+            {socIsLive && startSocKwh != null
+              ? `Planen utgår från ${Math.round((startSocKwh / batteryKwh) * 100)} % batteri.`
+              : 'Planen utgår från antaget 50 % (ingen live-SoC).'}
+          </span>
+          <span className="hidden min-[700px]:inline">
+            {socIsLive && startSocKwh != null
+              ? `Batteri-rekommendationer baserade på aktuell laddning ${Math.round(
+                  (startSocKwh / batteryKwh) * 100,
+                )} % (${startSocKwh.toFixed(1)} kWh).`
+              : 'Batteri-rekommendationer baserade på antaget 50 % (växelriktardata saknas).'}
+          </span>
         </p>
       )}
     </div>
