@@ -146,19 +146,17 @@
   }
 }
 
-/* A quiet indicator of actual power direction, paired with readable from/to text. */
-.mobile-flow-dot {
-  animation: mobile-flow-dot 2s ease-in-out infinite;
+/* Animate the actual connectors between the four mobile energy cards. */
+.mobile-interpanel-flow {
+  animation: mobile-interpanel-flow 1.7s linear infinite;
 }
 
-@keyframes mobile-flow-dot {
-  0% { transform: translateX(0); opacity: 0; }
-  20%, 75% { opacity: 0.9; }
-  100% { transform: translateX(16px); opacity: 0; }
+@keyframes mobile-interpanel-flow {
+  to { stroke-dashoffset: -18; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mobile-flow-dot { animation: none; opacity: 0; }
+  .mobile-interpanel-flow { animation: none; stroke-dasharray: none; }
 }
 
 .card-surface {
