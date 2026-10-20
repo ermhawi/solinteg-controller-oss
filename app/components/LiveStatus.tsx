@@ -17,7 +17,7 @@ import type { InverterApiStatus } from '@/lib/inverter-api-status';
  * every normal load while the first poll is in flight; the first real poll (fired immediately,
  * not just on the interval) corrects it within a second or two if the inverter is actually down.
  */
-export default function LiveStatus({ today }: { today: string }) {
+export default function LiveStatus({ today, updatedTime }: { today: string; updatedTime: string }) {
   const [status, setStatus] = useState<InverterApiStatus>('live');
 
   useEffect(() => {
@@ -47,7 +47,7 @@ export default function LiveStatus({ today }: { today: string }) {
         />
         {status === 'live' && <span className="absolute inset-0 animate-live-pulse rounded-full" style={{ background: 'var(--live-dot)' }} />}
       </span>
-      {INVERTER_STATUS_TEXT[status]} · {today}
+      {INVERTER_STATUS_TEXT[status]} · graf hämtad {updatedTime} · {today}
     </div>
   );
 }

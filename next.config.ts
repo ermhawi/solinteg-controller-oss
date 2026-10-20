@@ -15,6 +15,8 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BASE_PATH: process.env.NEXT_BASE_PATH || '',
   },
+  // This is a live dashboard: do not reuse a five-minute-old App Router payload.
+  experimental: { staleTimes: { static: 0 } },
 };
 
 export default nextConfig;

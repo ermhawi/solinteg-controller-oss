@@ -3,7 +3,9 @@ import AutoRefresh from '@/app/components/AutoRefresh';
 import LiveStatus from '@/app/components/LiveStatus';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const today = stockholmDateOf(new Date().toISOString());
+  const updatedAt = new Date();
+  const today = stockholmDateOf(updatedAt.toISOString());
+  const updatedTime = updatedAt.toLocaleTimeString('sv-SE', { timeZone: 'Europe/Stockholm' });
 
   return (
     <div
@@ -12,7 +14,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     >
       {/* Keeps the server props (chart/plan/SoC overlay) from freezing at load time —
           the "Live" header below is only honest because of this. */}
-      <AutoRefresh />
+      <AutoRefresh renderedAt={updatedAt.toISOString()} />
       {/* Slimmed header (title text dropped) — just a small house-icon mark next to the
           live-status line, no more two-line title/subtitle stack. */}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -27,7 +29,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <rect x="42" y="60" width="16" height="28" rx="3" fill="var(--node-bg)" />
             </svg>
           </div>
-          <LiveStatus today={today} />
+          <LiveStatus today={today} updatedTime={updatedTime} />
         </div>
       </div>
 

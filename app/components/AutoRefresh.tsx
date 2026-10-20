@@ -4,51 +4,58 @@ import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 /**
- * Re-fetches the server-rendered page data on an interval, so a dashboard tab
- * left open doesn't freeze at its load-time snapshot. Everything except the
- * Systemstatus/Dispatch polls (which fetch their own API routes) is server
- * props — the price chart, dispatch plan, planned/actual SoC overlay, and the
- * "Imorgons priser" notice — and the header chrome says "Live", so without
- * this an evening viewer sees the morning's plan styled as current.
+ * Re-fetches server-rendered chart/plan/SoC data while the dashboard is open.
+ * Systemstatus/Dispatch poll their own API routes independently.
  *
- * router.refresh() re-renders the server components. The price read re-executes
- * for real every time (producePlan calls fetchPricesUncached — see lib/plan.ts's
- * cache contract; it used to come from a 'use cache' entry, which is what made
- * the day-ahead horizon flip-flop possible), while the solar/temp forecasts do
- * stay cached on their own 1 h/8 h schedule, deliberately. Each refresh therefore also logs a fresh
- * optimizer_runs row — same as any real page view, and only while a tab is
- * actually open AND visible (hidden tabs skip ticks; a tab becoming visible
- * again catches up at most once per interval).
+ * Use the server render time, not the component mount time: the App Router and
+ * browser back/forward cache can restore an already-old page without remounting
+ * it. Check immediately on mount/return, then every minute while visible.
+ *
+ * router.refresh() re-runs producePlan's uncached price/SoC reads. Solar/temp
+ * forecasts deliberately keep their own longer cache lifetimes.
  */
-export default function AutoRefresh({ intervalMs = 5 * 60_000 }: { intervalMs?: number }) {
+const RETURN_MAX_AGE_MS = 15_000;
+const MIN_REFRESH_GAP_MS = 10_000;
+
+export default function AutoRefresh({
+  renderedAt,
+  intervalMs = 60_000,
+}: {
+  renderedAt: string;
+  intervalMs?: number;
+}) {
   const router = useRouter();
-  // Anchored at MOUNT, inside the effect, rather than `useRef(Date.now())`: reading the clock
-  // during render is impure (react-hooks/purity) — the initializer re-evaluates on every render
-  // even though only the first result is kept. The `=== 0` guard keeps it a once-only anchor if
-  // the effect ever re-runs, which is exactly what the render-time initializer gave us.
   const lastRefresh = useRef(0);
 
   useEffect(() => {
-    if (lastRefresh.current === 0) lastRefresh.current = Date.now();
-    const refreshIfDue = () => {
+    const serverRenderedAt = Date.parse(renderedAt);
+    const refreshIfStale = (maxAgeMs: number) => {
       if (document.visibilityState !== 'visible') return;
-      if (Date.now() - lastRefresh.current < intervalMs) return;
-      lastRefresh.current = Date.now();
+      const now = Date.now();
+      if (now - serverRenderedAt < maxAgeMs) return;
+      // router.refresh() is asynchronous; don't stack requests while one is pending.
+      if (now - lastRefresh.current < MIN_REFRESH_GAP_MS) return;
+      lastRefresh.current = now;
       router.refresh();
     };
-    const id = setInterval(refreshIfDue, Math.min(intervalMs, 60_000));
-    document.addEventListener('visibilitychange', refreshIfDue);
-    window.addEventListener('focus', refreshIfDue);
-    window.addEventListener('pageshow', refreshIfDue);
-    window.addEventListener('online', refreshIfDue);
+
+    const refreshOnReturn = () => refreshIfStale(Math.min(intervalMs, RETURN_MAX_AGE_MS));
+    const refreshOnTimer = () => refreshIfStale(intervalMs);
+
+    refreshOnReturn(); // catches a stale App Router navigation on first mount
+    const id = setInterval(refreshOnTimer, Math.min(intervalMs, 10_000));
+    document.addEventListener('visibilitychange', refreshOnReturn);
+    window.addEventListener('focus', refreshOnReturn);
+    window.addEventListener('pageshow', refreshOnReturn);
+    window.addEventListener('online', refreshOnReturn);
     return () => {
       clearInterval(id);
-      document.removeEventListener('visibilitychange', refreshIfDue);
-      window.removeEventListener('focus', refreshIfDue);
-      window.removeEventListener('pageshow', refreshIfDue);
-      window.removeEventListener('online', refreshIfDue);
+      document.removeEventListener('visibilitychange', refreshOnReturn);
+      window.removeEventListener('focus', refreshOnReturn);
+      window.removeEventListener('pageshow', refreshOnReturn);
+      window.removeEventListener('online', refreshOnReturn);
     };
-  }, [router, intervalMs]);
+  }, [router, renderedAt, intervalMs]);
 
   return null;
 }
