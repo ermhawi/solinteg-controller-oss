@@ -146,6 +146,21 @@
   }
 }
 
+/* A quiet indicator of actual power direction, paired with readable from/to text. */
+.mobile-flow-dot {
+  animation: mobile-flow-dot 2s ease-in-out infinite;
+}
+
+@keyframes mobile-flow-dot {
+  0% { transform: translateX(0); opacity: 0; }
+  20%, 75% { opacity: 0.9; }
+  100% { transform: translateX(16px); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-flow-dot { animation: none; opacity: 0; }
+}
+
 .card-surface {
   border-radius: 22px;
   background: var(--card-bg-grad, var(--card-bg));

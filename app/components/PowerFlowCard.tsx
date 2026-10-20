@@ -4,9 +4,7 @@ import { useState } from 'react';
 import type { InverterLiveData } from '@/lib/inverter';
 import { INVERTER_STATUS_TEXT } from '@/lib/inverter-api-status';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
-
-// Ignore sub-threshold dribbles so a line/node doesn't flicker state near 0 W.
-const FLOW_THRESHOLD_W = 20;
+import { FLOW_THRESHOLD_W } from '@/lib/power-flow';
 
 // The flow diagram is designed at this fixed pixel size; FlowNode converts its left/top/size
 // props (still given in this coordinate space by every call site below) to percentages of it,
