@@ -44,7 +44,16 @@ describe('mobileFlowSegments', () => {
     // Battery and grid paths must not meet or cross in the narrow row gap.
     const batteryRight = Math.max(...[battery.from, battery.to, ...battery.controls].map(p => p[0]));
     const gridLeft = Math.min(...[grid.from, grid.to, ...grid.controls].map(p => p[0]));
-    expect(gridLeft - batteryRight).toBeGreaterThan(10);
+    expect(gridLeft - batteryRight).toBeGreaterThan(20);
+
+    // Take the shortest visually useful routes between facing card edges.
+    const length = (link: typeof battery) => Math.hypot(link.to[0] - link.from[0], link.to[1] - link.from[1]);
+    expect(length(battery)).toBeLessThan(65);
+    expect(length(grid)).toBeLessThan(50);
+    expect(battery.from[0]).toBeCloseTo(leftWidth * 0.4);
+    expect(battery.to[0]).toBeCloseTo(leftWidth * 0.6);
+    expect(grid.from[0]).toBe(leftWidth - 12);
+    expect(grid.to[0]).toBe(rightStart + 12);
 
     for (const link of [battery, grid]) {
       for (const p of link.controls) {
