@@ -1,8 +1,9 @@
 // Direct connections between the four cards: the same three relationships as
 // Systemstatus (Sol -> Hus, Hus <-> Batteri, Hus <-> Nät).
-// No shared junction: every curve begins and ends at a card's edge.
+// The compact 10px row gap is the original mobile layout; the long diagonal
+// connectors run sideways through it rather than requiring extra vertical space.
 export const MOBILE_TILE_HEIGHT = 110;
-export const MOBILE_ROW_GAP = 112;
+export const MOBILE_ROW_GAP = 10;
 export const MOBILE_COL_GAP = 24;
 export const MOBILE_FLOW_HEIGHT = MOBILE_TILE_HEIGHT * 2 + MOBILE_ROW_GAP;
 
@@ -21,25 +22,23 @@ export function mobileFlowSegments(width: number): MobileFlowLink[] {
   const rightStart = leftWidth + MOBILE_COL_GAP;
   const top = MOBILE_TILE_HEIGHT;
   const bottom = MOBILE_TILE_HEIGHT + MOBILE_ROW_GAP;
-
-  const batteryX = leftWidth * 0.23;
-  const gridX = rightStart + leftWidth * 0.7;
+  const midGap = (top + bottom) / 2;
 
   return [
     {
       id: 'solar-house',
-      from: [rightStart + 26, top], to: [leftWidth - 26, top],
-      controls: [[rightStart + 21, top + 45], [leftWidth - 21, top + 45]],
+      from: [rightStart, top * 0.7], to: [leftWidth, top * 0.7],
+      controls: [[rightStart - 6, top * 0.7 + 8], [leftWidth + 6, top * 0.7 + 8]],
     },
     {
       id: 'house-battery',
-      from: [batteryX, top], to: [batteryX, bottom],
-      controls: [[batteryX + 18, top + 35], [batteryX - 18, bottom - 35]],
+      from: [leftWidth * 0.82, top], to: [leftWidth * 0.18, bottom],
+      controls: [[leftWidth * 0.69, midGap], [leftWidth * 0.31, midGap]],
     },
     {
       id: 'house-grid',
-      from: [leftWidth * 0.68, top], to: [gridX, bottom],
-      controls: [[leftWidth * 0.68 + 9, top + 42], [gridX - 32, bottom - 42]],
+      from: [leftWidth * 0.93, top], to: [rightStart + leftWidth * 0.52, bottom],
+      controls: [[leftWidth + 7, midGap], [rightStart + leftWidth * 0.37, midGap]],
     },
   ];
 }

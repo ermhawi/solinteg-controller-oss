@@ -85,7 +85,7 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
           {status === 'live' ? '● Live' : '● Ingen live-data'}
         </span>
       </div>
-      <div ref={gridRef} className="relative grid grid-cols-2 grid-rows-[110px_110px] gap-x-6 gap-y-28">
+      <div ref={gridRef} className="relative grid grid-cols-2 grid-rows-[110px_110px] gap-x-6 gap-y-2.5">
         <Metric label="Huset" value={data ? power(data.house_load_w) : '–'}
           detail={data ? 'Förbrukning' : noData} />
         <Metric label="Sol" value={data ? power(data.pv_w) : '–'}
