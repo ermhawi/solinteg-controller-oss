@@ -1,32 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { mobileFlowSegments, MOBILE_FLOW_HEIGHT } from './mobile-flow-geometry';
+import { mobileFlowSegments, MOBILE_COL_GAP, MOBILE_FLOW_HEIGHT, MOBILE_TILE_HEIGHT, MOBILE_ROW_GAP } from './mobile-flow-geometry';
 
 describe('mobileFlowSegments', () => {
-  it.each([258, 298, 328, 368])('connects four card edges with long curved paths at %i px', (width) => {
-    const branches = mobileFlowSegments(width);
-    expect(branches).toHaveLength(4);
-    for (const branch of branches) {
-      const length = Math.hypot(branch.card[0] - branch.hub[0], branch.card[1] - branch.hub[1]);
-      expect(length).toBeGreaterThan(80);
-      expect(branch.card[0]).toBeGreaterThan(0);
-      expect(branch.card[0]).toBeLessThan(width);
-      expect(branch.hub).toEqual([width / 2, MOBILE_FLOW_HEIGHT / 2]);
-      expect(branch.controls[0]).not.toEqual(branch.card);
-      expect(branch.controls[1]).not.toEqual(branch.hub);
-    }
-    expect(branches[0].card[1]).toBe(110);
-    expect(branches[1].card[1]).toBe(110);
-    expect(branches[2].card[1]).toBe(222);
-    expect(branches[3].card[1]).toBe(222);
-  });
+  it.each([258, 298, 328, 368, 600])('connects cards directly at %i px', (width) => {
+    const links = mobileFlowSegments(width);
+    expect(links.map((link) => link.id)).toEqual(['solar-house', 'house-battery', 'house-grid']);
+    const leftWidth = (width - MOBILE_COL_GAP) / 2;
+    const rightStart = leftWidth + MOBILE_COL_GAP;
+    const bottom = MOBILE_TILE_HEIGHT + MOBILE_ROW_GAP;
 
-  it('keeps upper and lower curved branches separate until the invisible junction', () => {
-    const s = mobileFlowSegments(328);
-    expect(s[0].controls[1][1]).toBeLessThan(MOBILE_FLOW_HEIGHT / 2);
-    expect(s[1].controls[1][1]).toBeLessThan(MOBILE_FLOW_HEIGHT / 2);
-    expect(s[2].controls[1][1]).toBeGreaterThan(MOBILE_FLOW_HEIGHT / 2);
-    expect(s[3].controls[1][1]).toBeGreaterThan(MOBILE_FLOW_HEIGHT / 2);
-    expect(s[0].controls[1][0]).toBeLessThan(328 / 2);
-    expect(s[1].controls[1][0]).toBeGreaterThan(328 / 2);
+    const belongsTo = (p: [number, number], column: 'left' | 'right', row: 'top' | 'bottom') =>
+      p[0] > (column === 'left' ? 0 : rightStart) &&
+      p[0] < (column === 'left' ? leftWidth : width) &&
+      p[1] === (row === 'top' ? MOBILE_TILE_HEIGHT : bottom);
+
+    expect(belongsTo(links[0].from, 'right', 'top')).toBe(true); // Sol
+    expect(belongsTo(links[0].to, 'left', 'top')).toBe(true); // Hus
+    expect(belongsTo(links[1].from, 'left', 'top')).toBe(true); // Hus
+    expect(belongsTo(links[1].to, 'left', 'bottom')).toBe(true); // Batteri
+    expect(belongsTo(links[2].from, 'left', 'top')).toBe(true); // Hus
+    expect(belongsTo(links[2].to, 'right', 'bottom')).toBe(true); // Nät
+
+    // No edge ends in a common junction; all six endpoints are panel anchors.
+    expect(new Set(links.flatMap((link) => [link.from.join(','), link.to.join(',')])).size).toBe(6);
+    for (const link of links) {
+      expect(link.controls[0]).not.toEqual(link.from);
+      expect(link.controls[1]).not.toEqual(link.to);
+    }
+    expect(MOBILE_FLOW_HEIGHT).toBe(bottom + MOBILE_TILE_HEIGHT);
   });
 });

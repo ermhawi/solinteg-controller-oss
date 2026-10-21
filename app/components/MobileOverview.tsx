@@ -13,37 +13,38 @@ function power(watts: number) {
   return `${(Math.abs(watts) / 1000).toFixed(2)} kW`;
 }
 
-// Curved lines connect all four card edges to an invisible junction, without a hub icon.
-// Glow and animation match Systemstatus via the shared FlowConnector.
+// The three direct curved connections match Systemstatus: solar → house,
+// house ↔ battery and house ↔ grid. No shared center or implicit power allocation.
 function FlowNetwork({ width, flows }: { width: number; flows: {
-  house: PowerFlowDirection | null;
   solar: PowerFlowDirection | null;
   battery: PowerFlowDirection | null;
   grid: PowerFlowDirection | null;
 } }) {
   const branches = mobileFlowSegments(width);
-  const colors = [
-    'var(--flow-house-accent)',
-    'var(--flow-solar)',
-    'var(--flow-battery)',
-    flows.grid?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)',
-  ];
-  const flowValues = [flows.house, flows.solar, flows.battery, flows.grid];
-  const activeFlows = flowValues.flatMap((flow) => flow ? [`${flow.from} till ${flow.to}`] : []);
+  const activeFlows = [
+    flows.solar && 'Sol till Hus',
+    flows.battery && (flows.battery.from === 'Batteri' ? 'Batteri till Hus' : 'Hus till Batteri'),
+    flows.grid && (flows.grid.from === 'Nät' ? 'Nät till Hus' : 'Hus till Nät'),
+  ].filter((flow): flow is string => !!flow);
 
   return (
     <svg viewBox={`0 0 ${width} ${MOBILE_FLOW_HEIGHT}`} role="img"
       aria-label={activeFlows.length ? `Elflöden: ${activeFlows.join(', ')}` : 'Inga aktiva elflöden mellan energipanelerna'}
       className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible">
-      {branches.map(({ card, hub, controls }, index) => {
-        const flow = flowValues[index];
-        const inward = flow?.to === 'System';
+      {branches.map(({ id, from, to, controls }) => {
+        const flow = id === 'solar-house' ? flows.solar : id === 'house-battery' ? flows.battery : flows.grid;
+        const reverse = id === 'house-battery'
+          ? flow?.from === 'Batteri'
+          : id === 'house-grid' && flow?.from === 'Nät';
+        const color = id === 'solar-house' ? 'var(--flow-solar)'
+          : id === 'house-battery' ? 'var(--flow-battery)'
+            : flow?.from === 'Nät' ? 'var(--flow-red)' : 'var(--flow-sky)';
         return (
-          <FlowConnector key={index}
-            from={inward ? card : hub}
-            to={inward ? hub : card}
-            controls={inward ? controls : [controls[1], controls[0]]}
-            color={colors[index]}
+          <FlowConnector key={id}
+            from={reverse ? to : from}
+            to={reverse ? from : to}
+            controls={reverse ? [controls[1], controls[0]] : controls}
+            color={color}
             active={!!flow} />
         );
       })}
@@ -72,7 +73,6 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
   const gridRef = useRef<HTMLDivElement>(null);
   const width = useContainerWidth(gridRef);
   const solarFlow = data ? powerFlowDirection('solar', data.pv_w) : null;
-  const houseFlow = data ? powerFlowDirection('house', data.house_load_w) : null;
   const batteryFlow = data ? powerFlowDirection('battery', data.battery_w) : null;
   const gridFlow = data ? powerFlowDirection('grid', data.grid_w) : null;
   const noData = 'Ingen aktuell data';
@@ -97,7 +97,7 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
         <Metric label="Elnät" value={data ? power(data.grid_w) : '–'}
           detail={data ? (gridFlow?.state ?? 'I balans') : noData}
           color={gridFlow?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)'} />
-        <FlowNetwork width={width ?? 258} flows={{ house: houseFlow, solar: solarFlow, battery: batteryFlow, grid: gridFlow }} />
+        <FlowNetwork width={width ?? 258} flows={{ solar: solarFlow, battery: batteryFlow, grid: gridFlow }} />
       </div>
     </section>
   );
