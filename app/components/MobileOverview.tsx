@@ -1,74 +1,55 @@
 'use client';
 
+import { useRef } from 'react';
 import type { InverterLiveData } from '@/lib/inverter';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { powerFlowDirection } from '@/lib/power-flow';
 import type { PowerFlowDirection } from '@/lib/power-flow';
+import { MOBILE_FLOW_HEIGHT, MOBILE_HUB_RADIUS, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
+import FlowConnector from './FlowConnector';
+import { useContainerWidth } from './useResponsiveLayout';
 
 function power(watts: number) {
   return `${(Math.abs(watts) / 1000).toFixed(2)} kW`;
 }
 
-// The four lines meet in the gap between the cards. Arrowheads indicate whether
-// electricity is moving towards the system or from it to that particular card.
-function FlowNetwork({ flows }: { flows: {
+// Full-length lines connect the edges of each card to the shared system node.
+// Use the exact same FlowConnector styling/animation as the Systemstatus panel.
+function FlowNetwork({ width, flows }: { width: number; flows: {
   house: PowerFlowDirection | null;
   solar: PowerFlowDirection | null;
   battery: PowerFlowDirection | null;
   grid: PowerFlowDirection | null;
 } }) {
-  const hub = 56;
-  const corners = [
-    { flow: flows.house, x: 34, y: 34, color: 'var(--flow-house-accent)' },
-    { flow: flows.solar, x: 78, y: 34, color: 'var(--flow-solar)' },
-    { flow: flows.battery, x: 34, y: 78, color: 'var(--flow-battery)' },
-    { flow: flows.grid, x: 78, y: 78, color: flows.grid?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)' },
+  const branches = mobileFlowSegments(width);
+  const colors = [
+    'var(--flow-house-accent)',
+    'var(--flow-solar)',
+    'var(--flow-battery)',
+    flows.grid?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)',
   ];
-  const activeFlows = corners.flatMap(({ flow }) => flow ? [`${flow.from} till ${flow.to}`] : []);
+  const flowValues = [flows.house, flows.solar, flows.battery, flows.grid];
+  const activeFlows = flowValues.flatMap((flow) => flow ? [`${flow.from} till ${flow.to}`] : []);
 
   return (
-    <svg viewBox="0 0 112 112" role="img"
+    <svg viewBox={`0 0 ${width} ${MOBILE_FLOW_HEIGHT}`} role="img"
       aria-label={activeFlows.length ? `Elflöden: ${activeFlows.join(', ')}` : 'Inga aktiva elflöden mellan energipanelerna'}
-      className="pointer-events-none absolute left-1/2 top-1/2 z-10 h-28 w-28 -translate-x-1/2 -translate-y-1/2 overflow-visible">
-      {corners.map(({ flow, x, y, color }, index) => {
-        const dx = x - hub;
-        const dy = y - hub;
-        // The line ends before the center circle, and touches the rounded inner corners.
-        const inner: [number, number] = [hub + dx * 0.3, hub + dy * 0.3];
-        const outer: [number, number] = [hub + dx * 0.98, hub + dy * 0.98];
+      className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible">
+      {branches.map(({ card, hub }, index) => {
+        const flow = flowValues[index];
         const inward = flow?.to === 'System';
-        const [from, to] = inward ? [outer, inner] : [inner, outer];
-        const deltaX = to[0] - from[0];
-        const deltaY = to[1] - from[1];
-        const length = Math.hypot(deltaX, deltaY);
-        const ux = deltaX / length;
-        const uy = deltaY / length;
-        const sideX = -uy;
-        const sideY = ux;
-        const arrow = [
-          to,
-          [to[0] - ux * 6 + sideX * 3.4, to[1] - uy * 6 + sideY * 3.4],
-          [to[0] - ux * 6 - sideX * 3.4, to[1] - uy * 6 - sideY * 3.4],
-        ].map(([a, b]) => `${a},${b}`).join(' ');
-
         return (
-          <g key={index}>
-            <line x1={inner[0]} y1={inner[1]} x2={outer[0]} y2={outer[1]}
-              stroke="var(--node-idle-stroke)" strokeWidth="2.5" strokeLinecap="round" />
-            {flow && (
-              <g>
-                <line x1={from[0]} y1={from[1]} x2={to[0]} y2={to[1]}
-                  stroke={color} strokeWidth="4" strokeLinecap="round"
-                  strokeDasharray="5 4" className="mobile-interpanel-flow" />
-                <polygon points={arrow} fill={color} />
-                <title>{`${flow.from} → ${flow.to}`}</title>
-              </g>
-            )}
-          </g>
+          <FlowConnector key={index}
+            from={inward ? card : hub}
+            to={inward ? hub : card}
+            color={colors[index]}
+            active={!!flow} />
         );
       })}
-      <circle cx={hub} cy={hub} r="9" fill="var(--card-bg)" stroke="var(--divider)" strokeWidth="1.5" />
-      <circle cx={hub} cy={hub} r="3.5" fill={activeFlows.length ? 'var(--flow-house-accent)' : 'var(--node-idle-stroke)'} />
+      <circle cx={width / 2} cy={MOBILE_FLOW_HEIGHT / 2} r={MOBILE_HUB_RADIUS}
+        fill="var(--card-bg)" stroke="var(--divider)" strokeWidth="1.5" />
+      <circle cx={width / 2} cy={MOBILE_FLOW_HEIGHT / 2} r="3.5"
+        fill={activeFlows.length ? 'var(--flow-house-accent)' : 'var(--node-idle-stroke)'} />
     </svg>
   );
 }
@@ -80,7 +61,7 @@ function Metric({ label, value, detail, color }: {
   color?: string;
 }) {
   return (
-    <div className="relative z-0 min-w-0 rounded-2xl px-2.5 py-2.5 min-[360px]:px-3"
+    <div className="relative z-0 h-full min-w-0 rounded-2xl px-2.5 py-2.5 min-[360px]:px-3"
       style={{ background: 'var(--badge-bg)' }}>
       <p className="text-[13px] font-semibold" style={{ color: 'var(--text-muted)' }}>{label}</p>
       <p className="mt-0.5 text-[18px] font-bold leading-tight tabular-nums min-[360px]:text-[20px]"
@@ -91,6 +72,8 @@ function Metric({ label, value, detail, color }: {
 }
 
 export default function MobileOverview({ data, status }: { data: InverterLiveData | null; status: InverterApiStatus }) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const width = useContainerWidth(gridRef);
   const solarFlow = data ? powerFlowDirection('solar', data.pv_w) : null;
   const houseFlow = data ? powerFlowDirection('house', data.house_load_w) : null;
   const batteryFlow = data ? powerFlowDirection('battery', data.battery_w) : null;
@@ -105,7 +88,7 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
           {status === 'live' ? '● Live' : '● Ingen live-data'}
         </span>
       </div>
-      <div className="relative grid grid-cols-2 gap-10">
+      <div ref={gridRef} className="relative grid grid-cols-2 grid-rows-[110px_110px] gap-x-6 gap-y-28">
         <Metric label="Huset" value={data ? power(data.house_load_w) : '–'}
           detail={data ? 'Förbrukning' : noData} />
         <Metric label="Sol" value={data ? power(data.pv_w) : '–'}
@@ -117,7 +100,7 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
         <Metric label="Elnät" value={data ? power(data.grid_w) : '–'}
           detail={data ? (gridFlow?.state ?? 'I balans') : noData}
           color={gridFlow?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)'} />
-        <FlowNetwork flows={{ house: houseFlow, solar: solarFlow, battery: batteryFlow, grid: gridFlow }} />
+        <FlowNetwork width={width ?? 258} flows={{ house: houseFlow, solar: solarFlow, battery: batteryFlow, grid: gridFlow }} />
       </div>
     </section>
   );

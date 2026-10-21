@@ -146,17 +146,8 @@
   }
 }
 
-/* Animate the actual connectors between the four mobile energy cards. */
-.mobile-interpanel-flow {
-  animation: mobile-interpanel-flow 1.7s linear infinite;
-}
-
-@keyframes mobile-interpanel-flow {
-  to { stroke-dashoffset: -18; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .mobile-interpanel-flow { animation: none; stroke-dasharray: none; }
+  .animate-flow-dash { animation: none; }
 }
 
 .card-surface {
