@@ -1,12 +1,9 @@
-// Three independent panel-to-panel connections, as in Systemstatus:
-// Sol -> Hus, Hus <-> Batteri, Hus <-> Nät.
-// Each connector starts/ends on the visible card edge, including the outer
-// inset that keeps the compact mobile cards slightly narrower than the grid.
-export const MOBILE_TILE_HEIGHT = 100;
-export const MOBILE_ROW_GAP = 10;
+// Three direct panel-to-panel links, as in Systemstatus.
+// Keep the overall footprint compact while making the cards fit their content
+// and using the freed space for longer connectors.
 export const MOBILE_COL_GAP = 24;
-export const MOBILE_CARD_INSET = 10;
-export const MOBILE_FLOW_HEIGHT = MOBILE_TILE_HEIGHT * 2 + MOBILE_ROW_GAP;
+export const MOBILE_FLOW_HEIGHT = 210;
+export const MOBILE_CARD_MAX_WIDTH = 160;
 
 export type MobileFlowPoint = [number, number];
 export type MobileFlowLinkId = 'solar-house' | 'house-battery' | 'house-grid';
@@ -18,34 +15,39 @@ export interface MobileFlowLink {
   controls: [MobileFlowPoint, MobileFlowPoint];
 }
 
-export function mobileFlowSegments(width: number): MobileFlowLink[] {
-  const leftWidth = (width - MOBILE_COL_GAP) / 2;
-  const rightStart = leftWidth + MOBILE_COL_GAP;
-  const houseRight = leftWidth - MOBILE_CARD_INSET;
-  const solarLeft = rightStart + MOBILE_CARD_INSET;
-  const top = MOBILE_TILE_HEIGHT;
-  const bottom = MOBILE_TILE_HEIGHT + MOBILE_ROW_GAP;
-  const midGap = (top + bottom) / 2;
+export function mobileFlowLayout(width: number) {
+  // Narrow phones need room for wrapped battery status without smaller text.
+  const tileHeight = width < 298 ? 96 : width < 322 ? 90 : 82;
+  const inset = width < 298 ? 12 : width < 322 ? 18 : width < 368 ? 26 : 34;
+  const cardWidth = Math.min((width - MOBILE_COL_GAP) / 2 - inset, MOBILE_CARD_MAX_WIDTH);
+  return { tileHeight, rowGap: MOBILE_FLOW_HEIGHT - tileHeight * 2, inset, cardWidth };
+}
 
-  const batteryX = houseRight / 2;
+export function mobileFlowSegments(width: number): MobileFlowLink[] {
+  const { tileHeight, rowGap, cardWidth } = mobileFlowLayout(width);
+  const houseRight = cardWidth;
+  const solarLeft = width - cardWidth;
+  const bottom = tileHeight + rowGap;
+  const midGap = (tileHeight + bottom) / 2;
+  const batteryX = cardWidth / 2;
   const gridFrom = houseRight - 7;
   const gridTo = solarLeft + 7;
 
   return [
     {
       id: 'solar-house',
-      from: [solarLeft, top / 2], to: [houseRight, top / 2],
-      controls: [[solarLeft - 10, top / 2], [houseRight + 10, top / 2]],
+      from: [solarLeft, tileHeight / 2], to: [houseRight, tileHeight / 2],
+      controls: [[solarLeft - 10, tileHeight / 2], [houseRight + 10, tileHeight / 2]],
     },
     {
       id: 'house-battery',
-      from: [batteryX, top], to: [batteryX, bottom],
-      controls: [[batteryX, midGap - 2], [batteryX, midGap + 2]],
+      from: [batteryX, tileHeight], to: [batteryX, bottom],
+      controls: [[batteryX, midGap - rowGap * 0.22], [batteryX, midGap + rowGap * 0.22]],
     },
     {
       id: 'house-grid',
-      from: [gridFrom, top], to: [gridTo, bottom],
-      controls: [[houseRight + 13, midGap - 2], [solarLeft - 13, midGap + 2]],
+      from: [gridFrom, tileHeight], to: [gridTo, bottom],
+      controls: [[houseRight + 13, midGap - rowGap * 0.22], [solarLeft - 13, midGap + rowGap * 0.22]],
     },
   ];
 }
