@@ -5,7 +5,7 @@ import type { InverterLiveData } from '@/lib/inverter';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { powerFlowDirection } from '@/lib/power-flow';
 import type { PowerFlowDirection } from '@/lib/power-flow';
-import { MOBILE_FLOW_HEIGHT, MOBILE_HUB_RADIUS, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
+import { MOBILE_FLOW_HEIGHT, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
 import FlowConnector from './FlowConnector';
 import { useContainerWidth } from './useResponsiveLayout';
 
@@ -13,8 +13,8 @@ function power(watts: number) {
   return `${(Math.abs(watts) / 1000).toFixed(2)} kW`;
 }
 
-// Full-length lines connect the edges of each card to the shared system node.
-// Use the exact same FlowConnector styling/animation as the Systemstatus panel.
+// Curved lines connect all four card edges to an invisible junction, without a hub icon.
+// Glow and animation match Systemstatus via the shared FlowConnector.
 function FlowNetwork({ width, flows }: { width: number; flows: {
   house: PowerFlowDirection | null;
   solar: PowerFlowDirection | null;
@@ -35,21 +35,18 @@ function FlowNetwork({ width, flows }: { width: number; flows: {
     <svg viewBox={`0 0 ${width} ${MOBILE_FLOW_HEIGHT}`} role="img"
       aria-label={activeFlows.length ? `Elflöden: ${activeFlows.join(', ')}` : 'Inga aktiva elflöden mellan energipanelerna'}
       className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible">
-      {branches.map(({ card, hub }, index) => {
+      {branches.map(({ card, hub, controls }, index) => {
         const flow = flowValues[index];
         const inward = flow?.to === 'System';
         return (
           <FlowConnector key={index}
             from={inward ? card : hub}
             to={inward ? hub : card}
+            controls={inward ? controls : [controls[1], controls[0]]}
             color={colors[index]}
             active={!!flow} />
         );
       })}
-      <circle cx={width / 2} cy={MOBILE_FLOW_HEIGHT / 2} r={MOBILE_HUB_RADIUS}
-        fill="var(--card-bg)" stroke="var(--divider)" strokeWidth="1.5" />
-      <circle cx={width / 2} cy={MOBILE_FLOW_HEIGHT / 2} r="3.5"
-        fill={activeFlows.length ? 'var(--flow-house-accent)' : 'var(--node-idle-stroke)'} />
     </svg>
   );
 }
@@ -62,7 +59,7 @@ function Metric({ label, value, detail, color }: {
 }) {
   return (
     <div className="relative z-0 h-full min-w-0 rounded-2xl px-2.5 py-2.5 min-[360px]:px-3"
-      style={{ background: 'var(--badge-bg)' }}>
+      style={{ background: 'var(--badge-bg)', border: '1px solid var(--divider)' }}>
       <p className="text-[13px] font-semibold" style={{ color: 'var(--text-muted)' }}>{label}</p>
       <p className="mt-0.5 text-[18px] font-bold leading-tight tabular-nums min-[360px]:text-[20px]"
         style={{ color: color ?? 'var(--text)', fontFamily: 'var(--font-heading)' }}>{value}</p>
