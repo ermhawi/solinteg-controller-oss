@@ -1,7 +1,6 @@
-// Direct connections between the four cards: the same three relationships as
-// Systemstatus (Sol -> Hus, Hus <-> Batteri, Hus <-> Nät).
-// The compact 10px row gap is the original mobile layout; the long diagonal
-// connectors run sideways through it rather than requiring extra vertical space.
+// Three independent panel-to-panel connections, as in Systemstatus:
+// Sol -> Hus, Hus <-> Batteri, Hus <-> Nät.
+// With the original 10px row gap, each link has its own separate corridor.
 export const MOBILE_TILE_HEIGHT = 110;
 export const MOBILE_ROW_GAP = 10;
 export const MOBILE_COL_GAP = 24;
@@ -24,21 +23,26 @@ export function mobileFlowSegments(width: number): MobileFlowLink[] {
   const bottom = MOBILE_TILE_HEIGHT + MOBILE_ROW_GAP;
   const midGap = (top + bottom) / 2;
 
+  const batteryFrom = leftWidth * 0.23;
+  const batteryTo = leftWidth * 0.73;
+  const gridFrom = leftWidth * 0.92;
+  const gridTo = rightStart + leftWidth * 0.82;
+
   return [
     {
       id: 'solar-house',
-      from: [rightStart, top * 0.7], to: [leftWidth, top * 0.7],
-      controls: [[rightStart - 6, top * 0.7 + 8], [leftWidth + 6, top * 0.7 + 8]],
+      from: [rightStart, top * 0.48], to: [leftWidth, top * 0.68],
+      controls: [[rightStart - 9, top * 0.48], [leftWidth + 9, top * 0.68]],
     },
     {
       id: 'house-battery',
-      from: [leftWidth * 0.82, top], to: [leftWidth * 0.18, bottom],
-      controls: [[leftWidth * 0.69, midGap], [leftWidth * 0.31, midGap]],
+      from: [batteryFrom, top], to: [batteryTo, bottom],
+      controls: [[batteryFrom + 20, midGap - 3], [batteryTo - 20, midGap + 3]],
     },
     {
       id: 'house-grid',
-      from: [leftWidth * 0.93, top], to: [rightStart + leftWidth * 0.52, bottom],
-      controls: [[leftWidth + 7, midGap], [rightStart + leftWidth * 0.37, midGap]],
+      from: [gridFrom, top], to: [gridTo, bottom],
+      controls: [[gridFrom + 30, midGap + 3], [gridTo - 30, midGap - 3]],
     },
   ];
 }
