@@ -5,7 +5,7 @@ import type { InverterLiveData } from '@/lib/inverter';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { powerFlowDirection } from '@/lib/power-flow';
 import type { PowerFlowDirection } from '@/lib/power-flow';
-import { MOBILE_FLOW_HEIGHT, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
+import { MOBILE_CARD_INSET, MOBILE_FLOW_HEIGHT, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
 import FlowConnector from './FlowConnector';
 import { useContainerWidth } from './useResponsiveLayout';
 
@@ -52,15 +52,16 @@ function FlowNetwork({ width, flows }: { width: number; flows: {
   );
 }
 
-function Metric({ label, value, detail, color }: {
+function Metric({ label, value, detail, color, right = false }: {
   label: string;
   value: string;
   detail: string;
   color?: string;
+  right?: boolean;
 }) {
   return (
-    <div className="relative z-0 h-full min-w-0 rounded-2xl px-2.5 py-2.5 min-[360px]:px-3"
-      style={{ background: 'var(--badge-bg)', border: '1px solid var(--divider)' }}>
+    <div className={`relative z-0 h-full min-w-0 rounded-2xl px-2.5 py-2 min-[360px]:px-3 ${right ? 'justify-self-end' : 'justify-self-start'}`}
+      style={{ width: `calc(100% - ${MOBILE_CARD_INSET}px)`, background: 'var(--badge-bg)', border: '1.5px solid color-mix(in srgb, var(--text) 30%, transparent)' }}>
       <p className="text-[13px] font-semibold" style={{ color: 'var(--text-muted)' }}>{label}</p>
       <p className="mt-0.5 text-[18px] font-bold leading-tight tabular-nums min-[360px]:text-[20px]"
         style={{ color: color ?? 'var(--text)', fontFamily: 'var(--font-heading)' }}>{value}</p>
@@ -85,18 +86,18 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
           {status === 'live' ? '● Live' : '● Ingen live-data'}
         </span>
       </div>
-      <div ref={gridRef} className="relative grid grid-cols-2 grid-rows-[110px_110px] gap-x-6 gap-y-2.5">
+      <div ref={gridRef} className="relative grid grid-cols-2 grid-rows-[100px_100px] gap-x-6 gap-y-2.5">
         <Metric label="Huset" value={data ? power(data.house_load_w) : '–'}
           detail={data ? 'Förbrukning' : noData} />
         <Metric label="Sol" value={data ? power(data.pv_w) : '–'}
           detail={data ? (solarFlow ? 'Produktion' : 'Ingen produktion') : noData}
-          color="var(--flow-solar)" />
+          color="var(--flow-solar)" right />
         <Metric label="Batteri" value={data ? `${data.soc_pct.toFixed(0)} %` : '–'}
           detail={data ? (batteryFlow ? `${batteryFlow.state} ${power(data.battery_w)}` : 'Vilar') : noData}
           color="var(--flow-battery)" />
         <Metric label="Elnät" value={data ? power(data.grid_w) : '–'}
           detail={data ? (gridFlow?.state ?? 'I balans') : noData}
-          color={gridFlow?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)'} />
+          color={gridFlow?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)'} right />
         <FlowNetwork width={width ?? 258} flows={{ solar: solarFlow, battery: batteryFlow, grid: gridFlow }} />
       </div>
     </section>

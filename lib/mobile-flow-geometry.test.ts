@@ -1,67 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { mobileFlowSegments, MOBILE_COL_GAP, MOBILE_FLOW_HEIGHT, MOBILE_ROW_GAP, MOBILE_TILE_HEIGHT } from './mobile-flow-geometry';
+import { mobileFlowSegments, MOBILE_CARD_INSET, MOBILE_COL_GAP, MOBILE_FLOW_HEIGHT, MOBILE_ROW_GAP, MOBILE_TILE_HEIGHT } from './mobile-flow-geometry';
 
 describe('mobileFlowSegments', () => {
-  it('keeps the original compact row gap', () => {
+  it('keeps a 10px row gap while reducing the panel height', () => {
+    expect(MOBILE_TILE_HEIGHT).toBe(100);
     expect(MOBILE_ROW_GAP).toBe(10);
-    expect(MOBILE_FLOW_HEIGHT).toBe(MOBILE_TILE_HEIGHT * 2 + 10);
+    expect(MOBILE_FLOW_HEIGHT).toBe(210);
+    expect(MOBILE_CARD_INSET).toBe(10);
   });
 
-  it.each([258, 298, 328, 368, 600])('renders separate direct connections between card edges at %i px', (width) => {
+  it.each([258, 298, 328, 368, 600])('uses facing panel edges at %i px without a junction', (width) => {
     const links = mobileFlowSegments(width);
-    expect(links.map((link) => link.id)).toEqual(['solar-house', 'house-battery', 'house-grid']);
     const leftWidth = (width - MOBILE_COL_GAP) / 2;
     const rightStart = leftWidth + MOBILE_COL_GAP;
-    const top = MOBILE_TILE_HEIGHT;
+    const houseRight = leftWidth - MOBILE_CARD_INSET;
+    const solarLeft = rightStart + MOBILE_CARD_INSET;
     const bottom = MOBILE_TILE_HEIGHT + MOBILE_ROW_GAP;
+
+    expect(links.map((link) => link.id)).toEqual(['solar-house', 'house-battery', 'house-grid']);
     const [solar, battery, grid] = links;
 
-    // Solar -> house is confined to the vertical gutter between the upper cards.
-    expect(solar.from[0]).toBe(rightStart);
-    expect(solar.to[0]).toBe(leftWidth);
-    expect(solar.from[1]).toBeGreaterThan(0);
-    expect(solar.to[1]).toBeLessThan(top);
-    for (const p of solar.controls) {
-      expect(p[0]).toBeGreaterThan(leftWidth);
-      expect(p[0]).toBeLessThan(rightStart);
-      expect(p[1]).toBeLessThan(top);
-    }
+    // Horizontal: center of Sol's left side to center of Hus's right side.
+    expect(solar.from).toEqual([solarLeft, MOBILE_TILE_HEIGHT / 2]);
+    expect(solar.to).toEqual([houseRight, MOBILE_TILE_HEIGHT / 2]);
+    for (const control of solar.controls) expect(control[1]).toBe(MOBILE_TILE_HEIGHT / 2);
 
-    // Battery connection remains entirely within the left column's row gap.
-    expect(battery.from[1]).toBe(top);
-    expect(battery.to[1]).toBe(bottom);
-    for (const p of [battery.from, battery.to, ...battery.controls]) {
-      expect(p[0]).toBeGreaterThan(0);
-      expect(p[0]).toBeLessThan(leftWidth);
-    }
+    // Vertical: center of Hus's bottom side to center of Batteri's top side.
+    const batteryCenter = houseRight / 2;
+    expect(battery.from).toEqual([batteryCenter, MOBILE_TILE_HEIGHT]);
+    expect(battery.to).toEqual([batteryCenter, bottom]);
+    for (const control of battery.controls) expect(control[0]).toBe(batteryCenter);
 
-    // Grid connection follows its own corridor towards the bottom-right card.
-    expect(grid.from[1]).toBe(top);
-    expect(grid.to[1]).toBe(bottom);
-    expect(grid.from[0]).toBeLessThan(leftWidth);
-    expect(grid.to[0]).toBeGreaterThan(rightStart);
+    // Grid stays a short separate diagonal between facing card edges.
+    expect(grid.from).toEqual([houseRight - 7, MOBILE_TILE_HEIGHT]);
+    expect(grid.to).toEqual([solarLeft + 7, bottom]);
 
-    // Battery and grid paths must not meet or cross in the narrow row gap.
-    const batteryRight = Math.max(...[battery.from, battery.to, ...battery.controls].map(p => p[0]));
-    const gridLeft = Math.min(...[grid.from, grid.to, ...grid.controls].map(p => p[0]));
-    expect(gridLeft - batteryRight).toBeGreaterThan(20);
-
-    // Take the shortest visually useful routes between facing card edges.
-    const length = (link: typeof battery) => Math.hypot(link.to[0] - link.from[0], link.to[1] - link.from[1]);
-    expect(length(battery)).toBeLessThan(65);
-    expect(length(grid)).toBeLessThan(50);
-    expect(battery.from[0]).toBeCloseTo(leftWidth * 0.4);
-    expect(battery.to[0]).toBeCloseTo(leftWidth * 0.6);
-    expect(grid.from[0]).toBe(leftWidth - 12);
-    expect(grid.to[0]).toBe(rightStart + 12);
-
-    for (const link of [battery, grid]) {
-      for (const p of link.controls) {
-        expect(p[1]).toBeGreaterThan(top);
-        expect(p[1]).toBeLessThan(bottom);
-      }
-    }
-    // Six unique endpoints, each on a card boundary; no shared midpoint.
-    expect(new Set(links.flatMap(link => [link.from.join(','), link.to.join(',')])).size).toBe(6);
+    // No common midpoint or shared endpoint; all endpoints touch panel edges.
+    expect(new Set(links.flatMap((link) => [link.from.join(','), link.to.join(',')])).size).toBe(6);
+    expect(solarLeft - houseRight).toBe(MOBILE_COL_GAP + 2 * MOBILE_CARD_INSET);
+    expect(Math.hypot(grid.to[0] - grid.from[0], grid.to[1] - grid.from[1])).toBeLessThan(65);
   });
 });
