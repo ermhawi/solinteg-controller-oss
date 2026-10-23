@@ -119,3 +119,36 @@ real-world trial is needed after the hardware gate clears.
 The prior 13%→16% trial remains in production in the interim. This code
 change does NOT itself enable 17% reserve or issue a hold command to the
 unverified Sundsvall inverter.
+
+## Read-only follow-up, 2026-10-23 15:33 Europe/Stockholm
+
+- **PlaneraElen restored:** commit `4afc98d` on `Sundsvall` replaces the
+  HTTP 410 endpoint with `https://planeraelen.se/api/price-data`, accepts
+  `forecast_issued`, and preserves both 02:xx occurrences during the Oct 25
+  DST fallback. 653 tests passed (1 skipped); isolated staging served the
+  complete 100-slot Sunday. A **web-only** deployment at 15:24 used a saved
+  rollback and did not restart dispatch/poller. Production price API returned
+  192 actual + 158 forecast slots; a fresh optimizer run at 15:28 had
+  231 intervals, through 2026-10-25 23:45. The earlier 410 warnings predate
+  the successful web restart.
+- **Low-power setpoint is not a physical hold:** `control_readbacks` confirms
+  50 W discharge writes/readbacks `50207=5` in mode `0x303`, but stable
+  `readings.battery_w` averaged **+211 W** over 12 eligible periods
+  (153–283 W). Ten same-window register-readback samples had median +211 W.
+  This is consistent with a firmware-imposed minimum/low-power behavior,
+  but does not prove its mechanism. Do not infer physical battery protection
+  from a successful setpoint readback.
+- **Recurrence evidence:** recovery completed at 13:59 on 16% SoC; optimizer
+  immediately commanded 300–800 W normal discharge (14:00–14:14), followed
+  by 50 W battery-save (actual roughly +200 W), then idle/Auto at 14:45
+  (measured approximately +600 W). Recovery reactivated 14:55 at 12%.
+  During the six hours ending 15:33 there were **two recovery starts and
+  two completions**, SoC range 12–16%. At 15:33 SoC was 13% with approximately
+  −296 W measured recovery charging.
+- **Operational decision:** keep `SOLINTEG_SOC_FLOOR_PCT=12`, ~13%-entry,
+  16%-exit, 300 W recovery, and both reserve opt-ins **unset**. Do not
+  compensate by guessing another 50207 command, enabling three-cap freeze,
+  or auto-testing 0 W hold. Wait for **natural SoC >20%** and the separate
+  documented safe local hold-verification prerequisites; then request a
+  supervised test, never an automatic one. Continue the existing 48-hour
+  read-only watch for BMS issues, Modbus errors and repeated cycles.
