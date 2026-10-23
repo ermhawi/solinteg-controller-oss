@@ -150,5 +150,11 @@ unverified Sundsvall inverter.
   compensate by guessing another 50207 command, enabling three-cap freeze,
   or auto-testing 0 W hold. Wait for **natural SoC >20%** and the separate
   documented safe local hold-verification prerequisites; then request a
-  supervised test, never an automatic one. Continue the existing 48-hour
-  read-only watch for BMS issues, Modbus errors and repeated cycles.
+  supervised test, never an automatic one. The prepared
+  `probe_hold_freeze.py` now defaults to **soft hold only**, requires
+  the running dispatch process to be disarmed and SoC **strictly over 20%**,
+  and treats an unverified restore as failure; its full-freeze step requires
+  separate explicit EPS confirmation. This is a static preparation,
+  **not a Sundsvall inverter test or permission to enable 17% reserve**.
+  Continue the existing 48-hour read-only watch for BMS issues, Modbus
+  errors and repeated cycles.

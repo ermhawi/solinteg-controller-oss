@@ -25,18 +25,19 @@ THE QUESTIONS (run at night: no PV, real house load, so a hold is unambiguous):
 
   Phase 0  baseline   self-use, no writes: the battery should be covering the house
   Phase A  soft hold  50207 = 0, then mode 0x303; caps untouched (unrestricted)
-  Phase B  freeze     still in 0x303: 50209 = 0, then 50208 = 0
+  Phase B  OPTIONAL full freeze only (--full-freeze --eps-unused-confirmed):
+                     still in 0x303: 50209 = 0, then 50208 = 0
   restore             caps back to +-GRID_CAP WHILE STILL IN 0x303, 50207 = 0, original mode;
                       read back, retry once
 
-WHAT THIS PROBE CANNOT ANSWER: what the inverter's own SoC floor (52502/52503, 8 %) does with AC
-input blocked. Answering it would mean freezing a near-empty battery on purpose. The planned
-answer is a guard instead: never hold below ~15 % SoC (priced in winter-policy-replay.ts's
-holdMinKwh). Nor does it test a hold with PV surplus: the freeze blocks PV export too.
+WHAT THIS PROBE CANNOT ANSWER: what the inverter's own SoC floor (52502/52503,
+10% on Sundsvall) does with AC input blocked. It deliberately refuses SoC
+at or below 20%. Nor does it test hold with a PV surplus.
 
 SAFE BY DESIGN:
-  - refuses outside 20-95 % SoC, with PV above 150 W, or with too little house load to see a
-    hold (< 400 W baseline drain); refuses if something else is writing the control registers
+  - refuses unless SoC is strictly >20% and <=95%, PV <=150 W, and baseline
+    battery drain >=400 W; verifies the running dispatch process has ARMED=0
+    before the probe and again immediately before the first write
   - holds for about a minute per phase; the battery cannot move meaningfully either way
   - marks inverter_control._forced_active, so the module's own atexit/SIGTERM fail-safe also
     restores (caps first, while still in 0x303) if this process dies; the watchdog does not
@@ -45,18 +46,28 @@ SAFE BY DESIGN:
 
 RUNBOOK (one evening, ~10 min):
   1. Disarm dispatch: set SOLINTEG_CONTROL_ARMED=0 in solinteg.env and restart
-     solinteg-dispatch (it hands back to self-use as it stops).
+     solinteg-dispatch (it hands back to self-use as it stops). The probe
+     verifies the RUNNING dispatch process actually inherited ARMED=0;
+     changing the env file without restarting is not enough.
   2. sudo -u solinteg bash -c 'set -a; . /opt/solinteg/solinteg.env; set +a; \
        SOLINTEG_CONTROL_ARMED=1 /opt/solinteg/app/.venv/bin/python \
        /opt/solinteg/app/scripts/tools/probe_hold_freeze.py'
-  3. same line with --verify-only at the end: must print "caps: UNRESTRICTED (healthy)"
+     Default runs ONLY the soft hold; it never writes restrictive AC caps.
+     Full freeze requires --full-freeze --eps-unused-confirmed and a physically
+     verified unused EPS output; it is NOT needed to enable the 17% reserve.
+  3. Same line with --verify-only at the end: must print "caps: UNRESTRICTED (healthy)".
+     Confirm the recorded soft_hold verdict is true and restore_ok is true
+     before even considering enabling the separate planning reserve.
   4. Re-arm: SOLINTEG_CONTROL_ARMED=1 in solinteg.env, restart solinteg-dispatch.
   The record lands in the solinteg user's home: ~solinteg/probe_hold_result.json.
-  BEFORE STEP 2, confirm nothing is wired to the inverter's backup/EPS output: with
-  50208 = 0 the inverter can deliver no AC, so a load on that port would lose power.
+  ONLY if explicitly choosing the optional --full-freeze step: physically
+  confirm nothing is wired to the inverter's backup/EPS output. With 50208=0
+  a connected load could lose AC; the default soft hold never changes the caps.
 
 Usage:
-  probe_hold_freeze.py                run the probe
+  probe_hold_freeze.py                run the SOFT-HOLD probe only (caps open)
+  probe_hold_freeze.py --full-freeze --eps-unused-confirmed
+                                       additionally probe restrictive caps (expert only)
   probe_hold_freeze.py --verify-only  read and print the control registers, write nothing
   probe_hold_freeze.py --restore      put the caps back to unrestricted and the mode back to
                                       General (self-use), then verify. The manual recovery if a
@@ -67,6 +78,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import time
 
@@ -94,7 +106,7 @@ SAMPLE_GAP_S = 3.0
 BASELINE_SAMPLES = 8
 QUIET_CHECK_S = 20      # watch the control registers this long: is anyone else writing?
 
-SOC_MIN_PCT = 20.0      # well clear of the inverter's own 8 % floor (its behaviour frozen is unknown)
+SOC_MIN_PCT = 20.0      # STRICTLY above 20%; never test near the 12% software floor
 SOC_MAX_PCT = 95.0
 PV_MAX_W = 150          # night probe: solar would muddle "who is covering the house"
 LOAD_MIN_W = 400        # baseline battery drain must be visible, or a hold proves nothing
@@ -203,8 +215,8 @@ def collect(inv: Inverter, n: int, gap: float) -> list[dict]:
 
 def refusal(pre: dict, baseline: dict | None = None) -> str | None:
     """Why the probe must not run in these conditions, or None. Pure, so it is testable."""
-    if not (SOC_MIN_PCT <= pre["soc_pct"] <= SOC_MAX_PCT):
-        return f"SoC {pre['soc_pct']}% outside {SOC_MIN_PCT}-{SOC_MAX_PCT}%"
+    if not (SOC_MIN_PCT < pre["soc_pct"] <= SOC_MAX_PCT):
+        return f"SoC {pre['soc_pct']}% must be >{SOC_MIN_PCT}% and <={SOC_MAX_PCT}%"
     if pre["pv_w"] > PV_MAX_W:
         return f"PV {pre['pv_w']} W > {PV_MAX_W} W; run it after dark"
     if baseline is not None and baseline["battery_w"] < LOAD_MIN_W:
@@ -298,6 +310,21 @@ def manual_restore(inv: Inverter) -> int:
     return 0 if ok else 1
 
 
+def dispatch_disarmed() -> bool:
+    """Fail closed unless the running dispatch service has actually inherited ARMED=0."""
+    try:
+        pid = int(subprocess.check_output(
+            ["systemctl", "show", "-p", "MainPID", "--value", "solinteg-dispatch.service"],
+            stderr=subprocess.DEVNULL, text=True, timeout=5,
+        ).strip())
+        if pid <= 0:
+            return False
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            return b"SOLINTEG_CONTROL_ARMED=0" in f.read().split(b"\0")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
 def main(argv: list[str]) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if "--restore" in argv:
@@ -315,8 +342,15 @@ def main(argv: list[str]) -> int:
             return verify_only(inv)
         finally:
             inv.close()
+    full_freeze = "--full-freeze" in argv
+    if full_freeze and "--eps-unused-confirmed" not in argv:
+        print("Refusing full freeze: physically verify EPS has no load and pass --eps-unused-confirmed.")
+        return 2
     if not ARMED:
         print("Refusing: set SOLINTEG_CONTROL_ARMED=1 for this process (it writes registers).")
+        return 2
+    if not dispatch_disarmed():
+        print("Refusing: running solinteg-dispatch must be verified disarmed (process ARMED=0).")
         return 2
 
     inv = Inverter()
@@ -337,6 +371,9 @@ def main(argv: list[str]) -> int:
         if why:
             print(f"Refusing: {why}.")
             return 2
+        if ctrl0["mode"] != WORK_MODE_GENERAL:
+            print("Refusing: inverter is not in General/self-use. Disarm dispatch and verify its mode first.")
+            return 2
 
         # Nobody else may be writing (dispatch disarmed). Watch the control registers.
         time.sleep(QUIET_CHECK_S)
@@ -346,20 +383,20 @@ def main(argv: list[str]) -> int:
                   "Is dispatch still armed? Disarm it first (see the runbook in this file).")
             return 2
 
-        original_mode = ctrl0["mode"]
-        record["original_mode"] = original_mode
         record["start"] = pre
 
         log.info("Phase 0: baseline, %d samples, no writes", BASELINE_SAMPLES)
         s0 = summarize(collect(inv, BASELINE_SAMPLES, SAMPLE_GAP_S))
         show("Phase 0: BASELINE (self-use, no writes)", ctrl1, s0)
         record["phases"]["baseline"] = s0
-        why = refusal(pre, s0)
-        if why:
-            print(f"Refusing: {why}.")
+        why = refusal(read_power(inv), s0)
+        if why or not dispatch_disarmed():
+            print(f"Refusing: {why or 'dispatch was re-armed during preflight'}.")
             original_mode = None  # nothing was written
             return 2
 
+        original_mode = ctrl0["mode"]  # restore only after every read-only preflight has passed
+        record["original_mode"] = original_mode
         log.info("Phase A: 50207 = 0, then mode 0x303; caps left unrestricted")
         write(inv, REG_BATT_POWER_TARGET, 0, verify=False)
         time.sleep(0.3)
@@ -371,35 +408,46 @@ def main(argv: list[str]) -> int:
         show("Phase A: SOFT HOLD (0x303, 50207 = 0, caps open)", cA, sA)
         record["phases"]["soft_hold"] = {**sA, "regs": cA, **held(sA, s0)}
 
-        log.info("Phase B: in-mode 50209 = 0, then 50208 = 0")
-        write(inv, REG_MAX_AC_INPUT, 0, verify=False)
-        write(inv, REG_MAX_AC_OUTPUT, 0, verify=False)
-        time.sleep(SETTLE_S)
-        sB = summarize(collect(inv, SAMPLES, SAMPLE_GAP_S))
-        cB = read_control(inv)
-        show("Phase B: FULL FREEZE (+ 50209 = 0, 50208 = 0 in-mode)", cB, sB)
-        record["phases"]["freeze"] = {**sB, "regs": cB, **held(sB, s0)}
+        a = record["phases"]["soft_hold"]
+        b = None
+        if full_freeze:
+            log.info("Phase B (explicit opt-in): in-mode 50209 = 0, then 50208 = 0")
+            write(inv, REG_MAX_AC_INPUT, 0, verify=False)
+            write(inv, REG_MAX_AC_OUTPUT, 0, verify=False)
+            time.sleep(SETTLE_S)
+            sB = summarize(collect(inv, SAMPLES, SAMPLE_GAP_S))
+            cB = read_control(inv)
+            show("Phase B: FULL FREEZE (+ 50209 = 0, 50208 = 0 in-mode)", cB, sB)
+            b = {**sB, "regs": cB, **held(sB, s0)}
+            record["phases"]["freeze"] = b
 
-        a, b = record["phases"]["soft_hold"], record["phases"]["freeze"]
         print("\n-------- VERDICT --------")
-        for name, r in (("QA soft hold  ", a), ("QB full freeze", b)):
+        phases = [("QA soft hold  ", a)] + ([("QB full freeze", b)] if b is not None else [])
+        for name, r in phases:
             print(f"{name}: {'HELD' if r['held'] else 'NOT held'}  "
                   f"(battery held {r['battery_held']}, grid covers {r['grid_covers']}, "
                   f"house served {r['house_served']})")
-        print(f"QC readbacks  : freeze 50208={cB['r50208']} 50209={cB['r50209']} "
-              "(0/0 = stored; recorded, not trusted)")
+        if b is not None:
+            print(f"QC readbacks  : freeze 50208={cB['r50208']} 50209={cB['r50209']} "
+                  "(0/0 = stored; recorded, not trusted)")
         if a["held"]:
             print("=> A no-solar hold needs NO restrictive caps: 0x303 + 50207=0 is enough.")
-        elif b["held"]:
+        elif b is not None and b["held"]:
             print("=> The full freeze recipe is required, and it works on this unit.")
         else:
-            print("=> Neither recipe held the battery. Hold is not executable this way.")
+            print("=> Soft hold was not verified; keep reserve disabled.")
         print("-------------------------")
-        record["verdict"] = {"soft_hold": a["held"], "freeze": b["held"]}
-        return 0
+        record["verdict"] = {"soft_hold": a["held"]}
+        if b is not None:
+            record["verdict"]["freeze"] = b["held"]
+        return 0 if a["held"] else 1
     finally:
         if original_mode is not None:
-            record["restore_ok"] = restore(inv, original_mode)
+            try:
+                record["restore_ok"] = restore(inv, original_mode)
+            except Exception as exc:  # noqa: BLE001 -- never hide a failed restore
+                log.error("restore failed unexpectedly: %s", exc)
+                record["restore_ok"] = False
         out = os.path.join(os.path.expanduser("~"), "probe_hold_result.json")
         try:
             with open(out, "w", encoding="utf-8") as f:
@@ -408,6 +456,8 @@ def main(argv: list[str]) -> int:
         except OSError as exc:
             log.error("could not write record: %s", exc)
         inv.close()
+        if original_mode is not None and not record.get("restore_ok", False):
+            raise RuntimeError("Hold probe restore unverified: DO NOT RE-ARM dispatch")
 
 
 if __name__ == "__main__":
