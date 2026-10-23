@@ -269,6 +269,7 @@ from inverter_control import (
     Inverter,
     force_charge,
     force_discharge,
+    force_hold,
     freeze_battery,
     return_to_auto,
     clamp_power_w,
@@ -307,7 +308,7 @@ AUTO_ACTIONS = ("hold", "idle")
 # — Auto, the ~220 W battery-save emulation, or a real freeze (see FREEZE_HOLDS). Keeping it out of
 # the shared vocabulary is what stops lib/__tests__/action-contract.test.ts from demanding a TS
 # counterpart for a purely local execution strategy.
-EXECUTOR_ACTIONS = ("freeze",)
+EXECUTOR_ACTIONS = ("freeze", "reserve_hold")
 
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
@@ -385,6 +386,18 @@ SOC_FLOOR_GUARD_HEADROOM_KWH = float(os.environ.get("DISPATCH_SOC_FLOOR_GUARD_HE
 # than the inverter's minimum. This is an operational target, not a claimed BMS setting.
 SOC_RECOVERY_EXIT_PCT = float(os.environ.get("DISPATCH_SOC_RECOVERY_EXIT_PCT", str(SOC_FLOOR_PCT + 8)))
 SOC_RECOVERY_ENTRY_PCT = (BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH) / BATTERY_KWH * 100
+# This is a PLANNING reserve, never a safety-floor substitute. Disabled (equal to the
+# normal floor) unless the site explicitly enables it in BOTH web and dispatch services.
+PLANNER_RESERVE_PCT = float(os.environ.get("SOLINTEG_PLANNER_RESERVE_PCT", str(SOC_FLOOR_PCT)))
+# The open-cap 0-W hold is documented as UNVERIFIED on Sundsvall (MODBUS.md).
+# Activation requires a separate explicit result of a disarmed hardware probe.
+RESERVE_HOLD_VERIFIED = os.environ.get("DISPATCH_RESERVE_HOLD_VERIFIED", "0") == "1"
+if PLANNER_RESERVE_PCT > SOC_FLOOR_PCT and not RESERVE_HOLD_VERIFIED:
+    raise ValueError("Planner reserve requires verified Sundsvall open-cap hold (DISPATCH_RESERVE_HOLD_VERIFIED=1)")
+if not SOC_FLOOR_PCT <= PLANNER_RESERVE_PCT < 98:
+    raise ValueError("SOLINTEG_PLANNER_RESERVE_PCT must be between the safety floor and 98%")
+if PLANNER_RESERVE_PCT > SOC_FLOOR_PCT and PLANNER_RESERVE_PCT <= SOC_RECOVERY_EXIT_PCT:
+    raise ValueError("Planner reserve must be above the recovery exit, or cycling may continue")
 if not SOC_RECOVERY_ENTRY_PCT < SOC_RECOVERY_EXIT_PCT < 98:
     raise ValueError("DISPATCH_SOC_RECOVERY_EXIT_PCT must exceed the recovery entry and be below 98%")
 # Start conservatively: after a restart the old process may have been recovering between the
@@ -1177,6 +1190,26 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
         if was_active:
             log.info("SoC recovery complete: %.2f%% (exit %.2f%%)", live_soc_kwh / BATTERY_KWH * 100,
                      SOC_RECOVERY_EXIT_PCT)
+        # Prevent the *normal* optimizer, including its idle->Auto and battery-save
+        # fallbacks, from draining the battery right back into emergency recovery.
+        # Real zero-power hold (caps OPEN) is a separate executor-only action.
+        # Keep Auto when there is live PV surplus so the battery can charge freely.
+        live_pct = live_soc_kwh / BATTERY_KWH * 100
+        if PLANNER_RESERVE_PCT > SOC_FLOOR_PCT and live_pct <= PLANNER_RESERVE_PCT:
+            if action == "charge" and not solar_skip:
+                return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+            if action == "freeze":
+                return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+            surplus = read_live_solar_surplus_w(now)
+            if surplus is not None and surplus > 100:
+                numbers["reserve_auto_solar_w"] = round(surplus)
+                return "idle", 0, None, False, detail, numbers
+            numbers["reserve_hold"] = True
+            numbers["soc_pct"] = round(live_pct, 2)
+            numbers["planner_reserve_pct"] = PLANNER_RESERVE_PCT
+            detail = (f"Planner reserve hold at {live_pct:.2f}% <= {PLANNER_RESERVE_PCT:.1f}%: "
+                      f"grid covers house, no discharge; previously {action} {power_w} W; {detail}")
+            return "reserve_hold", 0, None, False, detail, numbers
         return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
 
     surplus_w = read_live_solar_surplus_w(now)
@@ -1212,6 +1245,12 @@ def apply_target(inv: Inverter, action: str, power_w: int) -> None:
         force_charge(inv, power_w)
     elif action == "discharge":
         force_discharge(inv, power_w)
+    elif action == "reserve_hold":
+        # Open-cap zero-power EMS hold, probed on reference firmware; unlike Auto it
+        # does not drain the battery to serve the house during a no-solar deficit.
+        # The physical 12% safety guard remains independent and takes priority.
+        if not force_hold(inv, SOC_FLOOR_PCT):
+            force_charge(inv, SOC_FLOOR_RECOVERY_W)
     elif action == "freeze":
         # A freeze that the inverter accepts but does not enforce is not a transient: it is the
         # documented pre-mode failure shape (MODBUS.md), i.e. this firmware does not do what the
@@ -1449,7 +1488,7 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             # emulation, and a freeze (whose three-register combination is not probe-verified — the
             # expected failure is "stored but not enforced", which only a readback plus the measured
             # battery power can distinguish).
-            if (applied_action == "freeze"
+            if (applied_action in ("freeze", "reserve_hold")
                     or (applied_action == "discharge" and "battery_save_w" in numbers)
                     or numbers.get("soc_recovery")):
                 try:

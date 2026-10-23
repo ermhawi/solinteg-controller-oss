@@ -1359,6 +1359,58 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
                                        ("18:15", "discharge", 50), effective_a, effective_w, False,
                                        soc_recovery=bool(numbers.get("soc_recovery"))))
 
+    def test_reserve_hold_blocks_discharge_at_16_percent_without_grid_charging(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0):
+            dl._soc_recovery_active = False
+            a, w, expected, skip, detail, numbers = self.run_decision(16.0)
+        self.assertEqual((a, w, expected, skip), ("reserve_hold", 0, None, False))
+        self.assertTrue(numbers["reserve_hold"])
+        self.assertNotIn("soc_recovery", numbers)
+
+    def test_reserve_hold_prevents_idle_auto_self_consumption(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0):
+            dl._soc_recovery_active = False
+            a, w, *_ = self.run_decision(16.5, action="idle", power_w=0)
+        self.assertEqual((a, w), ("reserve_hold", 0))
+
+    def test_reserve_allows_pv_surplus_into_battery_instead_of_holding(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0):
+            dl._soc_recovery_active = False
+            a, w, expected, skip, *_ = self.run_decision(
+                16.5, action="discharge", power_w=2500, surplus_w=500)
+        self.assertEqual((a, w, expected, skip), ("idle", 0, None, False))
+
+    def test_reserve_does_not_block_economic_charge_or_high_soc_discharge(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0):
+            dl._soc_recovery_active = False
+            a, w, *_ = self.run_decision(16.5, action="charge", power_w=3000)
+            self.assertEqual((a, w), ("charge", 3000))
+            a, w, *_ = self.run_decision(17.5, action="discharge", power_w=800)
+            self.assertEqual((a, w), ("discharge", 800))
+
+    def test_solar_veto_at_reserve_does_not_demote_to_auto_and_drain(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0):
+            dl._soc_recovery_active = False
+            a, w, expected, skip, *_ = self.run_decision(
+                16.2, action="charge", power_w=2000, solar_skip=True)
+        self.assertEqual((a, w, expected, skip), ("reserve_hold", 0, None, False))
+
+    def test_reserve_hold_invokes_open_cap_hold_instead_of_auto(self):
+        inv = object()
+        with mock.patch.object(dl, "force_hold", return_value=True) as hold, \
+             mock.patch.object(dl, "return_to_auto") as auto:
+            dl.apply_target(inv, "reserve_hold", 0)
+        hold.assert_called_once_with(inv, dl.SOC_FLOOR_PCT)
+        auto.assert_not_called()
+
+    def test_reserve_hold_at_physical_floor_recovers_instead_of_auto(self):
+        inv = object()
+        with mock.patch.object(dl, "force_hold", return_value=False), \
+             mock.patch.object(dl, "force_charge") as charge:
+            dl.apply_target(inv, "reserve_hold", 0)
+        charge.assert_called_once_with(inv, dl.SOC_FLOOR_RECOVERY_W)
+
+
 
     def test_sundsvall_calibrated_guard_allows_normal_operation_at_15_percent(self):
         # Read-only Solinteg/BMS probe on 2026-10-23: hardware on-grid minimum

@@ -65,3 +65,57 @@ variables and therefore uses code defaults: 0.5 kWh headroom and exit at
 `SOLINTEG_SOC_FLOOR_PCT + 8` = 20%.
 
 The private production env file is **never committed to Git**.
+
+## Follow-up: eliminate normal optimization → emergency recovery cycling
+
+Code change on `Sundsvall` adds an **independent opt-in planner reserve**
+`SOLINTEG_PLANNER_RESERVE_PCT=17`, while keeping
+`SOLINTEG_SOC_FLOOR_PCT=12` and recovery entry ~13%, exit 16%. The live
+TypeScript optimizer takes `minSocKwh` only on the production planning path:
+the hindsight oracle and unrelated installs keep the original safety-floor
+model. The Python dispatcher, at or below 17%, refuses ordinary discharge
+and idle→auto when there is no live PV surplus. It would instead invoke a
+0 W EMS open-cap hold; when PV surplus is available it returns to Auto so
+free solar can fill the battery. Emergency recovery retains top priority.
+
+**Important: the open-cap 0 W hold is NOT probe-verified on the Sundsvall
+inverter.** It was physically verified on an upstream reference unit only
+(MODBUS.md). The new dispatcher therefore refuses to start with the economic
+reserve enabled unless `DISPATCH_RESERVE_HOLD_VERIFIED=1` is set as a second
+explicit opt-in. Never bypass this gate just to get the code running.
+
+To safely unlock:
+1. First wait for a natural SoC above **20%**, darkness (<150 W PV),
+   house drain >400 W. Verify that the inverter's backup/EPS output
+   has no connected load; the existing probe may temporarily restrict
+   inverter AC output in its optional full-freeze phase.
+2. Disarm the dispatcher and run the documented
+   `scripts/tools/probe_hold_freeze.py` with proper backup/restore as
+   documented in its own RUNBOOK. Watch the battery's actual 30258 power
+   and grid meter; require ~0 W battery and matching grid import for the
+   soft-hold phase. Restore and verify original mode and caps.
+3. Only after recording a successful local measurement set BOTH
+   `SOLINTEG_PLANNER_RESERVE_PCT=17` and
+   `DISPATCH_RESERVE_HOLD_VERIFIED=1` in
+   `/opt/solinteg/solinteg.env`; build the Next.js application
+   (site constant is build-time), restart web+dispatch and explicitly
+   request a fresh optimizer plan. Confirm live `reserve_hold` decisions,
+   readback and **physical** stable SoC.
+4. Preserve original configuration and deploy build for rollback;
+   if hold proves ineffective, remove the reserve variables, rebuild
+   web with old settings and restart dispatch. Never change the 10%
+   inverter BMS protection or 12% software safety floor.
+
+Historical replay of saved `optimizer_runs.inputs_json` from Oct 21/22,
+using 15.055 kWh, 12% physical floor and a 17% planning reserve, found:
+- Oct 21, 229 slots: old minimum 12.00%, new minimum 17.00%;
+  simulated grid cash cost difference +133.2 öre for the new plan.
+- Oct 22, 229 slots: old minimum 12.00%, new minimum 17.00%;
+  simulated cash cost difference +102.4 öre for the new plan.
+These are horizon-wide *planned* cash values, not realised single-day losses
+or controlled-recovery costs, and DO NOT establish net savings. A closed-loop
+real-world trial is needed after the hardware gate clears.
+
+The prior 13%→16% trial remains in production in the interim. This code
+change does NOT itself enable 17% reserve or issue a hold command to the
+unverified Sundsvall inverter.

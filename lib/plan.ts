@@ -30,6 +30,7 @@ import {
   FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
   BATTERY_SAVE_FORECAST_DRAIN_W,
+  BATTERY_PLANNER_RESERVE_KWH,
   TERMINAL_VALUE_FACTOR,
 } from './constants';
 
@@ -261,6 +262,7 @@ export async function producePlan(): Promise<PlanResult> {
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
         batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+        minSocKwh: BATTERY_PLANNER_RESERVE_KWH,
         terminalValueOrePerKwh,
       });
       logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);

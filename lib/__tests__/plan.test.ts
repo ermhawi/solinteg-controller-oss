@@ -82,6 +82,7 @@ import {
   DEFERRAL_UNTIL_NEEDED,
   FORECAST_RISK_PREMIUM_ORE,
   BATTERY_SAVE_FORECAST_DRAIN_W,
+  BATTERY_PLANNER_RESERVE_KWH,
   LIVE_LOAD_PROFILE_DAYS,
   TERMINAL_VALUE_FACTOR,
 } from '../constants';
@@ -190,6 +191,7 @@ describe('producePlan — happy path wiring', () => {
       holdEnabled: false,
       forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
       batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+      minSocKwh: BATTERY_PLANNER_RESERVE_KWH,
       // Derived from the sliced horizon's own prices, then scaled by the kill-switch factor —
       // asserted through the real helper rather than a literal, so this pins the WIRING (the
       // optimizer gets a terminal value at all, computed from the slots it is given) without

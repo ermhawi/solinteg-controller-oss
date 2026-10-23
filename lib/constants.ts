@@ -127,7 +127,15 @@ export const BATTERY_SAVE_DRIFT_W = numEnv(
 export const BATTERY_SAVE_FORECAST_DRAIN_W = numEnv('SOLINTEG_BATTERY_SAVE_FORECAST_DRAIN_W', 220);
 
 const SOC_FLOOR_PCT = numEnv('SOLINTEG_SOC_FLOOR_PCT', 8);
-export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100); // operational floor (2.048 kWh at 8%)
+/** Physical operational safety floor, also enforced by Python's last-resort guard. */
+export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100);
+/**
+ * Planning-only reserve, independent of the safety guard. Defaults to the old planning
+ * floor, so existing installs and hindsight-oracle scoring are unchanged.
+ * For Sundsvall: 17% planning reserve, 12% safety floor, recovery entry ~13%, exit 16%.
+ */
+export const BATTERY_PLANNER_RESERVE_KWH =
+  BATTERY_KWH * (Math.max(SOC_FLOOR_PCT, Math.min(98, numEnv('SOLINTEG_PLANNER_RESERVE_PCT', SOC_FLOOR_PCT))) / 100);
 
 /**
  * Robust-planning margin on the load forecast inside the DP (dimensionless factor ≥ 1;

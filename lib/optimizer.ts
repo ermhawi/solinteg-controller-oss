@@ -45,7 +45,6 @@ const SURVIVAL_SOLAR_SLOT_KWH = 0.05;
 // ~0.98 claimed against ~0.95 real per leg, worth roughly 8 öre per stored kWh at a 90 öre buy
 // price, which is more than the wear cost and enough to flip marginal cycling decisions.
 const ONE_WAY_EFF = EFF_ONE_WAY;
-const MIN_SOC_KWH = BATTERY_MIN_SOC_KWH;
 /**
  * The highest SoC a FORCED charge may plan for. `inverter_control.force_charge` refuses to charge
  * above `SOLINTEG_SOC_CEILING_PCT` and returns to auto instead, so a plan that assumes the full pack
@@ -134,10 +133,10 @@ export interface DispatchSlot {
 const BATTERY_SAVE_HOLD_LOAD_KWH = 0.05;
 
 
-function batterySaveHoldOutputKwh(soc: number, loadRem: number, driftW: number): number {
+function batterySaveHoldOutputKwh(soc: number, loadRem: number, driftW: number, minSocKwh: number): number {
   if (!(driftW > 0) || loadRem <= BATTERY_SAVE_HOLD_LOAD_KWH) return 0;
-  if (soc <= MIN_SOC_KWH) return 0;
-  return Math.min(driftW / 4000, loadRem, Math.max(0, soc - MIN_SOC_KWH) * ONE_WAY_EFF);
+  if (soc <= minSocKwh) return 0;
+  return Math.min(driftW / 4000, loadRem, Math.max(0, soc - minSocKwh) * ONE_WAY_EFF);
 }
 
 /**
@@ -407,6 +406,8 @@ export function optimizeDispatch(
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    /** Site-specific economic reserve. Never lowers the physical safety minimum. */
+    minSocKwh?: number;
     /** öre per stored kWh above the floor at the horizon's end (see terminalEnergyValueOre).
      *  0/omitted keeps the historical terminal-value-0 behaviour bit-identically, which is what
      *  the hindsight oracle and every existing test rely on. Ignored when endSoc is set — an
@@ -432,10 +433,12 @@ export function optimizeDispatch(
   const pricing = {
     loadFactor: opts?.loadFactor,
     terminalValueOrePerKwh: opts?.terminalValueOrePerKwh,
+    minSocKwh: opts?.minSocKwh,
     useConsumptionReserve: true,
   };
   const score = (d: DispatchSlot[]) =>
-    evaluateDispatch(slots, d, startSoc, pricing).valueOre + refundEarnedOre(d, credit);
+    evaluateDispatch(slots, d, startSoc, pricing).valueOre +
+      refundEarnedOre(d, credit, Math.max(BATTERY_MIN_SOC_KWH, opts?.minSocKwh ?? BATTERY_MIN_SOC_KWH));
   return score(credited) > score(plain) + 1e-6 ? credited : plain;
 }
 
@@ -444,7 +447,9 @@ export function optimizeDispatch(
  *  charging loss; household discharge consumes credited stock before any export.
  *  This is deliberately conservative until measured provenance can be audited.
  */
-export function refundEarnedOre(dispatch: DispatchSlot[], creditOre: number[]): number {
+export function refundEarnedOre(
+  dispatch: DispatchSlot[], creditOre: number[], minSocKwh: number = BATTERY_MIN_SOC_KWH,
+): number {
   let gridPoolDcKwh = 0;
   let earnedOre = 0;
   for (let i = 0; i < dispatch.length; i++) {
@@ -455,7 +460,7 @@ export function refundEarnedOre(dispatch: DispatchSlot[], creditOre: number[]): 
     const eligibleDcKwh = Math.min(gridPoolDcKwh, Math.max(0, slot.batteryToGridKwh) / ONE_WAY_EFF);
     gridPoolDcKwh -= eligibleDcKwh;
     earnedOre += eligibleDcKwh * ONE_WAY_EFF * (creditOre[i] ?? 0);
-    gridPoolDcKwh = Math.min(gridPoolDcKwh, Math.max(0, slot.socAfter - MIN_SOC_KWH));
+    gridPoolDcKwh = Math.min(gridPoolDcKwh, Math.max(0, slot.socAfter - minSocKwh));
   }
   return earnedOre;
 }
@@ -518,11 +523,13 @@ function dpCore(
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    minSocKwh?: number;
     terminalValueOrePerKwh?: number;
   },
 ): DispatchSlot[] {
   const n = slots.length;
   if (n === 0) return [];
+  const MIN_SOC_KWH = Math.max(BATTERY_MIN_SOC_KWH, Math.min(BATTERY_KWH, opts?.minSocKwh ?? BATTERY_MIN_SOC_KWH));
 
   const floorSoc = Math.min(MIN_SOC_KWH, startSoc); // allow a start below the floor; never discharge below it
   const step = (BATTERY_KWH - floorSoc) / (SOC_LEVELS - 1);
@@ -791,7 +798,7 @@ function dpCore(
           bestJ = j;
         }
       }
-      const holdOutput = batterySaveHoldOutputKwh(soc, lr, opts?.batterySaveDriftW ?? 0);
+      const holdOutput = batterySaveHoldOutputKwh(soc, lr, opts?.batterySaveDriftW ?? 0, MIN_SOC_KWH);
       if (holdOutput > 0) {
         const requestedSocAfter = soc - holdOutput / ONE_WAY_EFF;
         const holdJ = Math.max(0, Math.floor((requestedSocAfter - floorSoc) / step));
@@ -935,6 +942,7 @@ export function evaluateDispatch(
     /** öre per stored kWh left above the floor at the end of `dispatch`, credited to the value.
      *  Pass the same figure the plan was solved with, or omit for the raw cash-and-wear value. */
     terminalValueOrePerKwh?: number;
+    minSocKwh?: number;
     /** Use measured high-quantile load reserve ONLY when comparing two planning candidates.
      *  Default false preserves honest forecast valuation and hindsight-oracle scoring. */
     useConsumptionReserve?: boolean;
@@ -962,6 +970,7 @@ export function evaluateDispatch(
     soc = dispatch[i].socAfter;
   }
   const terminalOre =
-    Math.max(0, soc - MIN_SOC_KWH) * (opts?.terminalValueOrePerKwh ?? 0);
+    Math.max(0, soc - Math.max(BATTERY_MIN_SOC_KWH, opts?.minSocKwh ?? BATTERY_MIN_SOC_KWH)) *
+    (opts?.terminalValueOrePerKwh ?? 0);
   return { cashOre, wearOre, valueOre: cashOre - wearOre + terminalOre };
 }
