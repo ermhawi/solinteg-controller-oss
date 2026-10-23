@@ -1,0 +1,67 @@
+# Sundsvall Sunwoda SoC recovery calibration — 2026-10-23
+
+## Evidence (read-only on the live Solinteg inverter)
+
+- Reported installation: three Sunwoda 5 kWh modules (15 kWh nominal; controller config 15.055 kWh). Exact Sunwoda BMS model/firmware has not been confirmed.
+- Inverter FC03 register 52502 = 1 (on-grid SoC protection enabled).
+- Inverter FC03 register 52503 = 100 (0.1% units, i.e. **10%** on-grid minimum).
+- Inverter FC03 register 33000 = 1500 (**15% SoC**).
+- Inverter FC03 register 33003 = 150 (**15°C battery temperature**).
+- BMS charge current limit 33021 = 179 (**17.9 A**).
+- BMS discharge current limit 33023 = 188 (**18.8 A**).
+- The 53508-53514 EMS-access-only status/error/warning register block read all zero, but this is **not** proof of absence of battery alarms: this interface may not publish these values without direct BMS EMS access.
+- All registers were READ, no inverter/BMS register or firmware setting was written.
+- Manufacturer SunESS H datasheet: 90% maximum DoD, equivalent to **10%** remaining. The manufacturer's exact BMS low-SoC *re-enable* threshold is not published/verified for this firmware.
+
+## Root cause / why recovery was wasteful
+
+The live site config had `SOLINTEG_SOC_FLOOR_PCT=12`, battery capacity `15.055` kWh,
+and the old **0.5 kWh** guard headroom. Thus recovery forcibly charged at
+`12 + 100 * 0.5/15.055 = 15.32%` until **20%**, then the optimizer resumed
+discharging toward 12%. On 2026-10-22 the dispatch audit recorded **five**
+recovery-on/off cycles (235 of 306 audit decisions were in recovery); solar
+production was only about 0.8 kWh. The low production was real, but repeated
+grid-powered protection cycles can add conversion losses and electricity cost.
+
+At 15% SoC the BMS still advertises **18.8 A discharge allowance**. This
+does not prove what it will permit below 15%, but rules out an unconditional
+documented need to force-grid-charge the pack from 15% to 20%.
+
+## Site-specific cautious first calibration (controlled rollout)
+
+- Leave `SOLINTEG_SOC_FLOOR_PCT=12` untouched; this is above the inverter
+  10% protection and remains the hard operational planning/discharge floor.
+- Set `DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH=0.15`, making the emergency
+  entry approximately **13.0%** at 15.055 kWh.
+- Set `DISPATCH_SOC_RECOVERY_EXIT_PCT=16` (3 percentage points hysteresis);
+  this is a **local trial**, not a claimed Sunwoda BMS restart percentage.
+- Keep `DISPATCH_SOC_FLOOR_RECOVERY_W=300` unchanged, and keep the recovery
+  override higher priority than the normal optimizer.
+- **Do not change** inverter on-grid SoC protection setting (10%) or BMS
+  safety limits; do not increase the optimizer floor to 20% as a substitute.
+
+### Validation limits and safety
+
+A unit test verifies 15% normal operation, recovery entry <13%, hysteresis
+to 16%, and emergency charging below the 12% operational floor.
+
+Replay of logged 21–22 Oct readings can show *how often the new trigger would
+have activated on the OLD trajectory*, but it cannot predict real economic
+savings or future minimum SoC: the old controller actively held SoC at 15%.
+Only forward observation can reveal whether a reduced guard is sufficient.
+
+Post-change inspect `control_actions` and `readings` for at least a full
+night, especially SoC near 13%, BMS allowed discharge, actual battery power,
+BMS/inverter alerts, and unexpected Modbus write failures. **Stop/rollback
+on a BMS discharge inhibit, alarm, inverter protection, SoC below 12%, or
+unexpected rapid repeated recovery cycles.** Do not force a discharge into a
+protected battery just to test it.
+
+### Revert
+
+Restore the saved `/opt/solinteg/solinteg.env` version and restart
+`solinteg-dispatch`; original site behavior has no explicit recovery
+variables and therefore uses code defaults: 0.5 kWh headroom and exit at
+`SOLINTEG_SOC_FLOOR_PCT + 8` = 20%.
+
+The private production env file is **never committed to Git**.

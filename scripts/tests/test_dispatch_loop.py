@@ -1360,5 +1360,37 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
                                        soc_recovery=bool(numbers.get("soc_recovery"))))
 
 
+    def test_sundsvall_calibrated_guard_allows_normal_operation_at_15_percent(self):
+        # Read-only Solinteg/BMS probe on 2026-10-23: hardware on-grid minimum
+        # 10%, BMS permitted 18.8 A discharge at 15%. 12% operational floor
+        # is unchanged; only the emergency band is narrower.
+        cap = 15.055
+        floor = cap * 0.12
+        headroom = 0.15
+        entry = (floor + headroom) / cap * 100
+        with mock.patch.multiple(
+            dl, BATTERY_KWH=cap, BATTERY_FLOOR_KWH=floor,
+            SOC_FLOOR_GUARD_HEADROOM_KWH=headroom,
+            SOC_RECOVERY_ENTRY_PCT=entry, SOC_RECOVERY_EXIT_PCT=16.0,
+        ):
+            dl._soc_recovery_active = False
+            a, w, *_ = self.run_decision(15.0)
+            self.assertEqual((a, w), ("discharge", 3800))
+            self.assertFalse(dl._soc_recovery_active)
+
+            # Recovery still precedes the 12% software floor.
+            a, w, *_ = self.run_decision(12.9)
+            self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+            self.assertTrue(dl._soc_recovery_active)
+            a, w, *_ = self.run_decision(15.0)
+            self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+            a, w, *_ = self.run_decision(16.0)
+            self.assertEqual((a, w), ("discharge", 3800))
+            self.assertFalse(dl._soc_recovery_active)
+
+            a, w, *_ = self.run_decision(11.5, action="freeze", power_w=0)
+            self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+
+
 if __name__ == "__main__":
     unittest.main()
