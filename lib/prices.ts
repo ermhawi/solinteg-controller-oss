@@ -40,7 +40,7 @@ interface PlaneraPriceSlot {
   time: string;
   // PlaneraElen's payload is EUR/MWh, matching the API metadata.
   price: number;
-  source: 'actual' | 'forecast';
+  source: 'actual' | 'forecast' | 'forecast_issued';
   // Forecast rows also carry an uncertainty band (EUR/MWh). `low`/`high` is the inner band;
   // `very_low`/`very_high` the outer one, which is wide enough to be useless as a planning input
   // (one observed three-day-out row spanned −28.48 to +147.46 EUR/MWh). Only the inner band is read.
@@ -54,7 +54,7 @@ interface PlaneraResponse {
 
 /** PlaneraElen's actual day-ahead rows are a valid fallback while the primary feed lags. */
 export function isUsablePlaneraSource(source: PlaneraPriceSlot['source']): boolean {
-  return source === 'actual' || source === 'forecast';
+  return source === 'actual' || source === 'forecast' || source === 'forecast_issued';
 }
 
 /**
@@ -93,7 +93,7 @@ export function forecastToSlot(p: PlaneraPriceSlot, eurSekRate = 1): PriceSlot {
     endTime: localTime(endLocal),
     price: Math.round((spot + EXPORT_BONUS_ORE) * 100) / 100,
     priceIncludingTaxAndSurcharge: Math.round((spot + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
-    source: p.source,
+    source: p.source === 'actual' ? 'actual' : 'forecast',
     ...(bandOre !== undefined ? { uncertaintyOre: bandOre } : {}),
   };
 }
@@ -105,14 +105,33 @@ export function mergePriceHorizon(
   horizonEndLocal: string,
 ): { prices: PriceSlot[]; hasTomorrow: boolean; actualSlots: number; forecastSlots: number } {
   const horizonStartLocal = actual[0]?.startTime;
+  // Two different slots share each 02:xx local label on the autumn DST change.
+  // Match forecast/actual by occurrence, so neither fold is lost when combining feeds.
   const byTime = new Map<string, PriceSlot>();
-  for (const slot of forecast) {
-    if (slot.startTime < horizonEndLocal && (!horizonStartLocal || slot.startTime >= horizonStartLocal)) {
-      byTime.set(slot.startTime, slot);
+  const addSlots = (slots: PriceSlot[], authoritative: boolean) => {
+    const occurrences = new Map<string, number>();
+    for (const slot of slots) {
+      if (slot.startTime >= horizonEndLocal || (horizonStartLocal && slot.startTime < horizonStartLocal)) continue;
+      const occurrence = occurrences.get(slot.startTime) ?? 0;
+      occurrences.set(slot.startTime, occurrence + 1);
+      byTime.set(`${slot.startTime}#${occurrence}`, authoritative ? { ...slot, source: 'actual' } : slot);
     }
-  }
-  for (const slot of actual) if (slot.startTime < horizonEndLocal) byTime.set(slot.startTime, { ...slot, source: 'actual' });
-  const prices = [...byTime.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  };
+  addSlots(forecast, false);
+  addSlots(actual, true);
+
+  // The second 02:00–02:45 comes after the first 02:45, not beside the first 02:00.
+  const fallDays = new Map<string, boolean>();
+  const sortKey = (key: string): string => {
+    const date = key.slice(0, 10);
+    if (!fallDays.has(date)) fallDays.set(date, slotsInStockholmDay(date) === 100);
+    const minute = minutesOfDay(key);
+    const extra = fallDays.get(date) && (minute >= 180 || (minute >= 120 && key.endsWith('#1'))) ? 60 : 0;
+    return `${date}#${String(minute + extra).padStart(4, '0')}`;
+  };
+  const prices = [...byTime.entries()]
+    .sort(([a], [b]) => sortKey(a).localeCompare(sortKey(b)))
+    .map(([, slot]) => slot);
   const actualSlots = prices.filter((p) => p.source === 'actual').length;
   const firstDate = prices[0]?.startTime.slice(0, 10);
   return {
@@ -234,7 +253,7 @@ function interpolatedSlot(date: string, startMin: number, spot: number): PriceSl
  * older forecast even when the route itself was dynamic and marked no-store.
  */
 async function fetchPlaneraPrices(): Promise<PriceSlot[]> {
-  const url = new URL(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}`);
+  const url = new URL(`https://planeraelen.se/api/price-data?area=${PRICE_ZONE}`);
   url.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   const payload = await new Promise<PlaneraResponse>((resolve, reject) => {
