@@ -14,7 +14,7 @@ Användarbeslut (fastställda):
 - **Reservläge A**: Saknas färsk Volvo-SoC ska prisstyrd laddning fortsätta konservativt, under förutsättning att bilens egen laddgräns på 80 % har konfigurerats/bekräftats en gång. GUI och loggar markerar SoC/måluppfyllnad som okänd; Home Assistant får en varning.
 - Alla sessioner, uppmätt/uppskattad energi, kostnad och styrbeslut ska kunna granskas i Solinteg.
 
-Utanför första leveransen: extern energimätaranslutning på separat METER-buss; certifierad debitering; optimala effektavgifter utan verifierat tariffunderlag; V2G; ny styrning av bilens egna interna laddfunktioner; generell laddboxplattform.
+Utanför första leveransen: EM111-integration på laddboxens separata METER-buss för energiredovisning (inte eventuell nödvändig trefasströmmätning för säker lastbalansering); certifierad debitering; optimala effektavgifter utan verifierat tariffunderlag; V2G; ny styrning av bilens egna interna laddfunktioner; generell laddboxplattform.
 
 ## 2. Befintlig kod och installationsfakta
 
@@ -59,6 +59,31 @@ Dataflöde:
 
 Föreslagna moduler: `lib/ev/types.ts`, `lib/ev/scheduler.ts`, `lib/ev/economics.ts`, `lib/ev/repository.ts`, `lib/ev/vehicle-soc.ts`; `scripts/services/evcc_service.py`; `app/components/EvChargingCard.tsx`; `app/api/ev/status`, `/settings`, `/plan`, `/sessions`; `deploy/solinteg-evcc.service`. Namnen är designmål, inte befintliga filer.
 
+### 3.1 Dynamisk fasbaserad lastbalansering via Modbus (beslut 2026-10-24)
+
+**Mål:** Bilen på preliminärt identifierad L3 får använda högsta **verifierat säkra** tillgängliga laddström. När exempelvis största spisplattan belastar L3 ska bilens ström snabbt reduceras, pausas om kapaciteten understiger laddboxens fungerande miniminivå och ökas långsammare igen när lasten försvinner. Huvudsäkringarna är 20 A per fas, men dimensionerande EV-gräns, marginal och elinstallation måste verifieras av behörig installatör. Funktionen är inte ett certifierat överströmsskydd.
+
+**Två oberoende tidsskalor och strikt prioritet:**
+1. **Snabb lastbalanserare** (lokal, separat reglerkrets): observerar verklig fasbelastning och begränsar EVCC:s högsta erbjudna ström. Målsatt uppdatering omkring 1–2 s **om mätkedja, Modbus och enhetens respons tillåter det**; faktisk maximal fördröjning från apparatpåslag till reducerad *verklig* laddström mäts och godkänns före drift. Får inte vänta på 15-minutersplanering.
+2. **Ekonomisk EV-/batteriplanerare** (15-minutersintervall): väljer önskat laddfönster och önskad ström, men får aldrig åsidosätta den snabba fasgränsen.
+3. Prioritet är **hårdvaruskydd och installationsgränser > manuell säker paus och säkerhetsspärrar > snabb lastbalansering > pris-/soloptimering**. Alla laddlägen, även Snabb och reservläge A, omfattas av samma strömtak. Ingen ny styrning av inverterregister tillåts.
+
+**Modbus-arkitektur och mätkälla:**
+- Läs i första hand om befintlig Solinteg/meter via Modbus kan leverera tidsstämplad, korrekt uppmätt **RMS-ström (A), spänning (V) och riktning per L1/L2/L3 vid relevant mätpunkt för huvudsäkringarna**. Verifiera register, pollingfrekvens, faktisk uppdatering från mäthårdvaran, försening, CT-placering, fasordning, noggrannhet och beteende vid PV-/batteriflöde.
+- Befintliga Solinteg-register `10994/10996/10998` med `meter_l1_w/meter_l2_w/meter_l3_w` uppdateras i nuvarande historik ungefär var 30:e sekund och är **nettoeffekt i watt**, inte verifierad fasström i ampere. De kan användas för faskarta och shadow/replay, **inte ensamma för säkerhetskritisk realtidsreglering**; ett tidigare CT-avkodningsfel gav också bortfall i flera dygn.
+- Om befintlig kedja inte ger tillräckligt snabb och tillförlitlig fasströmmätning behövs **separat trefasmätare/lastbalanseringshårdvara vid huvudmatningen**, läst via lämplig Modbus RTU/TCP-transport. Detta är en säkerhetsförutsättning, inte samma sak som den separata **enfasiga EM111** på laddboxens METER-buss för energiredovisning. Beslut om extra hårdvara tas efter read-only-mätprovet, inte på förhand.
+- `scripts/services/evcc_service.py` ska fortsatt ensam äga Waveshare -> TCP/RS485 -> EVCC **Modbus ASCII** och serialisera alla läs-/skrivkommandon. Fas-mätning får använda sin egen verifierade Modbus-koppling, utan att skapa två skrivare till EVCC eller konkurrera med inverter-pollern.
+
+**Reglerprincip:**
+- Begränsa `I_EV_requested_A` med **minsta** av verifierad EV-installationsgräns, planerad laddström och liveberäknad säker L3-kapacitet (med installatörsbestämd marginal). Dimensionera med verklig ström genom säkringen, inte bara `|meter_l3_w| / 230`; hantera import/export, cos phi, sol/batteri, fasordning och att bilens **redan pågående ström ingår** i totalvärdet. Bilström får varken dras av eller räknas in dubbelt. Kontrollera även laddledningens egen gräns.
+- **Sänk snabbt, höj långsamt:** sänk direkt vid verifierat laststeg; höj först efter stabila färska mätvärden, hysteres och lämplig minsta tid mellan ändringar. Ta hänsyn till EVCC:s verifierade tillåtna strömsteg, skrivfrekvens och faktisk fordonsrespons. Om säker gräns understiger verifierad minimiladdström (typiskt cirka 6 A) ska laddningen pausas, inte kommenderas till ogiltig låg nivå.
+- EVCC-körningen verkställer endast den senaste giltiga begäran och loggar tidsstämpel, mätkälla/kvalitet, L1/L2/L3-ström, L3-marginal, planönskemål, säker gräns, sänt värde, läsback och observerad fysisk laddström. GUI visar om prisplanen tillfälligt begränsats av **L3-last**, mätbortfall eller annat säkerhetsvillkor.
+- Vid **stale/ogiltig fasdata, tappad Modbus-förbindelse, CT-fel eller överskriden kontrollfördröjning**: tillåt aldrig automatisk höjning; gå till en **fysiskt verifierad säker begränsning/paus** där det faktiskt går att verkställa, annars larma och blockera fortsatt automatiserad drift. Saknad data är aldrig 0 A eller ledig kapacitet.
+- **Viktigt:** en watchdog i samma process är otillräcklig om processen/nätet dör när laddboxen behåller sin tidigare strömgräns. Verifiera boxens faktiska beteende vid förlorad styrning och en **oberoende** fungerande failsafe (t.ex. lokal hårdvarulastbalanserare/överordnad watchdog med kontrollerbar laddbox). Om säker hantering inte kan garanteras får automatisk dynamisk lastbalansering **inte armeras**, även om mjukvaran kan skicka Modbus-kommandon.
+- Alla antaganden och gränsvärden fastställs först efter mätprov. Simulera laststeg och använd bara övervakade verkliga prov med verifierad marginal; framkalla aldrig överlast som test.
+
+**Avgränsning:** Modbus är transportval, inte en säkerhetsgaranti. Befintliga skydd och behörig installatörs bedömning gäller alltid. Själva snabbstyrningen får endast aktiveras i etapp 8 efter godkända mät-, stopp- och watchdogprov i etapp 2 och 7.
+
 ## 4. Konfiguration och state
 
 Beständiga inställningar (`ev_settings`, en aktiv rad):
@@ -68,6 +93,7 @@ Beständiga inställningar (`ev_settings`, en aktiv rad):
 - `vehicle_capacity_usable_kwh`: verifierad fordonsuppgift; `charge_efficiency`: kalibrerbar uppskattning, inte dold konstant.
 - `vehicle_local_limit_confirmed_pct`: engångsbekräftad gräns i bilens egen laddinställning (normalt 80 %); måste matcha aktuellt `target_soc_pct` för reservladdning utan färsk bil-SoC. Om målet ändras måste bekräftelsen uppdateras.
 - `battery_ev_discharge_policy`: default `protect`; operativa gränser hämtas från verifierade inverterinställningar.
+- Dynamisk lastbalansering kräver separat **verifierad** mätkälla, fasordning L3, installerad EV-gräns, huvudsäkringsgräns, säkerhetsmarginal, stalenessgräns och faktiskt verifierad failsafe. Säkerhetsgränser får inte höjas via öppet GUI och aktiveras inte av `mode=fast`.
 - Live-styrning armeras **endast** via separat, lokalt skyddad driftskonfiguration `EVCC_CONTROL_ARMED=1` (default `0`), aldrig genom öppet GUI/API. Användarinställningarna styr endast önskat laddläge.
 
 Läsbar status skiljs från åtgärdsorsak: fysik (`unplugged | connected | charging | fault`), styrläge (`planned | waiting | running | paused | complete`) och datakvalitet (`measured | estimated | stale | unavailable`). Detta undviker att `soc_missing` uppträder som falskt laddboxfel.
@@ -103,7 +129,7 @@ Prisdata saknas: använd endast tydligt uppmärkta senast giltiga priser eller d
 - EVCC-anslutning och skrivkommandon måste testas separat: aktuellt registrerat tillstånd, min/max PWM, faktiskt start/stopp, effektbegränsning, återhämtning efter förlorad TCP/låsning samt vad boxen gör vid servicekrasch. Modbus-läsning är **inte** bevis på fungerande stopp.
 - `EVCC_CONTROL_ARMED=0` betyder shadow mode: läs, planera, simulera och logga, **inga** EVCC-skrivningar. Engångsaktivering via skyddad driftskonfiguration får först ske efter dokumenterat lyckade fysiska prover.
 - EVCC-service styr seriellt, idempotent, med monoton versionskontroll, kort TCP-timeout, max antal försök, läs-tillbaka + fysisk tillståndskontroll. Vid kommunikationsförlust är verkligt EVCC-tillstånd **okänt** tills oberoende kontroll bekräftar det; logga inte ett lyckat stopp enbart för att det begärts.
-- Befintlig oberoende watchdog får byggas ut att övervaka EVCC-service heartbeat och tillämpa en **på den här laddboxen verifierad** säker återställning (eller larma/blockera fortsatt automatisk drift om fjärrstopp inte går att garantera). Nuvarande inverter-watchdog täcker ännu inte EVCC.
+- Befintlig oberoende watchdog får byggas ut att övervaka EVCC-service heartbeat och tillämpa en **på den här laddboxen verifierad** säker återställning (eller larma/blockera fortsatt automatisk drift om fjärrstopp inte går att garantera). Nuvarande inverter-watchdog täcker ännu inte EVCC. **För dynamisk lastbalansering räcker inte en watchdog som dör med samma process/nät som kommandokanalen; den oberoende felsäkringen måste kunna provas vid verkligt avbrott, annars ingen autonom lastbalansering.**
 - Manual paus, bilens lokala gräns och hårdvaruskydd ska ha företräde framför appens schema; kontrollen ska inte återaktiveras efter ett verkligt säkerhetsfel utan att orsaken har hanterats.
 - UI:s ändringsanrop måste skyddas med autentisering och åtkomstkontroll; skrivfunktionen får inte exponeras öppet via publik reverse proxy. Inga HA/Tibber-hemligheter i klient eller telemetry-loggar.
 
@@ -111,7 +137,7 @@ Prisdata saknas: använd endast tydligt uppmärkta senast giltiga priser eller d
 
 Nya SQLite-tabeller (WAL och migrationspolicy som `deploy/schema.sql`, versionsmärkt):
 - `ev_settings`: valda användarinställningar och verifierade hardware-gates.
-- `ev_samples`: UTC-tid, EVCC-state, mätt fasström eller ogiltig markör, erbjuden ström, bil-SoC/källtid, laddboxfel och datakvalitet.
+- `ev_samples`: UTC-tid, EVCC-state, mätt fasström eller ogiltig markör, erbjuden ström, bil-SoC/källtid, laddboxfel och datakvalitet. För lastbalansering: separata tidsstämplade L1/L2/L3-strömmar (A), spänning, mätpunkt/proveniens, ålder, giltighet och styrgräns; vid behov egen tabell för högfrekventa fasprover. Netto-W får inte märkas som uppmätt A.
 - `ev_plans`: generation, beräknat UTC, giltighet, vald kandidat med 15-minutersplan, prisproveniens, koppling till `optimizer_runs.id`, osäkerheter och beslutsskäl.
 - `ev_sessions`: session-ID, start/slut, mål, läge, levererade AC-kWh, källa/kvalitet, uppskattad kostnad, måluppfyllelse/okänd, slutorsak.
 - `ev_actions`: tid, planversion, tänkt/applicerad ström, läsback, armed, beslut, retry/fel/watchdog, kopplad session.
@@ -126,7 +152,7 @@ Historisk hushållslastmodell: separera EV-kWh från inverterns uppmätta `house
 
 ## 9. GUI
 
-`EvChargingCard` integreras i huvuddashboarden: anslutningsstatus, bil-SoC (med källtid), målet 80 %, avresetid 07:00, Smart/Solöverskott/Snabb/Pausad, beräknad start och klar-senast, planens billigaste intervall, momentan EV-ström/effekt, ackumulerade kWh och kostnad, husbatteriets skyddsläge. Reserv A visar `SoC okänd, bilens lokala 80 %-gräns styr`. Historik med 24h/7d/30d och per-session pris- och energikurvor, med tydlig precision: uppmätt/uppskattad.
+`EvChargingCard` integreras i huvuddashboarden: anslutningsstatus, bil-SoC (med källtid), målet 80 %, avresetid 07:00, Smart/Solöverskott/Snabb/Pausad, beräknad start och klar-senast, planens billigaste intervall, momentan EV-ström/effekt, ackumulerade kWh och kostnad, husbatteriets skyddsläge. Visa verifierad L3-fasström, tillgänglig laddström, faktisk begränsning (exempelvis spisbelastning), mätålder och failsafe-status; okända/uppskattade värden får inte framstå som direktuppmätta. Reserv A visar `SoC okänd, bilens lokala 80 %-gräns styr`. Historik med 24h/7d/30d och per-session pris- och energikurvor, med tydlig precision: uppmätt/uppskattad.
 
 ## 10. Verifiering och leveransgränser
 
@@ -187,6 +213,7 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 1. Verklig anslutning, laddning, bortkoppling och fel kan avläsas utan Modbus-skrivningar; värden visas med källa och färskhet.
 2. TCP-bortfall, stale status och återanslutning testas; en enda process äger RS485-gatewayen.
 3. PWM/satt gräns skiljs tydligt från faktiskt uppmätt ström och energi; inverter och batteri förblir opåverkade.
+4. Utred read-only Modbus-väg till **faktiska L1/L2/L3 RMS-A och spänning vid huvudsäkringarna**: källa, register, fasordning, CT-placering, tidsstämplar, läs-/uppdateringsintervall och bortfall. Jämför mot oberoende referens vid kontrollerade laststeg. Nuvarande ~30 s netto-W får endast användas för analys/shadow. Dokumentera om separat trefasmätare behövs; blockerad mätförutsättning stoppar etapp 7–8 men hindrar inte read-only-UI.
 
 **Deployläge:** read-only, EVCC_CONTROL_ARMED=0.
 
@@ -210,6 +237,7 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 2. Anslutning, start/slut, telemetrigap och omstart ger begripliga sessioner, inklusive explicit okända perioder.
 3. Measured/estimated/stale/unavailable särskiljs; PWM presenteras inte som uppmätt energi och skattade kostnader märks.
 4. Inga användarknappar eller API-anrop kan styra laddboxen i detta steg.
+5. Visa tillgänglig fasström och mätkvalitet endast när den är verifierad; annars explicit **L3-ström okänd**. Förbered read-only markering av lastbegränsad laddning och vilken källa ett eventuellt framtida begränsningsbeslut bygger på.
 
 **Deployläge:** GUI och read-only-telemetri.
 
@@ -221,6 +249,7 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 1. UTC-intervall och 07:00 Europe/Stockholm fungerar för vanliga dygn och sommar-/vintertid (92/96/100 slot).
 2. Tester täcker redan full bil, otillräckligt laddfönster, prisbortfall, okänd/stale SoC och reserv A; osäkerhet/underskott visas korrekt.
 3. Simulerad plan och priskällor loggas och kan jämföras med verkliga observationer; batteriplan och EVCC förblir orörda.
+4. Simulera snabb L3-lastbalansering mot inspelade/syntetiska spislaststeg, EVCC-minimiström och mätbortfall. Simulerad faktiskt utförd ström får aldrig överstiga den säkra snabbgränsen även när ekonomisk plan begär mer; ingen fysisk styrning.
 
 **Deployläge:** simulering, EVCC_CONTROL_ARMED=0.
 
@@ -233,6 +262,7 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 2. Kostnadsreplay jämför med/utan EV på lika indata och förklarar valt alternativ; osäker tariff-/mätdata markeras.
 3. Versionspar och giltighetsbarriär är testade vid samtidighet, omstart och delvis DB-fel.
 4. Verklig batteri-dispatch och inverterkommandon är oförändrade; misstänkt extra batteriurladdning stoppar nästa steg.
+5. Samordningen visar två separata önskemål: optimerad laddström och snabb säker L3-gräns. Simulerad exekvering väljer alltid lägsta tillåtna gräns, även i Snabb/Reserv A; föråldrad fasström kan aldrig ge större ström. Fasreglering ändrar inte inverter-dispatch.
 
 **Deployläge:** gemensam simulering utan styrning.
 
@@ -245,6 +275,8 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 2. EVCC_CONTROL_ARMED=0 blockerar varje skrivning även om GUI/planerare är aktiva. Endast EVCC-tjänsten får skriva och varje åtgärd kräver läsback plus fysisk observation.
 3. Sänkt/återställd ström, start/stopp där stödd, nätbortfall, tjänsteomstart och watchdog har loggade utfall. Fysiskt stopp eller säkert blockerat läge är verifierat; ett skickat kommando räknas inte som bekräftad stoppåtgärd.
 4. Testet avslutas med tidigare verifierad säker inställning och EVCC_CONTROL_ARMED=0. Vid fel avbryt och verifiera hårdvarans faktiska tillstånd före fortsatt arbete.
+5. Mät/logga hela fördröjningen: laststeg på verifierad L3-mätpunkt -> färskt Modbus-värde -> EVCC-kommando/läsback -> **observerad faktisk reducerad bilström**. Validera reglerhastighet och marginal i övervakad, icke-överbelastande testmiljö eller med injicerad testtelemetri.
+6. Testa CT-/Modbus-bortfall, avstannad mätkedja, nätverksförlust, EVCC-servicekrasch och att laddboxen behåller senaste strömgräns eller stannar. Dokumentera och verifiera en **oberoende** failsafe; om den saknas är etapp 8 blockerad oavsett lyckade strömskrivningar.
 
 **Deployläge:** skrivkod disarmed; separat uttryckligt godkännande för övervakat prov. Det tidigare begränsade skrivprovet är inte fullständig start/stopp-verifiering.
 
@@ -258,6 +290,8 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 3. Testfall för saknad Volvo-SoC, okänd lokal 80 %-gräns, pris-/HA-/nätbortfall, omstart, manuell paus och fel har dokumenterat säkert utfall. Reserv A får bara starta automatiskt om bilens lokala 80 %-gräns är verifierad.
 4. Styrbeslut, läsback, fysisk respons, kWh, kostnad, osäkerheter och larm kan följas i loggar och GUI.
 5. Disarm/rollback och säker laddboxstatus verifieras. Ingen permanent automatisk aktivering utan separat beslut efter godkänd pilot.
+6. Snabb separat lastbalansering använder verifierade fasströmmar, tar alltid företräde framför pris/sol/Snabb, sänker snabbt när spisplattan belastar L3 och höjer kontrollerat efter att lasten försvunnit. Vid tillgänglig ström under EVCC-minimum sker verifierad paus. Verkliga strömmar och responstider loggas; styrning får bara armeras efter godkänd säkerhetsmätning.
+7. Mätfel, oåtkomlig Modbus-mätare, avbruten styrkommunikation eller processkrasch ger en **bevisat säker** laddboxreaktion genom oberoende skydd. Om det inte kan visas är automatisk dynamisk lastbalansering **inte godkänd för drift**; inga 30-sekunders netto-W används som ersättning.
 
 **Deployläge:** först disarmed, sedan en explicit godkänd övervakad pilot. Ingen automatisk aktivering genom dokumentet.
 
@@ -268,15 +302,17 @@ Status: **Ej påbörjad**, **Pågår**, **Deployad – ej verifierad**, **Verifi
 | Etapp | Status per 2026-10-24 | Commit/deploy | Nästa verifiering |
 |---|---|---|---|
 | 1. Grundstruktur | Ej påbörjad | – | Flags, schema, regression och rollback |
-| 2. EVCC read-only | Ej påbörjad | – | Live-telemetri, gateway-exklusivitet och fel |
+| 2. EVCC read-only | Ej påbörjad | – | EVCC-telemetri samt L1/L2/L3 RMS-A, mätintervall och meterbeslut |
 | 3. Volvo-SoC | Ej påbörjad | – | HA-värden, datakvalitet och bortfall |
 | 4. GUI/historik | Ej påbörjad | – | Mobil, sessioner, mätprecision och read-only |
-| 5. Prisplan i shadow | Ej påbörjad | – | DST, prissimulering och reserv A |
-| 6. Gemensam shadow | Ej påbörjad | – | Kostnadsreplay, dubbelräkning och isolering |
-| 7. Skrivprobe | Ej påbörjad | – | Separat tillstånd och fysiskt fail-safe |
-| 8. Automatikpilot | Ej påbörjad | – | Separat tillstånd, säker pilot och rollback |
+| 5. Prisplan i shadow | Ej påbörjad | – | DST, pris och simulerade L3-laststeg/paus |
+| 6. Gemensam shadow | Ej påbörjad | – | Kostnadsreplay, snabbgränsens prioritet och isolering |
+| 7. Skrivprobe | Ej påbörjad | – | Fysisk strömreduktion, responstid och oberoende failsafe |
+| 8. Automatikpilot | Ej påbörjad | – | Verifierad L3-reglering under spislast, bortfall, säker pilot/rollback |
 
 **Händelselogg (append-only):**
+- **2026-10-24 – Modbus-baserad lastbalansering:** kompletterat designen med separat snabb reglerkrets, krav på verifierad trefasströmmätning och möjlig extra mätare, prioritet framför 15-minutersoptimering, oberoende failsafe samt skärpta kriterier för etapp 2, 4–8. **Enbart planändring: ingen kod, styrning eller deployment.**
+
 - **2026-10-24 – Fasunderlag:** införlivat Notion-faskarta från 2026-10-23; Volvo och största spisplattan belastar L3. CT-bortfall och verifierad fasström har förts in som säkerhetsvillkor för etapp 7–8. Endast dokumentation, ingen kod eller drift ändrad.
 
 - **2026-10-24 – Planering:** åtta leveransetapper, acceptanskriterier, test/deploy/rollback-gates och progresslogg dokumenterade. Inga funktioner har implementerats eller deployats. Nästa steg: separat beslut om att påbörja etapp 1.
