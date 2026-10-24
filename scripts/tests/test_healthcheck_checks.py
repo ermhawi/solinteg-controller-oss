@@ -248,6 +248,58 @@ class AlertKeysAreDistinctTests(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), keys)
 
 
+class CheckMeterPhaseStaleTests(unittest.TestCase):
+    """A timeout that disables extended CT reads must not look like healthy phases."""
+
+    @staticmethod
+    def db(*rows):
+        """Rows are (seconds_ago, L1, L2, L3), with fresh total meter samples."""
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE TABLE readings (timestamp TEXT, meter_l1_w INTEGER, "
+                    "meter_l2_w INTEGER, meter_l3_w INTEGER)")
+        con.executemany("INSERT INTO readings VALUES (?, ?, ?, ?)",
+                        [(ago(s), l1, l2, l3) for s, l1, l2, l3 in rows])
+        return con
+
+    def test_previously_working_phases_go_missing_while_core_poller_stays_fresh(self):
+        con = self.db((3600, -800, -600, -350),
+                      (100, None, None, None), (10, None, None, None))
+        issue = hc.check_meter_phase_stale(con, NOW)
+        self.assertIsNotNone(issue)
+        self.assertEqual(issue[KEY], "meter_phase_stale")
+        self.assertEqual(issue[PRIORITY], notify.PRIORITY_HIGH)
+        self.assertIn("L1/L2/L3", issue[2])
+        self.assertIn("60 minutes", issue[3])
+
+    def test_fresh_phases_remain_healthy(self):
+        con = self.db((30, -800, -600, -350), (10, None, None, None))
+        self.assertIsNone(hc.check_meter_phase_stale(con, NOW))
+
+    def test_exactly_at_stale_threshold_does_not_alert(self):
+        con = self.db((hc.METER_PHASE_STALE_S, -800, -600, -350),
+                      (10, None, None, None))
+        self.assertIsNone(hc.check_meter_phase_stale(con, NOW))
+
+    def test_any_missing_phase_means_no_complete_phase_reading(self):
+        con = self.db((3600, -800, -600, -350), (5, -800, -600, None))
+        self.assertEqual(hc.check_meter_phase_stale(con, NOW)[KEY], "meter_phase_stale")
+
+    def test_never_supported_phase_block_does_not_spam(self):
+        con = self.db((3600, None, None, None), (5, None, None, None))
+        self.assertIsNone(hc.check_meter_phase_stale(con, NOW))
+
+    def test_dead_poller_is_owned_by_dedicated_check(self):
+        con = self.db((3600, -800, -600, -350),
+                      (hc.POLLER_STALE_S + 1, None, None, None))
+        self.assertIsNone(hc.check_meter_phase_stale(con, NOW))
+
+    def test_missing_tables_or_phase_columns_does_not_crash_healthcheck(self):
+        self.assertIsNone(hc.check_meter_phase_stale(con_with(), NOW))
+        con = con_with("readings")
+        con.execute("INSERT INTO readings VALUES (?, 0)", (ago(5),))
+        self.assertIsNone(hc.check_meter_phase_stale(con, NOW))
+
+
 class CheckMeterPhaseDeadTests(unittest.TestCase):
     """A disconnected CT is silent everywhere else: the total still looks plausible, and the
     inverter happily balances the phases it CAN see. An L3 CT sat dead for weeks on the

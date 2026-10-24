@@ -129,6 +129,18 @@ forces it back to auto — a hard crash (power loss, OOM kill) skips `dispatch_l
 clean-exit fail-safe entirely, so this is a second, independent process watching for exactly
 that. It needs no external setup; it just needs to be running.
 
+**L1/L2/L3 Modbus telemetry:** The poller reads the three phase CTs from the extended
+block starting at register 10994. A transient timeout no longer disables this block
+until a manual restart: the poller continues collecting total grid/battery readings via
+the legacy block, retries the CT read after 2 minutes, and exponentially backs off
+up to 30 minutes while it remains unavailable. It logs a restoration when extended
+reads resume. `POLL_PHASE_RETRY_INITIAL_S` and `POLL_PHASE_RETRY_MAX_S` control the
+retry schedule. The healthcheck (every 5 minutes) alerts via ntfy if a device that
+previously reported all three phases stops doing so for over 30 minutes while total
+meter data is still fresh (`METER_PHASE_STALE_S`, default 1800). This is **telemetry
+recovery, not phase-aware fuse protection**: do not assume the controller can limit
+a single phase's current just because these readings exist.
+
 **solinteg-healthcheck** (every 5 min) and **solinteg-heartbeat-ping** (every 10 min) need
 two accounts, both free, both one-time setup done in their own app/website — nothing to
 install:
