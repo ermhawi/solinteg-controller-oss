@@ -25,6 +25,24 @@ Utanför första leveransen: extern energimätaranslutning på separat METER-bus
 - Användarens anläggning är ungefär 5,4 kWp PV, Sunwoda-batteri 15 kWh, Solinteg-växelriktare. Projektets standardvärden har också referensinstallationsvärden (bl.a. 25,6 kWh batteri och gamla elavtal). **Läs och validera aktiv driftskonfiguration**, härled inte fysisk kapacitet eller avtal från källkodens fallbacks.
 - Uppgifter som måste verifieras före liveoptimering: Tibberpåslag, Sundsvall Elnäts energi-/effektavgifter och nätnytta, aktiv elområde SE2, aktuell laddeffekt/fas, Volvons användbara batterikapacitet och laddförluster.
 
+### 2.1 Faskarta 2026-10-23 (preliminär)
+
+Källa: [Faskarta i huset – Solinteg-mätningar 2026-10-23](https://app.notion.com/p/402aa897399b818fb688def748444f26). Kontrollerade apparatpåslag och frånslag användes för att koppla förändrad **nätimport per fas** till apparater. Det är inte en verifierad mätning av verklig fasström eller intern apparatkoppling.
+
+| Utrustning | Påverkade faser | Ungefärlig nettoeffektändring |
+|---|---|---|
+| Volvo XC40, enfasladdning | **L3** | +3,28 kW |
+| Mikrovågsugn | L1 | +1,69 kW |
+| Ugn | L1 + L2 | +1,19 / +1,25 kW |
+| Största spisplattan | **L1 + L3** | +1,21 / +1,20 kW |
+| Luftvärmepump | L1 | +0,9–1,0 kW |
+
+**Laddsäkerhet:** Bilen och största spisplattan belastar båda **L3**; huvudsäkring är 20 A per fas. Under bilens laddning observerades ca **4,28 kW nettoimport på L3**, indikativt ca 18,6 A enbart under antagandet 230 V och effektfaktor nära 1. Det är inte uppmätt ström eller någon säker kvarvarande marginal. Kontrollera fas, säkring, kablage och faktiska belastningar med installatör. Att ugn och spisplatta syntes på två faser avslöjar inte deras interna 230/400 V-koppling.
+
+**Mätkedja och datakvalitet:** Solinteg-register 10994/10996/10998 ger meter_l1_w/meter_l2_w/meter_l3_w i SQLite-tabellen readings (ca 30 s intervall). Värdena är nettoflöden och påverkas också av solel/batteri; negativt tecken anger import. Ett avkodningsfel med loggen "Extended CT read unavailable" 2026-10-19 satte _phase_block_disabled=True, så fasdata saknades 20–22 oktober fram till omstart 2026-10-23. Innan styrning måste återhämtning eller säkert fallbackbeteende vid CT-bortfall verifieras. **Saknade fasdata är okänd belastning, aldrig 0 W eller ledig kapacitet.**
+
+**Inför steg 7–8:** Verifiera faktiska L3-fasström/spänning, laddboxens säkerhetsgräns och lastbalanseringsskydd. Testa samtidig drift av känd L3-last (största spisplattan) genom säker simulering eller övervakad metod utan att provocera överlast. Bilens ström ska kunna minskas/pausas på ett verifierat säkert sätt. Planerade shadow-mode steg får använda preliminära fasdata för analys men inte för säkerhetskritiska beslut.
+
 ## 3. Arkitekturbeslut
 
 Tre möjliga upplägg: (A) fristående EV-schemaläggare = enkelt men risk för dubbelräkning och konkurrens om effekt; (B) helt omskriven gemensam DP för EV+batteri = teoretiskt stark men stor regression/komplexitet; (C) **samordnande EV-planerare runt befintlig batteri-DP** = rekommenderat.
@@ -223,7 +241,7 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 **Leverans:** skrivväg kan driftsättas disarmed, men får endast aktiveras för separat godkänt, kort och övervakat fysiskt prov. Läs först befintlig strömgräns, sänk säkert, verifiera faktisk laddrespons och återställ. Testa därefter start/stopp, förbindelsefel och watchdog innan automatisk körning övervägs.
 
 **Acceptanskriterier:**
-1. Installatörsbedömd EV-fas, säkring, kabel och tillgängligt fasutrymme är verifierade. Husets 20 A huvudsäkring räcker inte som bevis för säker EV-ström.
+1. Installatörsbedömd EV-fas **L3**, säkring, kabel, verklig fasström/spänning och tillgängligt fasutrymme är verifierade, inklusive känd samtidig L3-last från största spisplattan. Husets 20 A huvudsäkring och uppmätt nettoeffekt räcker inte som bevis för säker laddström.
 2. EVCC_CONTROL_ARMED=0 blockerar varje skrivning även om GUI/planerare är aktiva. Endast EVCC-tjänsten får skriva och varje åtgärd kräver läsback plus fysisk observation.
 3. Sänkt/återställd ström, start/stopp där stödd, nätbortfall, tjänsteomstart och watchdog har loggade utfall. Fysiskt stopp eller säkert blockerat läge är verifierat; ett skickat kommando räknas inte som bekräftad stoppåtgärd.
 4. Testet avslutas med tidigare verifierad säker inställning och EVCC_CONTROL_ARMED=0. Vid fel avbryt och verifiera hårdvarans faktiska tillstånd före fortsatt arbete.
@@ -236,7 +254,7 @@ Beslutsstatus: övergripande mål, lägen, 80 %/07:00 och reserv A har godkänts
 
 **Acceptanskriterier:**
 1. En övervakad pilot följer rätt planversion, respekterar bekräftade effektgränser och försöker nå 80 % till 07:00; om det är omöjligt visas underskott, inte en falsk garanti.
-2. Verklig batteriurladdning och fasbelastning övervakas; EV reduceras/pausas säkert utan oprövade inverter-freeze-register eller antaganden om fasampere från endast watt.
+2. Verklig batteriurladdning och verifierad **L3-fasström** övervakas. EV reduceras/pausas säkert vid andra L3-laster (inklusive största spisplattan). Bortfall av fasdata, inklusive dokumenterat CT-fel, får aldrig ge automatiskt högre laddström. Använd ingen oprövad inverter-freeze eller antagna ampere från enbart watt.
 3. Testfall för saknad Volvo-SoC, okänd lokal 80 %-gräns, pris-/HA-/nätbortfall, omstart, manuell paus och fel har dokumenterat säkert utfall. Reserv A får bara starta automatiskt om bilens lokala 80 %-gräns är verifierad.
 4. Styrbeslut, läsback, fysisk respons, kWh, kostnad, osäkerheter och larm kan följas i loggar och GUI.
 5. Disarm/rollback och säker laddboxstatus verifieras. Ingen permanent automatisk aktivering utan separat beslut efter godkänd pilot.
@@ -259,6 +277,8 @@ Status: **Ej påbörjad**, **Pågår**, **Deployad – ej verifierad**, **Verifi
 | 8. Automatikpilot | Ej påbörjad | – | Separat tillstånd, säker pilot och rollback |
 
 **Händelselogg (append-only):**
+- **2026-10-24 – Fasunderlag:** införlivat Notion-faskarta från 2026-10-23; Volvo och största spisplattan belastar L3. CT-bortfall och verifierad fasström har förts in som säkerhetsvillkor för etapp 7–8. Endast dokumentation, ingen kod eller drift ändrad.
+
 - **2026-10-24 – Planering:** åtta leveransetapper, acceptanskriterier, test/deploy/rollback-gates och progresslogg dokumenterade. Inga funktioner har implementerats eller deployats. Nästa steg: separat beslut om att påbörja etapp 1.
 
 **Mall för nästa loggrad:**
