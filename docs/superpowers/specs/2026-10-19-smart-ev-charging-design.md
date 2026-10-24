@@ -1,6 +1,22 @@
 # Smart elbilsladdning i Solinteg — designspecifikation
 
-Status: Designspecifikation med etappindelad implementationsplan (uppdaterad 2026-10-24). Alla etapper är ännu ej påbörjade. Ingen EVCC-styrning aktiveras genom dokumentet.
+Status: Ursprunglig åttastegsplan för EVCC-styrd smartladdning, nu ett **alternativ**. Nytt huvudspår 2026-10-24: Solinteg ska endast samordna **husbatteriet** med Volvons egen smartladdning på L3; ingen Waveshare-/EVCC-styrning och inget överlastskydd mot andra L3-laster beställs. Den tidigare EVCC-planen nedan behålls som referens. Se avsnitt 0 för det nya huvudspåret.
+
+## 0. Nytt huvudspår: L3-samordning av husbatteriet, utan Waveshare
+
+**Bekräftat användarkrav 2026-10-24:** Volvon styr själv när den laddar och sin amperegräns (för närvarande 18 A). Solinteg-appen ska med växelriktarens befintliga Modbus-data minska **husbatteriets** laddning när L3 blir kraftigt belastad. Om bilen börjar ladda när huset går på husbatteri ska Solinteg minska batteriets urladdning så att **elnätet försörjer bilens tillkommande last** och lagrad batterienergi bevaras. Det kräver inte att husbatteriet laddas från nätet samtidigt som det laddas ur. Ingen ny bil-/EVCC-integration, och ingen säkerhetsgaranti för andra apparaters belastning på L3.
+
+**Avkänning och fysisk modell:** På aktuell enhet gav en read-only läsning av Modbus 50006 (Grid Unbalanced Output) värdet **0 = av** den 24 oktober. Under antagandet att invertereffekten därför fördelas jämnt kan husets L3-last skattas som `-meter_l3_w + inverter_ac_w/3`. Det är viktigare än `meter_l3_w` ensam, eftersom redan pågående batteriurladdning kan maskera bilens effekt i nätmätaren. I historiska prover 2026-10-23 ökade härledd L3-last från cirka 700 till 4250 W när bilen började ladda. Volvo HA-entiteten `sensor.volvo_xc40_charging_status` bytte till `charging` omkring 14:00 UTC, i linje med fassteg omkring 13:59 UTC. **Detta är ett klassificeringsantagande**, inte en exakt separat mätning av bilens ström; en stor annan L3-last kan också matcha. Beräkningen ska aldrig användas som säkringsskydd.
+
+**Styrpolicy, endast batteriet:**
+- Vid husbatteriladdning minskas laddningseffekten med hänsyn till en **ekonomisk mjuk L3-budget** (initialt 4000 W beräknad L3-huslast plus cirka en tredjedel av batteriladdningen). Denna budget är **inte** en huvud-/gruppsäkringsgräns. Minsta påtvingade laddmål är 300 W för att inte råka återgå till Auto som kan urladda batteriet till bilen.
+- Vid hög, bil-liknande L3-last (initialt minst 2500 W) reduceras planerad batteriurladdning med den uppskattade extra L3-lasten (max 4300 W efter 600 W schablonbaslast). När bara en liten urladdning återstår används ett 50 W batterisparläge, **inte Auto**, eftersom Auto kan använda husbatteriet för bilen och 0 W EMS utan verifierad funktion har kända risker.
+- När planen är Idle/Auto och en stor L3-last uppstår kan samma 50 W-läge låta nätet försörja huvuddelen av bilen. **Det är inte ett riktigt 0 W-hålläge**: historiska kontrollrader 2026-10-24 visar att 50 W beordrad urladdning gav cirka 160–260 W fysisk batterieffekt (bl.a. inverterförluster). Det begränsar kraftigt urladdningen men garanterar inte absolut oförändrat SoC. Ett riktigt 0 W-hålläge måste verifieras separat vid högre SoC, innan det kan användas. När bilen slutar ladda återgår ursprunglig plan. PV-överskott får inte onödigt hindras; SoC-recovery, BMS-golv, watchdog och befintliga säkra skydd har alltid företräde.
+- Vid saknade/gamla/inkonsekventa L1/L2/L3-värden eller om 50006 inte kan verifieras till 0 i aktivt läge **avstår** den frivilliga ekonomiska L3-justeringen. Det innebär inte garanterat batteriskydd under mätbortfall. Latens cirka 30 s pollning plus 60 s dispatch accepteras för **ekonomisk** samordning, inte för överlastskydd.
+
+**Implementationsstatus:** `scripts/services/l3_battery_policy.py` innehåller testbar ren beslutskod. Befintlig dispatch integreras via `DISPATCH_L3_BATTERY_MODE=0|shadow|1`, **default 0**. `shadow` beräknar/loggar utan att ändra styrkommandon. `1` får endast aktiveras efter replay, oberoende kontroll av 50006=0, och kontrollerad jämförelse av faktisk batteri-/nätförbrukning under samtidigt bilpåslag och högre SoC. Historiken verifierar **endast** att 50 W-batterisparläget minskar faktisk urladdning till cirka 160–260 W; den fullständiga funktionen under bilens belastning är inte verifierad. Ingen EVCC-kommunikation krävs. Den separat framtagna `evcc_ascii.py` är inte en del av detta huvudspår.
+
+---
 
 ## 1. Mål, beslut och avgränsning
 
@@ -311,6 +327,7 @@ Status: **Ej påbörjad**, **Pågår**, **Deployad – ej verifierad**, **Verifi
 | 8. Automatikpilot | Ej påbörjad | – | Verifierad L3-reglering under spislast, bortfall, säker pilot/rollback |
 
 **Händelselogg (append-only):**
+- **2026-10-24 – Nytt förenklat huvudspår, L3-batterisamordning:** efter användarens förtydligande har en ren policy för att justera enbart husbatteriets laddning/urladdning implementerats i `l3_battery_policy.py` och kopplats till dispatch med tre separata lägen (0, shadow, 1; default 0). Inga EVCC-skrivningar, ingen fas-säkringsgaranti. Read-only verifiering av 50006 = 0. Replay mot verklig telemetri från 2026-10-23: 2350 giltiga fasmätningar, exakt 10 bil-liknande observationer under Volvons dokumenterade laddningsfönster 13:59–14:04 UTC; uppskattad L3-huslast cirka 4250 W, beräknat nytt batteriladdmål 300 W jämfört med 7500 W hypotetiskt. 2026-10-19: 536 giltiga fasmätningar, 15 bil-liknande. Den här algoritmen är ännu inte ett godkänt fysiskt test under faktisk samtidig hög batteriurladdning och billaddning. Starta i shadow före aktivt läge.
 - **2026-10-24 – Modbus-baserad lastbalansering:** kompletterat designen med separat snabb reglerkrets, krav på verifierad trefasströmmätning och möjlig extra mätare, prioritet framför 15-minutersoptimering, oberoende failsafe samt skärpta kriterier för etapp 2, 4–8. **Enbart planändring: ingen kod, styrning eller deployment.**
 
 - **2026-10-24 – Fasunderlag:** införlivat Notion-faskarta från 2026-10-23; Volvo och största spisplattan belastar L3. CT-bortfall och verifierad fasström har förts in som säkerhetsvillkor för etapp 7–8. Endast dokumentation, ingen kod eller drift ändrad.

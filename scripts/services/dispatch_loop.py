@@ -263,6 +263,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
+from l3_battery_policy import observe_l3, suggest_battery_target
 from inverter_control import (
     ARMED,
     FreezeNotEnforced,
@@ -415,6 +416,20 @@ _last_recovery_nonresponse_report = 0.0
 IMPORT_LIMIT_W = int(os.environ.get("DISPATCH_IMPORT_LIMIT_W", "0"))
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
+# House battery L3 economic coordination, never EVCC control or a fuse safety device.
+# "shadow" computes/logs proposed battery targets but writes NOTHING differently.
+# "1" may change battery-only setpoints. Before every active interval it verifies
+# inverter register 50006==0 (balanced output) independently through read-only Modbus.
+L3_BATTERY_MODE = os.environ.get("DISPATCH_L3_BATTERY_MODE", "0").lower()
+if L3_BATTERY_MODE not in ("0", "shadow", "1"):
+    raise ValueError("DISPATCH_L3_BATTERY_MODE must be 0, shadow, or 1")
+L3_CHARGE_BUDGET_W = int(os.environ.get("DISPATCH_L3_CHARGE_BUDGET_W", "4000"))
+L3_EV_LIKE_THRESHOLD_W = int(os.environ.get("DISPATCH_L3_EV_LIKE_THRESHOLD_W", "2500"))
+L3_BASELINE_W = int(os.environ.get("DISPATCH_L3_NON_EV_BASELINE_W", "600"))
+L3_EV_EST_MAX_W = int(os.environ.get("DISPATCH_L3_EST_EV_MAX_W", "4300"))
+L3_BALANCED_CHECK_INTERVAL_S = 600
+_l3_checked_until = 0.0
+_l3_balanced_output = False
 # Same env vars lib/constants.ts reads (kept in sync by the cross-language test). ONE_WAY_EFF must
 # mirror EFF_ONE_WAY there exactly: it is the METER-to-stored per-leg efficiency, so it carries the
 # inverter's conversion losses as well as the cells'. Using the battery-terminal DC figure alone
@@ -687,6 +702,85 @@ def slot_power_w(dispatch: list, idx: int, prev_soc: float) -> int:
     """
     delta_kwh = dispatch[idx]["socAfter"] - prev_soc
     return clamp_power_w(abs(delta_kwh) / SLOT_HOURS * 1000)
+
+
+def verify_l3_balanced_output() -> bool:
+    """Periodically verify register 50006==0; fail closed on errors or unbalance.
+
+    This is an economic *battery-only* policy, but the algebra for recovering
+    house L3 demand relies on balanced inverter power. Never apply a suggestion
+    just because we happened to read 50006=0 on a previous day.
+    """
+    global _l3_checked_until, _l3_balanced_output
+    if time.monotonic() < _l3_checked_until:
+        return _l3_balanced_output
+    _l3_checked_until = time.monotonic() + L3_BALANCED_CHECK_INTERVAL_S
+    inv = None
+    try:
+        inv = Inverter()
+        setting = inv.read_u16(50006)
+        _l3_balanced_output = setting == 0
+        if not _l3_balanced_output:
+            log.warning("L3 battery coordination disarmed: unbalanced inverter output (50006=%s)", setting)
+    except Exception as exc:  # noqa: BLE001
+        _l3_balanced_output = False
+        log.warning("L3 battery coordination disarmed: cannot verify register 50006 (%s)", exc)
+    finally:
+        if inv is not None:
+            inv.close()
+    return _l3_balanced_output
+
+
+def coordinate_l3_battery(action: str, power_w: int, expected_soc_kwh, solar_skip: bool,
+                          detail: str, numbers: dict, now: datetime):
+    """Optional post-plan, post-recovery battery setpoint adjustment.
+
+    Existing SoC recovery and hardware guards have priority. This never alters
+    inverter registers on its own, never talks to the EVSE, and returns the exact
+    original decision when off, shadow, invalid/old phase data, or uncertain
+    inverter balance. Active changes intentionally set expected_soc_kwh=None:
+    this policy *deliberately* deviates from the plan's SoC trajectory, while
+    force_discharge/force_charge still enforce the physical SoC floor.
+    """
+    if L3_BATTERY_MODE == "0" or numbers.get("soc_recovery"):
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    reading = common.read_json(LIVE_JSON_PATH)
+    observation = observe_l3(reading or {}, now)
+    if observation is None:
+        numbers["l3_policy_status"] = "unavailable"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    current_action, current_power, _ = effective_target(action, power_w, solar_skip)
+    suggested = suggest_battery_target(
+        current_action, current_power, observation,
+        l3_charge_budget_w=L3_CHARGE_BUDGET_W,
+        ev_like_threshold_w=L3_EV_LIKE_THRESHOLD_W,
+        non_ev_baseline_w=L3_BASELINE_W,
+        estimated_ev_max_w=L3_EV_EST_MAX_W,
+    )
+    numbers.update(suggested.metrics)
+    numbers["l3_policy_mode"] = L3_BATTERY_MODE
+    numbers["l3_policy_suggested_action"] = suggested.action
+    numbers["l3_policy_suggested_power_w"] = suggested.power_w
+    if (suggested.action, suggested.power_w) == (current_action, current_power):
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    if L3_BATTERY_MODE == "shadow":
+        log.info("L3 battery coordination SHADOW: %s %dW -> %s %dW (%s)",
+                 current_action, current_power, suggested.action, suggested.power_w, suggested.reason)
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    # A '1' mode cannot use the symmetric inverter/3 inference unless register
+    # 50006 is currently OFF. This check is completely independent of live.json.
+    if not verify_l3_balanced_output():
+        numbers["l3_policy_status"] = "inverter_balance_unknown_or_on"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    numbers["l3_policy_status"] = "applied"
+    detail = (f"L3 battery coordination: {suggested.reason}; L3 inferred "
+              f"{observation.house_l3_w:.0f} W; {detail}")
+    return suggested.action, suggested.power_w, None, False, detail, numbers
 
 
 def read_live_reading(now: datetime):
@@ -1655,6 +1749,13 @@ def main() -> None:
                 last_target = None
             action, power_w, expected_soc_kwh, solar_skip, detail, numbers = prioritize_soc_recovery(
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
+            # Battery-only L3 coordination sits AFTER the SoC recovery decision so a
+            # low-SoC recovery charge always wins; default 0 means no behaviour change.
+            try:
+                action, power_w, expected_soc_kwh, solar_skip, detail, numbers = coordinate_l3_battery(
+                    action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
+            except Exception as exc:  # noqa: BLE001 — advisory battery policy, never crash dispatch
+                log.warning("L3 battery coordination failed (%s) — original dispatch retained", exc)
             effective_action, effective_power, solar_skipped_now = effective_target(
                 action, power_w, solar_skip)
             target = (slot_time, effective_action, effective_power)
