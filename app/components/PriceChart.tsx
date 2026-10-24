@@ -338,10 +338,13 @@ export default function PriceChart({
   // The decision zone the hovered slot belongs to, for the tooltip's zone-total row. Bands are
   // few (a handful per day), so a linear scan per hover render is fine.
   const hoverBand =
-    hoverPoint && hoverPoint.decision
-      ? actionBands.find(
-          (b) => b.kind === hoverPoint.decision && b.x1 <= hoverPoint.time && hoverPoint.time <= b.x2,
-        ) ?? null
+    hover && hoverPoint?.decision
+      ? actionBands.find((b) => {
+          const start = timeIndex.get(b.x1);
+          const end = timeIndex.get(b.x2);
+          return b.kind === hoverPoint.decision && start != null && end != null &&
+            start <= hover.index && hover.index <= end;
+        }) ?? null
       : null;
 
   // Zone-level actual total for the hovered band (buy/sell only, matching the in-chart ⚠ marker

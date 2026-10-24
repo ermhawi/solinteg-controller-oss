@@ -127,7 +127,7 @@ export function TimeAxis({ frame, ticks }: { frame: ChartFrame; ticks: string[] 
             fill="var(--axis-text)"
             style={{ fontFamily: 'var(--font-body)' }}
           >
-            {t.slice(11, 13)}
+            {t.slice(11, 13)}{t.endsWith('#2') ? '²' : frame.timeIndex.has(`${t}#2`) ? '¹' : ''}
           </text>
         );
       })}

@@ -9,6 +9,7 @@ import {
   buildStepLinePath,
   buildTimeIndex,
   buildXTicks,
+  chargeLevelForKw,
   computeNowSlotTime,
   computePriceMax,
   computePriceMin,
@@ -145,13 +146,30 @@ describe('buildActionBands', () => {
     ).toEqual([]);
   });
 
-  it('sub-threshold battery-grid flows are slot slop, not decisions (< 0.5 kWh/slot)', () => {
+  it('sub-threshold unexplained battery-grid flows are slot slop, not decisions (< 0.5 kWh/slot)', () => {
     expect(
-      buildActionBands([makeDispatch('2026-06-28T10:00:00', 'charge', { gridToBatteryKwh: 0.4 })], FLOOR),
+      buildActionBands([makeDispatch('2026-06-28T10:00:00', 'idle', { gridToBatteryKwh: 0.4 })], FLOOR),
     ).toEqual([]);
     expect(
       buildActionBands([makeDispatch('2026-06-28T20:00:00', 'discharge', { batteryToGridKwh: 0.33 })], FLOOR),
     ).toEqual([]);
+  });
+
+  it('never calls an active slow grid charge a battery-saving hold', () => {
+    const slow = makeDispatch('2026-06-28T08:00:00', 'charge', {
+      gridToBatteryKwh: 0.07, loadFromGridKwh: 0.4, socAfter: FLOOR + 5,
+    });
+    expect(buildActionBands([slow], FLOOR)[0].kind).toBe('buy');
+  });
+
+  it('splits charging zones by the actual planned battery-side rate', () => {
+    const schedule = [
+      makeDispatch('2026-06-28T08:00:00', 'charge', { gridToBatteryKwh: 0.15, socAfter: 4.15 }),
+      makeDispatch('2026-06-28T08:15:00', 'charge', { gridToBatteryKwh: 0.75, socAfter: 4.9 }),
+      makeDispatch('2026-06-28T08:30:00', 'charge', { gridToBatteryKwh: 1.5, socAfter: 6.4 }),
+    ];
+    const before = { '2026-06-28T08:00:00': 4, '2026-06-28T08:15:00': 4.15, '2026-06-28T08:30:00': 4.9 };
+    expect(buildActionBands(schedule, FLOOR, before).map((b) => b.chargeLevel)).toEqual(['slow', 'medium', 'fast']);
   });
 
   it('hold: grid covers load while the battery sits on usable charge', () => {
@@ -268,6 +286,14 @@ describe('buildActionBands', () => {
   });
 });
 
+describe('chargeLevelForKw', () => {
+  it('uses the agreed provisional slow/medium/fast thresholds', () => {
+    expect([0.4, 1.99, 2, 4.99, 5, 7.5].map(chargeLevelForKw)).toEqual([
+      'slow', 'slow', 'medium', 'medium', 'fast', 'fast',
+    ]);
+  });
+});
+
 describe('isMinorGridCharge', () => {
   it('recognizes a positive grid charge below the deliberate-buy threshold', () => {
     expect(isMinorGridCharge({ gridToBatteryKwh: 0.216 })).toBe(true);
@@ -352,6 +378,18 @@ describe('buildChartData', () => {
       { [slot]: 6 },
     );
     expect(pt.socPct).toBeCloseTo((6 / BATTERY_KWH) * 100, 1);
+  });
+
+  it('shows battery-side kW and a slow charging level despite high household grid load', () => {
+    const key = '2026-06-28T10:00:00';
+    const dispatch = makeDispatch(key, 'charge', {
+      socAfter: 5.1, gridToBatteryKwh: 0.11, loadFromGridKwh: 0.6,
+    });
+    const [pt] = buildChartData([makePrice(key)], null, profiles, { [key]: dispatch },
+      BATTERY_KWH, SKATT_OVERFÖRING, BATTERY_MIN_SOC_KWH, {}, {}, {}, 5, { [key]: 5 });
+    expect(pt.decision).toBe('buy');
+    expect(pt.plannedChargeKw).toBeCloseTo(0.4);
+    expect(pt.chargeLevel).toBe('slow');
   });
 
   it('passes the planned battery flows through for the tooltip (null without a plan)', () => {
@@ -542,6 +580,17 @@ describe('buildActualSocByTime', () => {
     expect(out['2026-06-28T10:00']).toBe(40.0);
   });
 
+  it('separates the two 02:00 readings at the autumn DST change', () => {
+    const readings = [
+      { timestamp: '2026-10-25T00:00:13Z', soc_pct: 40 }, // 02:00 CEST
+      { timestamp: '2026-10-25T01:00:13Z', soc_pct: 45 }, // 02:00 CET
+    ];
+    expect(buildActualSocByTime(readings)).toEqual({
+      '2026-10-25T02:00': 40,
+      '2026-10-25T02:00#2': 45,
+    });
+  });
+
   it('returns an empty object for no readings', () => {
     expect(buildActualSocByTime([])).toEqual({});
   });
@@ -612,6 +661,12 @@ describe('computeNowSlotTime', () => {
   it('returns null when the current slot is not among the available times', () => {
     const now = new Date('2026-07-01T11:22:00Z'); // → 13:15 Stockholm
     expect(computeNowSlotTime(now, ['2026-07-01T09:00:00'])).toBeNull();
+  });
+
+  it('locates the now marker in the correct 02:xx fold', () => {
+    const available = ['2026-10-25T02:15:00', '2026-10-25T02:15:00#2'];
+    expect(computeNowSlotTime(new Date('2026-10-25T00:22:00Z'), available)).toBe(available[0]);
+    expect(computeNowSlotTime(new Date('2026-10-25T01:22:00Z'), available)).toBe(available[1]);
   });
 
   it('returns null for an empty availableTimes list', () => {

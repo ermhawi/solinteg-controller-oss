@@ -19,6 +19,7 @@
 import { connection } from 'next/server';
 import { BATTERY_KWH } from '@/lib/optimizer';
 import { readLatestOptimizerRun } from '@/lib/telemetry';
+import { planSlotEpochSeconds } from '@/lib/plan-slot-time';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const SLOTS_PER_HOUR = 4;
@@ -32,10 +33,11 @@ export async function GET() {
   const run = readLatestOptimizerRun();
   if (!run) return Response.json({ loggedAt: null, batteryKwh: BATTERY_KWH, slots: [] });
   const solarByStart = new Map(run.inputs.map((i) => [i.startTime, i.solarKwh]));
-  const slots = run.dispatch.map((s) => {
+  const epochSeconds = planSlotEpochSeconds(run.dispatch.map((s) => s.startTime), run.loggedAt);
+  const slots = run.dispatch.map((s, i) => {
     const solarKwh = solarByStart.get(s.startTime);
     return [
-      Math.floor(new Date(s.startTime).getTime() / 1000),
+      epochSeconds[i], // distinct UTC instants even when 02:xx occurs twice on the DST change
       round2(s.gridKwh * SLOTS_PER_HOUR), // kWh per 15-min slot → kW
       round2((s.socAfter / BATTERY_KWH) * 100), // kWh → %
       solarKwh === undefined ? null : round2(solarKwh * SLOTS_PER_HOUR),

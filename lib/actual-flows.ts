@@ -1,5 +1,6 @@
 import { stockholmMidnightUtc } from './prices';
 import type { PriceSlot } from './prices';
+import { chartSlotKeys } from './chart-slot-keys';
 
 const SLOT_MS = 900_000; // 15 min — same elapsed-time slot width lib/oracle.ts's bucketActuals uses
 
@@ -136,12 +137,13 @@ export function actualFlowsByTime(
 ): Record<string, ActualSlotFlows> {
   const out: Record<string, ActualSlotFlows> = {};
   const n = Math.min(prices.length, flows.length);
+  const keys = chartSlotKeys(prices);
   for (let i = 0; i < n; i++) {
     const f = flows[i];
     if (!f) continue;
     const slotEndMs = windowStartMs + (i + 1) * SLOT_MS;
     if (slotEndMs > nowMs) continue; // still in progress or future — never a complete reading
-    out[prices[i].startTime] = f;
+    out[keys[i]] = f;
   }
   return out;
 }

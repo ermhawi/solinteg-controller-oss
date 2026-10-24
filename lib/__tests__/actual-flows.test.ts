@@ -141,6 +141,19 @@ describe('actualFlowsByTime', () => {
     expect(out['2026-06-28T00:30:00']!.gridToBatteryKwh).toBe(2);
   });
 
+  it('does not overwrite the first 02:00 slot with the second DST fold', () => {
+    const repeated = [
+      makePrice('2026-10-25T02:00:00'), makePrice('2026-10-25T02:00:00'),
+    ];
+    const flows = [
+      { gridToBatteryKwh: 0.1, batteryToGridKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0 },
+      { gridToBatteryKwh: 0.5, batteryToGridKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0 },
+    ];
+    const out = actualFlowsByTime(repeated, flows, windowStartMs, windowStartMs + 2 * 900_000);
+    expect(out['2026-10-25T02:00:00'].gridToBatteryKwh).toBe(0.1);
+    expect(out['2026-10-25T02:00:00#2'].gridToBatteryKwh).toBe(0.5);
+  });
+
   it('drops a slot still in progress (end instant after nowMs)', () => {
     const flows = [
       { gridToBatteryKwh: 1, batteryToGridKwh: 0, batteryToLoadKwh: 0, loadFromGridKwh: 0 },
