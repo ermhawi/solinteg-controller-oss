@@ -127,7 +127,17 @@ export const BATTERY_SAVE_DRIFT_W = numEnv(
 export const BATTERY_SAVE_FORECAST_DRAIN_W = numEnv('SOLINTEG_BATTERY_SAVE_FORECAST_DRAIN_W', 220);
 
 const SOC_FLOOR_PCT = numEnv('SOLINTEG_SOC_FLOOR_PCT', 8);
-export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100); // operational floor (2.048 kWh at 8%)
+// Physical/BMS protection floor. Do not raise this to create a planning reserve.
+export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100);
+/**
+ * Minimum energy the ECONOMIC optimizer may plan to keep. Separate from the
+ * inverter/BMS hard floor: the Sundsvall installation uses 20% for planning,
+ * 12% for the physical backstop. A site without an override retains its old
+ * behavior (planning reserve = physical floor).
+ */
+export const BATTERY_PLANNER_RESERVE_KWH = BATTERY_KWH * (
+  Math.max(SOC_FLOOR_PCT, Math.min(98, numEnv('SOLINTEG_PLANNER_RESERVE_PCT', SOC_FLOOR_PCT))) / 100
+);
 
 /**
  * Robust-planning margin on the load forecast inside the DP (dimensionless factor ≥ 1;

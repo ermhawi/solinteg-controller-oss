@@ -259,10 +259,10 @@ describe('producePlan — hold-mode gating', () => {
   });
 });
 
-describe('producePlan — full forecast preview without unapproved physical dispatch', () => {
+describe('producePlan — full forecast price-aware physical dispatch', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('previews 3 days when armed but publishes only settled prices for physical dispatch', async () => {
+  it('publishes the full 3-day forecast-aware economic plan when armed', async () => {
     vi.stubEnv('SOLINTEG_CONTROL_ARMED', '1');
     const makeDay = (date: string) => Array.from({ length: 96 }, (_, i): OptimizerSlot => ({
       ...ALL_SLOTS[0],
@@ -274,12 +274,12 @@ describe('producePlan — full forecast preview without unapproved physical disp
     vi.mocked(buildOptimizerSlots).mockReturnValue([...threeDayInputs, ...makeDay('2026-01-18').slice(0, 4)]);
     const result = await producePlan();
     expect(result.data).toBe(PRICE_DATA);
-    expect(optimizeDispatch).toHaveBeenNthCalledWith(1, threeDayInputs, 7.5, expect.anything());
-    expect(optimizeDispatch).toHaveBeenNthCalledWith(2, actualToday, 7.5, expect.anything());
+    expect(optimizeDispatch).toHaveBeenCalledTimes(1);
+    expect(optimizeDispatch).toHaveBeenCalledWith(threeDayInputs, 7.5, expect.anything());
     expect(logOptimizerRun).toHaveBeenCalledWith(
-      PRICE_DATA.today, PRICE_DATA.hasTomorrow, 7.5, actualToday, DISPATCH_FIXTURE, true,
+      PRICE_DATA.today, PRICE_DATA.hasTomorrow, 7.5, threeDayInputs, DISPATCH_FIXTURE, true,
     );
-    expect(result.dispatchSchedule).toBe(DISPATCH_FIXTURE); // first, 3-day preview result
+    expect(result.dispatchSchedule).toBe(DISPATCH_FIXTURE); // same 3-day physically published plan
     expect(result.controlPlanEndTime).toBe(DISPATCH_FIXTURE.at(-1)?.startTime);
   });
 

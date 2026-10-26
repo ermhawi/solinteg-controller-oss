@@ -1291,7 +1291,7 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
         a, w, expected, skip, detail, numbers = self.run_decision(dl.SOC_RECOVERY_ENTRY_PCT - 1)
         self.assertEqual((a, w, expected, skip), ("charge", dl.SOC_FLOOR_RECOVERY_W, None, False))
         self.assertTrue(numbers["soc_recovery"])
-        self.assertIn("forcing", detail)
+        self.assertIn("charging at", detail)
 
     def test_battery_save_does_not_win_over_recovery(self):
         a, w, *_ = self.run_decision(dl.SOC_RECOVERY_ENTRY_PCT - 1,

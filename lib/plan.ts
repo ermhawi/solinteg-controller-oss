@@ -269,32 +269,13 @@ export async function producePlan(): Promise<PlanResult> {
         batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
         terminalValueOrePerKwh,
       };
-      // Restore the full three-day *forecast plan* in the dashboard. Do not let its
-      // high-power, unverified forecast-funded charge slots reach the physically armed
-      // dispatcher until per-phase L3 current protection is independently verified.
-      // `logOptimizerRun` is the ONLY source of executable plans for dispatch_loop.py.
+      // Full three-day economic plan is both displayed and published to the
+      // dispatcher. The executor separately limits high-power grid charging
+      // against fresh L3 CT readings, or falls back to 300 W when unverified.
+      // Do not truncate at midnight: that changes TODAY's economic decisions.
       dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, options);
-      const controlSlots =
-        process.env.SOLINTEG_CONTROL_ARMED === '1' &&
-        optimizerSlots.some((slot) => slot.priceSource === 'forecast')
-          ? trimIncompleteTerminalDays(
-              optimizerSlots.filter((slot) => slot.priceSource !== 'forecast'), data.today,
-            )
-          : optimizerSlots;
-      const controlSchedule = controlSlots === optimizerSlots
-        ? dispatchSchedule
-        : optimizeDispatch(controlSlots, startSoc, {
-            ...options,
-            terminalValueOrePerKwh: terminalEnergyValueOre(controlSlots) * TERMINAL_VALUE_FACTOR,
-          });
-      logOptimizerRun(data.today, data.hasTomorrow, startSoc, controlSlots, controlSchedule, socIsLive);
-      controlPlanEndTime = socIsLive ? controlSchedule.at(-1)?.startTime ?? null : null;
-      if (controlSlots !== optimizerSlots) {
-        console.info(
-          `forecast preview extends to ${horizonEnd}; physical dispatch limited to ` +
-          `${controlPlanEndTime ?? 'no live plan'} until phase-current safety is verified`,
-        );
-      }
+      logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
+      controlPlanEndTime = socIsLive ? dispatchSchedule.at(-1)?.startTime ?? null : null;
     } catch (err) {
       // non-fatal — chart renders without dispatch overlay — but logged so a failure here
       // (e.g. optimizeDispatch throwing) isn't as invisible as the price_snapshots gap was.

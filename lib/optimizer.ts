@@ -3,6 +3,7 @@ import {
   BATTERY_MAX_KW,
   BATTERY_MAX_SOC_KWH,
   BATTERY_MIN_SOC_KWH,
+  BATTERY_PLANNER_RESERVE_KWH,
   BATTERY_WEAR_COST_ORE_PER_KWH,
   DEFERRAL_HORIZON_HOURS,
   EFF_ONE_WAY,
@@ -45,7 +46,10 @@ const SURVIVAL_SOLAR_SLOT_KWH = 0.05;
 // ~0.98 claimed against ~0.95 real per leg, worth roughly 8 öre per stored kWh at a 90 öre buy
 // price, which is more than the wear cost and enough to flip marginal cycling decisions.
 const ONE_WAY_EFF = EFF_ONE_WAY;
-const MIN_SOC_KWH = BATTERY_MIN_SOC_KWH;
+// Economic decisions may discharge down to the PLANNING reserve, never merely
+// to the inverter/BMS hard floor. The executor's emergency floor stays separate.
+const MIN_SOC_KWH = Math.max(BATTERY_MIN_SOC_KWH, BATTERY_PLANNER_RESERVE_KWH);
+const PLANNER_RESERVE_ENABLED = BATTERY_PLANNER_RESERVE_KWH > BATTERY_MIN_SOC_KWH + 1e-9;
 /**
  * The highest SoC a FORCED charge may plan for. `inverter_control.force_charge` refuses to charge
  * above `SOLINTEG_SOC_CEILING_PCT` and returns to auto instead, so a plan that assumes the full pack
@@ -738,8 +742,26 @@ function dpCore(
           : 0;
       let best = Infinity;
       let bestJ = s;
+      // An initially depleted battery must actively climb back toward the
+      // PLANNING reserve, even on a flat-price day. The old guard only
+      // prevented j<s below the floor: it allowed j=s forever at 12%, so the
+      // planner displayed a permanently empty battery and fought recovery.
+      // If the reserve cannot be reached within this 15-minute slot, require
+      // only the maximum FEASIBLE charge after house load, never a fake target.
+      const availableChargeInput = Math.min(
+        BATTERY_SLOT_KWH, Math.max(0, GRID_SLOT_KWH - lr) + sr,
+      );
+      const maxChargeLevel = Math.min(
+        SOC_LEVELS - 1,
+        Math.floor((soc + availableChargeInput * ONE_WAY_EFF - floorSoc) / step + 1e-9),
+      );
+      const minAllowedLevel = s < minSocLevel
+        ? (PLANNER_RESERVE_ENABLED
+          ? Math.min(minSocLevel, Math.max(s, maxChargeLevel))
+          : s) // legacy behavior: never discharge below physical floor, but don't force a buy
+        : minSocLevel;
       for (let j = lo; j <= hi; j++) {
-        if (j < s && j < minSocLevel) continue; // never discharge below the floor
+        if (j < minAllowedLevel) continue; // protect reserve, including when starting below it
         if (j >= s && j < naturalFloor && !holdOK) continue; // auto-charge floor; relaxed when hold is gated ON
         // No FORCED charge above the safety ceiling — force_charge would refuse it and return to
         // auto. Anything up to naturalFloor is free solar the inverter absorbs on its own, so it is
@@ -801,7 +823,7 @@ function dpCore(
         // The battery-save hold is an empirical correction for physical inverter behaviour.
         // It is not an optional arbitrage action: represent it whenever the economic choice is
         // idle, while a genuinely better active charge/discharge decision still wins.
-        if (holdJ < s && actualHoldOutput > 0 && holdF.feasible && bestJ === s) {
+        if (holdJ >= minSocLevel && holdJ < s && actualHoldOutput > 0 && holdF.feasible && bestJ === s) {
           best =
             holdF.gridImport * buy -
             holdF.gridExport * sell +

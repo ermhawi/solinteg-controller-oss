@@ -263,6 +263,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
+from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
     FreezeNotEnforced,
@@ -314,6 +315,10 @@ EXECUTOR_ACTIONS = ("freeze",)
 BATTERY_KWH = float(os.environ.get("SOLINTEG_BATTERY_KWH", "25.6"))  # usable capacity
 SOC_FLOOR_PCT = float(os.environ.get("SOLINTEG_SOC_FLOOR_PCT", "8"))
 BATTERY_FLOOR_KWH = BATTERY_KWH * SOC_FLOOR_PCT / 100
+# A higher ECONOMIC reserve must not raise the physical/BMS emergency floor.
+PLANNER_RESERVE_PCT = max(
+    SOC_FLOOR_PCT, min(98.0, float(os.environ.get("SOLINTEG_PLANNER_RESERVE_PCT", str(SOC_FLOOR_PCT))))
+)
 # The hold DECISION now comes from the plan's own batterySaveDriftKwh marker (see is_planned_hold),
 # not from a re-derived load threshold that disagreed with the optimizer's own in a 200-420 W band.
 # loadFromGridKwh still caps the target in battery_save_target -- a hold may not discharge more than
@@ -385,6 +390,11 @@ SOC_FLOOR_GUARD_HEADROOM_KWH = float(os.environ.get("DISPATCH_SOC_FLOOR_GUARD_HE
 # than the inverter's minimum. This is an operational target, not a claimed BMS setting.
 SOC_RECOVERY_EXIT_PCT = float(os.environ.get("DISPATCH_SOC_RECOVERY_EXIT_PCT", str(SOC_FLOOR_PCT + 8)))
 SOC_RECOVERY_ENTRY_PCT = (BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH) / BATTERY_KWH * 100
+if PLANNER_RESERVE_PCT > SOC_FLOOR_PCT:
+    # At 20% planned reserve, recover again below 19.5%, until 21%.
+    # The independent hard inverter/BMS floor remains 12%.
+    SOC_RECOVERY_ENTRY_PCT = max(SOC_RECOVERY_ENTRY_PCT, PLANNER_RESERVE_PCT - 0.5)
+    SOC_RECOVERY_EXIT_PCT = max(SOC_RECOVERY_EXIT_PCT, PLANNER_RESERVE_PCT + 1.0)
 if not SOC_RECOVERY_ENTRY_PCT < SOC_RECOVERY_EXIT_PCT < 98:
     raise ValueError("DISPATCH_SOC_RECOVERY_EXIT_PCT must exceed the recovery entry and be below 98%")
 # Start conservatively: after a restart the old process may have been recovering between the
@@ -400,6 +410,15 @@ _last_recovery_nonresponse_report = 0.0
 # main-fuse rating in watts once your own probe confirms the inverter honours it; it is a bound,
 # not a setpoint, so it deliberately outlives this process rather than being reverted on exit.
 IMPORT_LIMIT_W = int(os.environ.get("DISPATCH_IMPORT_LIMIT_W", "0"))
+# Software charge-side economic budget for house L3. Never a fuse guarantee.
+# >300 W charging requires fresh phase CT readings AND read-back that inverter
+# 'Grid Unbalanced Output' (reg 50006) remains disabled (=0).
+L3_CHARGE_GUARD_MODE = os.environ.get("DISPATCH_L3_CHARGE_GUARD_MODE", "shadow").lower()
+if L3_CHARGE_GUARD_MODE not in ("0", "shadow", "1"):
+    raise ValueError("DISPATCH_L3_CHARGE_GUARD_MODE must be 0, shadow, or 1")
+L3_CHARGE_BUDGET_W = int(os.environ.get("DISPATCH_L3_CHARGE_BUDGET_W", "4000"))
+if L3_CHARGE_BUDGET_W < 300 or L3_CHARGE_BUDGET_W > 4600:
+    raise ValueError("DISPATCH_L3_CHARGE_BUDGET_W must be between 300 and 4600 W")
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
 # Same env vars lib/constants.ts reads (kept in sync by the cross-language test). ONE_WAY_EFF must
@@ -1135,7 +1154,7 @@ def soc_floor_recovery_target(action: str, power_w: int, live_soc_kwh, surplus_w
     """
     if live_soc_kwh is None:
         return action, power_w
-    entry_kwh = BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH
+    entry_kwh = BATTERY_KWH * SOC_RECOVERY_ENTRY_PCT / 100
     exit_kwh = BATTERY_KWH * SOC_RECOVERY_EXIT_PCT / 100
     if live_soc_kwh >= entry_kwh and (not recovery_active or live_soc_kwh >= exit_kwh):
         return action, power_w
@@ -1169,7 +1188,7 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
     if live_soc_kwh is None:
         return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
 
-    entry_kwh = BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH
+    entry_kwh = BATTERY_KWH * SOC_RECOVERY_ENTRY_PCT / 100
     exit_kwh = BATTERY_KWH * SOC_RECOVERY_EXIT_PCT / 100
     was_active = _soc_recovery_active
     _soc_recovery_active = live_soc_kwh < entry_kwh or (was_active and live_soc_kwh < exit_kwh)
@@ -1189,9 +1208,63 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
     if not was_active:
         log.warning("SoC recovery activated at %.2f%%; charging until %.2f%%", soc_pct,
                     SOC_RECOVERY_EXIT_PCT)
+    # If the economic planner already scheduled a genuine grid/solar charge,
+    # do NOT replace its cheap-hour rate with a permanent 300 W trickle.
+    # Phase/CT budget checks run after this function and can still throttle it.
+    # A solar-funding veto must never be converted into a large grid buy here.
+    if action == "charge" and not solar_skip and power_w > recovery_w:
+        recovery_w = power_w
+        numbers["soc_recovery_kept_planned_charge"] = True
     detail = (f"SoC recovery {soc_pct:.2f}% -> {SOC_RECOVERY_EXIT_PCT:.1f}%: "
-              f"forcing {recovery_w} W charge regardless of optimizer ({action} {power_w} W); {detail}")
+              f"charging at {recovery_w} W (optimizer {action} {power_w} W); {detail}")
     return "charge", recovery_w, None, False, detail, numbers
+
+
+
+def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
+                    now: datetime):
+    """Limit high-power charging using *verified* fresh L3 readings, never EVCC.
+
+    The independent Sunwoda low-SoC recovery stays at 300 W when phase data is
+    unknown. This is not a fuse protection system (CT updates are not instant).
+    """
+    if action != "charge" or power_w <= SOC_FLOOR_RECOVERY_W or L3_CHARGE_GUARD_MODE == "0":
+        return power_w, detail, numbers, False
+
+    reading = common.read_json(LIVE_JSON_PATH)
+    house_l3_w = observe_l3_house_w(reading, now)
+    balanced_output = False
+    if house_l3_w is not None:
+        inv = None
+        try:
+            inv = Inverter()
+            balanced_output = inv.read_u16(50006) == 0
+        except Exception as exc:  # noqa: BLE001
+            log.warning("L3 charge guard: balance register 50006 unavailable (%s)", exc)
+        finally:
+            if inv is not None:
+                inv.close()
+
+    capped_w, reason = cap_grid_charge_w(
+        power_w,
+        house_l3_w=house_l3_w,
+        balanced_output=balanced_output,
+        budget_w=L3_CHARGE_BUDGET_W,
+        efficiency=ONE_WAY_EFF,
+        min_charge_w=SOC_FLOOR_RECOVERY_W,
+    )
+    numbers["l3_charge_guard_mode"] = L3_CHARGE_GUARD_MODE
+    numbers["l3_charge_guard_balanced"] = balanced_output
+    numbers["l3_charge_guard_budget_w"] = L3_CHARGE_BUDGET_W
+    if house_l3_w is not None:
+        numbers["l3_charge_guard_load_w"] = round(house_l3_w)
+    numbers["l3_charge_guard_suggested_w"] = capped_w
+    if L3_CHARGE_GUARD_MODE == "shadow":
+        return power_w, f"{detail}; L3 charge guard SHADOW: {reason}", numbers, False
+    limited = capped_w < power_w
+    if limited:
+        log.info("L3 charge guard limited battery charging: %s", reason)
+    return capped_w, f"{detail}; L3 charge guard: {reason}", numbers, limited
 
 
 def apply_target(inv: Inverter, action: str, power_w: int) -> None:
@@ -1616,6 +1689,12 @@ def main() -> None:
                 last_target = None
             action, power_w, expected_soc_kwh, solar_skip, detail, numbers = prioritize_soc_recovery(
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
+            power_w, detail, numbers, l3_limited = guard_l3_charge(
+                action, power_w, detail, numbers, iteration_now)
+            if l3_limited:
+                # This is intentionally slower than the planned SoC trajectory.
+                # Its divergence is not a reason to drop into battery-draining Auto.
+                expected_soc_kwh = None
             effective_action, effective_power, solar_skipped_now = effective_target(
                 action, power_w, solar_skip)
             target = (slot_time, effective_action, effective_power)
