@@ -9,6 +9,7 @@ import {
   fetchDay,
   mergePriceHorizon,
   isUsablePlaneraSource,
+  isValidPlaneraMetadata,
   fillPriceGaps,
 } from '../prices';
 import { EXPORT_BONUS_ORE, SUPPLIER_SURCHARGE_ORE, VAT_RATE } from '../constants';
@@ -81,10 +82,25 @@ describe('stockholmToUtc', () => {
   });
 });
 
-describe('PlaneraElen source selection', () => {
-  it('keeps actual rows as a fallback when the primary day-ahead feed lags', () => {
+describe('PlaneraElen source selection and live response metadata', () => {
+  it('accepts current and issued forecasts but never mistakes them for settled spot prices', () => {
     expect(isUsablePlaneraSource('actual')).toBe(true);
     expect(isUsablePlaneraSource('forecast')).toBe(true);
+    expect(isUsablePlaneraSource('forecast_issued')).toBe(true);
+    const issued = forecastToSlot({
+      time: '2026-10-26T00:00:00Z', price: 15.32, source: 'forecast_issued',
+    }, 11.5);
+    expect(issued.source).toBe('forecast');
+    expect(issued.startTime).toBe('2026-10-26T01:00:00');
+  });
+
+  it('requires the expected SE2 15-minute EUR/MWh schema before using provider prices', () => {
+    const meta = { area: 'SE2', currency: 'EUR', price_unit: 'EUR/MWh', resolution_minutes: 15 };
+    expect(isValidPlaneraMetadata(meta, 'SE2')).toBe(true);
+    expect(isValidPlaneraMetadata({ ...meta, area: 'SE3' }, 'SE2')).toBe(false);
+    expect(isValidPlaneraMetadata({ ...meta, price_unit: 'SEK/kWh' }, 'SE2')).toBe(false);
+    expect(isValidPlaneraMetadata({ ...meta, currency: 'SEK' }, 'SE2')).toBe(false);
+    expect(isValidPlaneraMetadata({ ...meta, resolution_minutes: 60 }, 'SE2')).toBe(false);
   });
 });
 
@@ -175,6 +191,29 @@ describe('computeMaxAge', () => {
 });
 
 describe('mergePriceHorizon', () => {
+  it('retains three complete calendar days: authoritative today plus two forecast days', () => {
+    const row = (date: string, i: number, source: 'actual' | 'forecast') => ({
+      startTime: `${date}T${String(Math.floor(i / 4)).padStart(2, '0')}:${String(i % 4 * 15).padStart(2, '0')}:00`,
+      endTime: '',
+      price: source === 'actual' ? 35 : 55,
+      priceIncludingTaxAndSurcharge: source === 'actual' ? 49 : 74,
+      source,
+    });
+    const actual = Array.from({ length: 96 }, (_, i) => row('2026-10-26', i, 'actual'));
+    const forecast = [
+      ...Array.from({ length: 96 }, (_, i) => row('2026-10-27', i, 'forecast')),
+      ...Array.from({ length: 96 }, (_, i) => row('2026-10-28', i, 'forecast')),
+      ...Array.from({ length: 96 }, (_, i) => row('2026-10-29', i, 'forecast')),
+    ];
+    const result = mergePriceHorizon(actual, forecast, '2026-10-29T00:00:00');
+    expect(result.prices).toHaveLength(3 * 96);
+    expect(result.actualSlots).toBe(96);
+    expect(result.forecastSlots).toBe(192);
+    expect(result.prices[0].startTime).toBe('2026-10-26T00:00:00');
+    expect(result.prices.at(-1)?.startTime).toBe('2026-10-28T23:45:00');
+    expect(result.prices.at(-1)?.source).toBe('forecast');
+  });
+
   it('fills missing future slots from the forecast and keeps actual prices authoritative', () => {
     const actual = [
       { startTime: '2026-08-27T12:00:00', endTime: '2026-08-27T12:15:00', price: 100, priceIncludingTaxAndSurcharge: 140, source: 'actual' as const },

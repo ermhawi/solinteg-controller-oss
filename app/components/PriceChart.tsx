@@ -191,7 +191,10 @@ export default function PriceChart({
   const nowPoint = nowTime ? chartData.find((d) => d.time === nowTime) : undefined;
   const nowIndex = nowPoint ? timeIndex.get(nowPoint.time) : undefined;
   const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
+  const afterTomorrowIndex = chartData.findIndex((point) => point.time.slice(0, 10) > data.tomorrow);
   const todayEnd = tomorrowIndex > 0 ? tomorrowIndex - 1 : fullEnd;
+  const tomorrowEnd = afterTomorrowIndex > 0 ? afterTomorrowIndex - 1 : fullEnd;
+  const dayCount = new Set(chartData.map((point) => point.time.slice(0, 10))).size;
   // The first forecast slot is the exact handover from published day-ahead prices to
   // PlaneraElen's estimate. Keep this derived from provenance, not from a date boundary:
   // the forecast may begin part-way through a day when only some actual slots are available.
@@ -376,10 +379,11 @@ export default function PriceChart({
               Elpriser
             </div>
             <div className="text-[12px] font-medium" style={{ color: 'var(--text-muted)' }}>
-              {data.today} · idag{data.hasTomorrow ? ' & imorgon' : ''}
-              {!data.hasTomorrow && (
+              {data.today} · {dayCount} dygn
+              {hasMixedPriceSources && ' · inklusive prognos'}
+              {!data.hasTomorrow && tomorrowIndex > 0 && (
                 <span className="ml-2" style={{ color: 'var(--color-now)' }}>
-                  · Imorgons priser ej tillgängliga ännu
+                  · Imorgon: prognos (spotpris ännu ej publicerat)
                 </span>
               )}
             </div>
@@ -425,7 +429,7 @@ export default function PriceChart({
           style={rangePreset === 'all' || (!isMobile && zoomRange == null) ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.75 }}
           onClick={() => setVisibleRange(0, fullEnd, 'all')}
         >
-          Hela
+          {dayCount === 3 ? '3 dygn' : 'Hela'}
         </button>
         <button
           type="button"
@@ -439,8 +443,8 @@ export default function PriceChart({
           <button
             type="button"
             className="chip min-h-11 rounded-xl px-3 text-[13px] font-semibold min-[900px]:min-h-0 min-[700px]:py-1"
-            style={rangePreset === 'tomorrow' && zoomRange?.start === tomorrowIndex && zoomRange?.end === fullEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
-            onClick={() => setVisibleRange(tomorrowIndex, fullEnd, 'tomorrow')}
+            style={rangePreset === 'tomorrow' && zoomRange?.start === tomorrowIndex && zoomRange?.end === tomorrowEnd ? { border: '1px solid var(--divider)' } : { color: 'var(--text-muted)', opacity: 0.65 }}
+            onClick={() => setVisibleRange(tomorrowIndex, tomorrowEnd, 'tomorrow')}
           >
             Imorgon
           </button>

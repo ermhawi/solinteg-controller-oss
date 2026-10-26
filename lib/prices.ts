@@ -40,7 +40,9 @@ interface PlaneraPriceSlot {
   time: string;
   // PlaneraElen's payload is EUR/MWh, matching the API metadata.
   price: number;
-  source: 'actual' | 'forecast';
+  source: 'actual' | 'forecast' | 'forecast_issued';
+  // The new API also marks older, already-issued model predictions as forecast_issued.
+  // These are NEVER authoritative actual prices, even when the delivery date is today.
   // Forecast rows also carry an uncertainty band (EUR/MWh). `low`/`high` is the inner band;
   // `very_low`/`very_high` the outer one, which is wide enough to be useless as a planning input
   // (one observed three-day-out row spanned −28.48 to +147.46 EUR/MWh). Only the inner band is read.
@@ -50,11 +52,27 @@ interface PlaneraPriceSlot {
 
 interface PlaneraResponse {
   data?: PlaneraPriceSlot[];
+  meta?: {
+    area?: string;
+    currency?: string;
+    price_unit?: string;
+    resolution_minutes?: number;
+  };
 }
 
 /** PlaneraElen's actual day-ahead rows are a valid fallback while the primary feed lags. */
 export function isUsablePlaneraSource(source: PlaneraPriceSlot['source']): boolean {
-  return source === 'actual' || source === 'forecast';
+  return source === 'actual' || source === 'forecast' || source === 'forecast_issued';
+}
+
+/** Reject incompatible provider metadata rather than dispatching against mis-scaled prices. */
+export function isValidPlaneraMetadata(meta: PlaneraResponse['meta'], area: string): boolean {
+  return meta == null || (
+    meta.area === area &&
+    meta.currency === 'EUR' &&
+    meta.price_unit === 'EUR/MWh' &&
+    meta.resolution_minutes === 15
+  );
 }
 
 /**
@@ -93,7 +111,7 @@ export function forecastToSlot(p: PlaneraPriceSlot, eurSekRate = 1): PriceSlot {
     endTime: localTime(endLocal),
     price: Math.round((spot + EXPORT_BONUS_ORE) * 100) / 100,
     priceIncludingTaxAndSurcharge: Math.round((spot + SUPPLIER_SURCHARGE_ORE) * (1 + VAT_RATE) * 100) / 100,
-    source: p.source,
+    source: p.source === 'actual' ? 'actual' : 'forecast',
     ...(bandOre !== undefined ? { uncertaintyOre: bandOre } : {}),
   };
 }
@@ -229,13 +247,31 @@ function interpolatedSlot(date: string, startMin: number, spot: number): PriceSl
 }
 
 /**
- * Fetch PlaneraElen without Next's patched fetch implementation. This is deliberately a direct
- * Node HTTPS request: the forecast changes during the day, and the normal fetch cache returned an
- * older forecast even when the route itself was dynamic and marked no-store.
+ * Cache ONLY the third-party forecast, for the same 15 minutes as its website's client.
+ * The authoritative day-ahead spot prices in fetchPricesUncached() remain uncached.
+ * A module-local cache (not Next's patched fetch cache) is shared by page/API/replan callers.
  */
+const PLANERA_FORECAST_TTL_MS = 15 * 60_000;
+let lastForecast: { expiresAt: number; prices: PriceSlot[] } | null = null;
+let pendingForecast: Promise<PriceSlot[]> | null = null;
+
 async function fetchPlaneraPrices(): Promise<PriceSlot[]> {
-  const url = new URL(`https://api.planeraelen.se/api/price-data?area=${PRICE_ZONE}`);
-  url.searchParams.set('_', `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  if (lastForecast && Date.now() < lastForecast.expiresAt) return lastForecast.prices;
+  if (pendingForecast) return pendingForecast;
+  pendingForecast = fetchPlaneraPricesFresh()
+    .then((prices) => {
+      lastForecast = { expiresAt: Date.now() + PLANERA_FORECAST_TTL_MS, prices };
+      return prices;
+    })
+    .finally(() => { pendingForecast = null; });
+  return pendingForecast;
+}
+
+/** Bypass Next's patched fetch cache, but honour the upstream HTTP cache headers. */
+async function fetchPlaneraPricesFresh(): Promise<PriceSlot[]> {
+  // The old api.planeraelen.se/api/price-data returns 410 Gone since Oct 2026.
+  // The provider's own current frontend requests this same-origin JSON endpoint.
+  const url = new URL(`https://planeraelen.se/api/price-data?area=${PRICE_ZONE}`);
   const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   const payload = await new Promise<PlaneraResponse>((resolve, reject) => {
     const req = httpsRequest(
@@ -244,8 +280,6 @@ async function fetchPlaneraPrices(): Promise<PriceSlot[]> {
         method: 'GET',
         headers: {
           'User-Agent': 'solinteg-controller',
-          'Cache-Control': 'no-cache',
-          Pragma: 'no-cache',
           Accept: 'application/json',
         },
         signal,
@@ -272,6 +306,9 @@ async function fetchPlaneraPrices(): Promise<PriceSlot[]> {
     req.end();
   });
   if (!Array.isArray(payload.data)) throw new Error('PlaneraElen forecast response has no data array');
+  if (!isValidPlaneraMetadata(payload.meta, PRICE_ZONE)) {
+    throw new Error('PlaneraElen metadata mismatch (area, currency, units or resolution)');
+  }
   // Keep both kinds of rows. The primary Nord Pool-derived feed remains authoritative when it
   // has a slot, but PlaneraElen may publish tomorrow as `actual` before that feed does. Dropping
   // those rows leaves a hole in the chart and falsely reports that tomorrow is unavailable.
