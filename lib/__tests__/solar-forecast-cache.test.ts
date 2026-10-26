@@ -2,7 +2,7 @@
 // exists to prevent (a half-written or ancient file silently reaching the optimizer) lives
 // precisely in the read/parse/validate seam that an fs mock would paper over.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,7 +34,22 @@ describe('saveSolarForecast / readFreshSolarForecast', () => {
   it('leaves no .tmp file behind (the write is atomic via rename)', async () => {
     const { saveSolarForecast } = await load();
     await saveSolarForecast(FORECAST);
-    await expect(readFile(`${cachePath}.tmp`, 'utf8')).rejects.toThrow();
+    expect(await readdir(dir)).toEqual(['solar-forecast-cache.json']);
+  });
+
+  it('persists concurrent writes without competing for the same .tmp file', async () => {
+    const { saveSolarForecast, isValidSolarForecastSnapshot } = await load();
+    const forecasts = Array.from({ length: 16 }, (_, i) => ({
+      '2026-01-15': new Array(96).fill(i / 16),
+    }));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await Promise.all(forecasts.map(saveSolarForecast));
+    expect(errSpy).not.toHaveBeenCalled();
+    const snapshot = JSON.parse(await readFile(cachePath, 'utf8'));
+    expect(isValidSolarForecastSnapshot(snapshot)).toBe(true);
+    expect(forecasts).toContainEqual(snapshot.forecast);
+    expect(await readdir(dir)).toEqual(['solar-forecast-cache.json']);
+    errSpy.mockRestore();
   });
 
   it('returns null when no file exists — a fresh install is not an error', async () => {

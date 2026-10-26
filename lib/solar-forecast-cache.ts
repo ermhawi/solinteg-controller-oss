@@ -1,4 +1,5 @@
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Last-good solar forecast, persisted to disk — the tier between the live weather sources and
@@ -73,11 +74,12 @@ export async function saveSolarForecast(forecast: Record<string, number[]>): Pro
     forecast,
   };
   if (!isValidSolarForecastSnapshot(snapshot)) return; // nothing worth persisting
-  const tmp = `${CACHE_PATH}.tmp`;
+  const tmp = `${CACHE_PATH}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(snapshot), 'utf8');
     await rename(tmp, CACHE_PATH);
   } catch (err) {
+    await unlink(tmp).catch(() => {});
     console.error('saveSolarForecast failed (continuing without a persisted forecast):', err);
   }
 }
