@@ -1233,17 +1233,11 @@ def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
 
     reading = common.read_json(LIVE_JSON_PATH)
     house_l3_w = observe_l3_house_w(reading, now)
-    balanced_output = False
-    if house_l3_w is not None:
-        inv = None
-        try:
-            inv = Inverter()
-            balanced_output = inv.read_u16(50006) == 0
-        except Exception as exc:  # noqa: BLE001
-            log.warning("L3 charge guard: balance register 50006 unavailable (%s)", exc)
-        finally:
-            if inv is not None:
-                inv.close()
+    # Poller reads 50006 with its EXISTING Modbus session, so the dispatcher
+    # does not open an extra session immediately before the physical write.
+    # Unknown, missing or stale readback => fail-closed to the 300 W baseline.
+    raw_balance = reading.get("grid_unbalanced_output_raw") if isinstance(reading, dict) else None
+    balanced_output = (house_l3_w is not None and type(raw_balance) is int and raw_balance == 0)
 
     capped_w, reason = cap_grid_charge_w(
         power_w,

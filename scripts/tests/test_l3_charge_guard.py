@@ -30,6 +30,7 @@ def reading(l3=-1200):
         "inverter_ac_w": inverter,
         "house_load_w": inverter - grid,
         "pv_w": 0,
+        "grid_unbalanced_output_raw": 0,
     }
 
 
@@ -82,36 +83,48 @@ class L3GuardPureTests(unittest.TestCase):
 
 class L3GuardIntegrationTests(unittest.TestCase):
     def guard(self, *, mode="1", l3=-4800, balance=0, missing=False):
-        fake = mock.Mock()
-        fake.read_u16.return_value = balance
+        data = reading(l3)
+        if balance is not None:
+            data["grid_unbalanced_output_raw"] = balance
+        else:
+            data.pop("grid_unbalanced_output_raw")
         with mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", mode), \
              mock.patch.object(dl, "L3_CHARGE_BUDGET_W", 4000), \
-             mock.patch.object(dl, "Inverter", return_value=fake), \
-             mock.patch.object(dl.common, "read_json", return_value=None if missing else reading(l3)):
+             mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl.common, "read_json", return_value=None if missing else data):
             result = dl.guard_l3_charge("charge", 6600, "planned cheap charge", {}, NOW)
-        return result, fake
+        inverter.assert_not_called()  # avoid a second TCP connection before Modbus writes
+        return result
 
     def test_high_l3_when_armed_reduces_charge(self):
-        (power, detail, numbers, clipped), fake = self.guard()
+        power, detail, numbers, clipped = self.guard()
         self.assertEqual(power, 300)
         self.assertTrue(clipped)
         self.assertEqual(numbers["l3_charge_guard_suggested_w"], 300)
-        fake.read_u16.assert_called_once_with(50006)
-        fake.close.assert_called_once()
+        self.assertTrue(numbers["l3_charge_guard_balanced"])
 
     def test_unbalanced_output_reduces_charge(self):
-        (power, _, _, clipped), _ = self.guard(l3=-1000, balance=1)
+        power, _, _, clipped = self.guard(l3=-1000, balance=1)
+        self.assertEqual(power, 300)
+        self.assertTrue(clipped)
+
+    def test_missing_balance_readback_fails_closed(self):
+        power, _, _, clipped = self.guard(l3=-1000, balance=None)
+        self.assertEqual(power, 300)
+        self.assertTrue(clipped)
+
+    def test_boolean_balance_readback_rejected(self):
+        power, _, _, clipped = self.guard(l3=-1000, balance=False)
         self.assertEqual(power, 300)
         self.assertTrue(clipped)
 
     def test_missing_ct_does_not_read_modbus_and_reduces_charge(self):
-        (power, _, _, clipped), fake = self.guard(missing=True)
+        power, _, _, clipped = self.guard(missing=True)
         self.assertEqual(power, 300)
         self.assertTrue(clipped)
-        fake.read_u16.assert_not_called()
 
     def test_shadow_never_changes_physical_target(self):
-        (power, detail, numbers, clipped), _ = self.guard(mode="shadow")
+        power, detail, numbers, clipped = self.guard(mode="shadow")
         self.assertEqual(power, 6600)
         self.assertFalse(clipped)
         self.assertEqual(numbers["l3_charge_guard_suggested_w"], 300)

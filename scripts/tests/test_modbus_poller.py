@@ -115,6 +115,7 @@ def seed_client(
     c.regs[33001] = soh_raw
     c.regs[33003] = temp_raw  # 33002 is unused/reserved
     c.regs[50000] = work_mode_raw
+    c.regs[50006] = 0  # Grid Unbalanced Output disabled: equal phase power
     return c
 
 
@@ -130,6 +131,7 @@ class ReadInverterTests(unittest.TestCase):
         self.assertEqual(data["pv_w"], 6080)
         self.assertEqual(data["battery_w"], -5000)
         self.assertEqual(data["work_mode_raw"], 0x101)
+        self.assertEqual(data["grid_unbalanced_output_raw"], 0)
         self.assertEqual((data["meter_l1_w"], data["meter_l2_w"], data["meter_l3_w"]), (1500, 1460, 1420))
 
     def test_per_phase_meter_keeps_sign_and_order(self):
@@ -218,6 +220,28 @@ class ReadInverterTests(unittest.TestCase):
         self.assertEqual(second["house_load_w"], 6100 - 4380)
         self.assertEqual(calls.count(10994), 1)  # no repeated unsupported Modbus read
         self.assertEqual(calls.count(11000), 2)
+
+    def test_optional_balance_register_failure_is_nonfatal_and_fail_closed(self):
+        c = seed_client()
+        original_read = c.read_holding_registers
+
+        def read(addr, count=1, device_id=1):
+            if addr == 50006:
+                return FakeModbusResult(error=True)
+            return original_read(addr, count=count, device_id=device_id)
+
+        c.read_holding_registers = read
+        data = mp.read_inverter(c)
+        self.assertIsNone(data["grid_unbalanced_output_raw"])
+        self.assertEqual(data["soc_pct"], 99.0)
+        self.assertEqual(data["battery_w"], -5000)
+
+    def test_optional_unbalanced_register_is_visible_to_the_guard(self):
+        c = seed_client()
+        c.regs[50006] = 1
+        data = mp.read_inverter(c)
+        self.assertEqual(data["grid_unbalanced_output_raw"], 1)
+        self.assertIn(("read", 50006, 1), c.calls)
 
     def test_inconsistent_phase_sum_is_ignored_without_losing_core_readings(self):
         data = mp.read_inverter(seed_client(grid_w=4380, phases=(0, 0, 0)))

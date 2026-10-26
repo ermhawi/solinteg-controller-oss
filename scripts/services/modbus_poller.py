@@ -151,6 +151,18 @@ def read_inverter(client: ModbusTcpClient) -> dict:
     if r4.isError():
         raise IOError(f"Block 50000 read failed: {r4}")
 
+    # Optional, read-only L3 charge-guard prerequisite, using THIS SAME Modbus
+    # TCP session. Opening a separate connection from the dispatcher just before
+    # sending a battery setpoint was rejected by the inverter (ECONNREFUSED).
+    # If unsupported, keep normal telemetry but fail high-power charging closed.
+    grid_unbalanced_output_raw = None
+    try:
+        balance = client.read_holding_registers(50006, count=1, device_id=SLAVE_ID)
+        if not balance.isError() and len(balance.registers) == 1:
+            grid_unbalanced_output_raw = balance.registers[0]
+    except Exception:  # noqa: BLE001 - optional guard read never breaks live SoC
+        pass
+
     regs = r1.registers
     meter_l1_w, meter_l2_w, meter_l3_w = phase_w
     grid_w         = s32(regs[offset], regs[offset + 1])        # 11000  +ve = export, -ve = import
@@ -187,6 +199,7 @@ def read_inverter(client: ModbusTcpClient) -> dict:
         "house_load_w": house_load_w,
         "work_mode": WORK_MODES.get(work_mode_raw, f"Unknown(0x{work_mode_raw:X})"),
         "work_mode_raw": work_mode_raw,
+        "grid_unbalanced_output_raw": grid_unbalanced_output_raw,
     }
 
 
