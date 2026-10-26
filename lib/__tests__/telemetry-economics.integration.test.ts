@@ -104,4 +104,31 @@ describe('telemetry → economics integration', () => {
     const again = telemetry.readDailyEconomics(new Date('2026-07-02T11:00:00Z'));
     expect(again.get('2026-07-01')!.costKr).toBeCloseTo(day.costKr);
   });
+
+  it('readDailySystemEconomics caches elapsed days and refreshes today', () => {
+    const today = new Date('2026-07-01T12:15:00Z');
+    const initial = telemetry.readDailySystemEconomics(today);
+    expect(initial.get('2026-07-01')!.readingCount).toBe(2);
+
+    const db = new DatabaseSync(DB_PATH);
+    db.prepare('INSERT INTO readings (timestamp, pv_w, grid_w, house_load_w) VALUES (?, ?, ?, ?)')
+      .run('2026-07-01T12:03:00.000Z', 0, -1000, 1000);
+    db.close();
+
+    const fresh = telemetry.readDailySystemEconomics(today);
+    expect(fresh.get('2026-07-01')!.readingCount).toBe(3);
+
+    const tomorrow = new Date('2026-07-02T10:00:00Z');
+    const frozen = telemetry.readDailySystemEconomics(tomorrow);
+    expect(frozen.get('2026-07-01')!.readingCount).toBe(3);
+
+    // A historical backfill would not be seen until the next daily cache rebuild.
+    const backfill = new DatabaseSync(DB_PATH);
+    backfill.prepare('INSERT INTO readings (timestamp, pv_w, grid_w, house_load_w) VALUES (?, ?, ?, ?)')
+      .run('2026-07-01T12:05:00.000Z', 0, -1000, 1000);
+    backfill.close();
+
+    const again = telemetry.readDailySystemEconomics(tomorrow);
+    expect(again.get('2026-07-01')!.readingCount).toBe(3);
+  });
 });

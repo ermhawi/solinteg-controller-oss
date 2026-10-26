@@ -14,6 +14,7 @@ import {
   computeDailyEconomics,
   computeDailySystemEconomics,
   mergeDailyEconomics,
+  mergeDailySystemEconomics,
   priceSlotsToMap,
   stockholmDateOf,
   stockholmSlotKey,
@@ -166,16 +167,35 @@ export function readDailyEconomics(now: Date = new Date()): Map<string, EconTota
   });
 }
 
+// Elapsed days never change. Avoid a full historical table scan and per-reading
+// Stockholm/price conversion on every dashboard refresh (readings grows continuously).
+let frozenDailySystem: Map<string, import('../economics').SystemDailyTotals> | null = null;
+let frozenSystemBoundaryIso: string | null = null;
+let frozenSystemForDate: string | null = null;
+
 /** Full daily energy/cost comparison from measured load, PV, battery, and grid readings. */
-export function readDailySystemEconomics(): Map<string, import('../economics').SystemDailyTotals> {
+export function readDailySystemEconomics(now: Date = new Date()): Map<string, import('../economics').SystemDailyTotals> {
   return readOrFallback(new Map(), (handle) => {
-    const rows = handle
-      .prepare(
+    const today = stockholmDateOf(now.toISOString());
+    if (frozenDailySystem === null || frozenSystemForDate !== today) {
+      const p = stockholmParts(now);
+      const boundary = stockholmToUtc(p.year, p.month0, p.day, p.utcOffset, 0, 0).toISOString();
+      const past = handle.prepare(
         `SELECT timestamp, grid_w, pv_w, battery_w, house_load_w
-         FROM readings ORDER BY timestamp`,
-      )
-      .all() as unknown as SystemEconReading[];
-    return computeDailySystemEconomics(rows, buildPriceLookup());
+         FROM readings WHERE timestamp < ? ORDER BY timestamp`,
+      ).all(boundary) as unknown as SystemEconReading[];
+      frozenDailySystem = computeDailySystemEconomics(past, buildPriceLookup());
+      frozenSystemBoundaryIso = boundary;
+      frozenSystemForDate = today;
+    }
+    const live = handle.prepare(
+      `SELECT timestamp, grid_w, pv_w, battery_w, house_load_w
+       FROM readings WHERE timestamp >= ? ORDER BY timestamp`,
+    ).all(frozenSystemBoundaryIso!) as unknown as SystemEconReading[];
+    return mergeDailySystemEconomics(
+      frozenDailySystem,
+      computeDailySystemEconomics(live, buildPriceLookup()),
+    );
   });
 }
 

@@ -248,6 +248,30 @@ export function mergeDailyEconomics(
   return out;
 }
 
+/** Combine cached elapsed-day system totals with fresh readings without altering either map. */
+export function mergeDailySystemEconomics(
+  a: Map<string, SystemDailyTotals>,
+  b: Map<string, SystemDailyTotals>,
+): Map<string, SystemDailyTotals> {
+  const out = new Map(a);
+  for (const [day, current] of b) {
+    const past = out.get(day);
+    out.set(day, past ? {
+      loadKwh: past.loadKwh + current.loadKwh,
+      solarKwh: past.solarKwh + current.solarKwh,
+      batteryChargeKwh: past.batteryChargeKwh + current.batteryChargeKwh,
+      batteryDischargeKwh: past.batteryDischargeKwh + current.batteryDischargeKwh,
+      boughtKwh: past.boughtKwh + current.boughtKwh,
+      soldKwh: past.soldKwh + current.soldKwh,
+      actualCostKr: past.actualCostKr + current.actualCostKr,
+      baselineCostKr: past.baselineCostKr + current.baselineCostKr,
+      savingsKr: past.savingsKr + current.savingsKr,
+      readingCount: past.readingCount + current.readingCount,
+    } : current);
+  }
+  return out;
+}
+
 /** Roll the per-day map up into today / month-to-date / all-time totals. */
 export function summarize(daily: Map<string, EconTotals>, todayStockholm: string): EconSummary {
   const monthPrefix = todayStockholm.slice(0, 7); // "YYYY-MM"
