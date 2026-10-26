@@ -41,7 +41,7 @@ export default async function Home() {
   // that signal out to the rest of this component's output — this direct, top-level call does.
   await connection();
 
-  const { data, solarProfiles, solarForecast, dispatchSchedule, startSoc, socIsLive, inverterData } =
+  const { data, solarProfiles, solarForecast, dispatchSchedule, controlPlanEndTime, startSoc, socIsLive, inverterData } =
     await producePlan();
 
   // Earnings, computed from logged telemetry (best-effort; empty until the poller has data).
@@ -157,6 +157,7 @@ export default async function Home() {
             solarProfiles={solarProfiles}
             solarForecast={solarForecast}
             dispatchSchedule={dispatchSchedule}
+            controlPlanEndTime={controlPlanEndTime}
             pastDispatchSlots={pastDispatchSlots}
             pastPlannedSocKwhByTime={pastPlannedSocKwhByTime}
             startSocKwh={startSoc}

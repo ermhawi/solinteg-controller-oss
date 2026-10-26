@@ -53,6 +53,7 @@ interface Props {
   solarProfiles: Record<number, number[]>;
   solarForecast?: Record<string, number[]> | null;
   dispatchSchedule?: DispatchSlot[] | null;
+  controlPlanEndTime?: string | null; // executable horizon; beyond this, 3-day plan is advisory only
   pastDispatchSlots?: DispatchSlot[] | null; // reconstructed historical decision bands (see lib/telemetry readPastDispatchSlots)
   pastPlannedSocKwhByTime?: Record<string, number>; // historical plan SoC at slot boundaries
   startSocKwh?: number; // SoC the optimizer planned from
@@ -127,6 +128,7 @@ export default function PriceChart({
   solarProfiles,
   solarForecast,
   dispatchSchedule,
+  controlPlanEndTime,
   pastDispatchSlots,
   pastPlannedSocKwhByTime,
   startSocKwh,
@@ -169,6 +171,9 @@ export default function PriceChart({
 
   const hasActualSoc = chartData.some((d) => d.actualSocPct != null);
   const hasPlan = !!dispatchSchedule;
+  const planEndTime = dispatchSchedule?.at(-1)?.startTime ?? null;
+  const forecastPlanIsAdvisory = planEndTime !== null &&
+    (controlPlanEndTime == null || planEndTime > controlPlanEndTime);
   const containerRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(containerRef);
   const isMobile = useMobileViewport();
@@ -412,6 +417,11 @@ export default function PriceChart({
       </div>
 
       <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasMixedPriceSources={hasMixedPriceSources} />
+      {forecastPlanIsAdvisory && (
+        <p className="mb-2 text-[12px]" style={{ color: 'var(--text-muted)' }}>
+          Tredygnsplanen är en prognos, inte en aktiv laddorder. Den fysiska styrningen följer separat plan med fastställda spotpriser.
+        </p>
+      )}
 
       <div className="mb-2 flex flex-wrap items-center justify-start gap-1.5 min-[700px]:justify-end" aria-label="Zooma grafens tidsintervall">
         <span className="mr-1 hidden text-[11px] font-bold uppercase tracking-wide min-[700px]:inline" style={{ color: 'var(--text-muted)' }}>

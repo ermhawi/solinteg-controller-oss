@@ -43,6 +43,8 @@ export interface PlanResult {
   // the real forecast) instead of staying byte-for-byte identical to before this extraction.
   solarForecast: Record<string, number[]> | null;
   dispatchSchedule: DispatchSlot[] | null;
+  /** The end of the physically publishable plan (may be earlier than the forecast preview). */
+  controlPlanEndTime: string | null;
   startSoc: number;
   socIsLive: boolean;
   inverterData: InverterLiveData | null;
@@ -168,6 +170,7 @@ export async function producePlan(): Promise<PlanResult> {
   const planningSolarForecast = nowcast?.forecast ?? solarForecast;
   let solarProfiles: Record<number, number[]> = {};
   let dispatchSchedule: DispatchSlot[] | null = null;
+  let controlPlanEndTime: string | null = null;
 
   if (data) {
     solarProfiles = buildSolarProfiles(data);
@@ -252,7 +255,7 @@ export async function producePlan(): Promise<PlanResult> {
       // with the prices instead of being a tuned constant; SOLINTEG_TERMINAL_VALUE_FACTOR=0 is the
       // kill switch. Live plans only, like the knobs above.
       const terminalValueOrePerKwh = terminalEnergyValueOre(optimizerSlots) * TERMINAL_VALUE_FACTOR;
-      dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, {
+      const options = {
         loadFactor: LOAD_FORECAST_MARGIN,
         deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
         solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
@@ -265,8 +268,33 @@ export async function producePlan(): Promise<PlanResult> {
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
         batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
         terminalValueOrePerKwh,
-      });
-      logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
+      };
+      // Restore the full three-day *forecast plan* in the dashboard. Do not let its
+      // high-power, unverified forecast-funded charge slots reach the physically armed
+      // dispatcher until per-phase L3 current protection is independently verified.
+      // `logOptimizerRun` is the ONLY source of executable plans for dispatch_loop.py.
+      dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, options);
+      const controlSlots =
+        process.env.SOLINTEG_CONTROL_ARMED === '1' &&
+        optimizerSlots.some((slot) => slot.priceSource === 'forecast')
+          ? trimIncompleteTerminalDays(
+              optimizerSlots.filter((slot) => slot.priceSource !== 'forecast'), data.today,
+            )
+          : optimizerSlots;
+      const controlSchedule = controlSlots === optimizerSlots
+        ? dispatchSchedule
+        : optimizeDispatch(controlSlots, startSoc, {
+            ...options,
+            terminalValueOrePerKwh: terminalEnergyValueOre(controlSlots) * TERMINAL_VALUE_FACTOR,
+          });
+      logOptimizerRun(data.today, data.hasTomorrow, startSoc, controlSlots, controlSchedule, socIsLive);
+      controlPlanEndTime = socIsLive ? controlSchedule.at(-1)?.startTime ?? null : null;
+      if (controlSlots !== optimizerSlots) {
+        console.info(
+          `forecast preview extends to ${horizonEnd}; physical dispatch limited to ` +
+          `${controlPlanEndTime ?? 'no live plan'} until phase-current safety is verified`,
+        );
+      }
     } catch (err) {
       // non-fatal — chart renders without dispatch overlay — but logged so a failure here
       // (e.g. optimizeDispatch throwing) isn't as invisible as the price_snapshots gap was.
@@ -279,6 +307,7 @@ export async function producePlan(): Promise<PlanResult> {
     solarProfiles,
     solarForecast: planningSolarForecast,
     dispatchSchedule,
+    controlPlanEndTime,
     startSoc,
     socIsLive,
     inverterData,
