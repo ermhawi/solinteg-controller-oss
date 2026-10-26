@@ -10,7 +10,7 @@ import {
   computePriceMax,
   computePriceMin,
   computeSolarMax,
-  limitPricesToPlan,
+  limitPricesToThreeDays,
 } from '@/lib/chart-utils';
 import type { PriceData } from '@/lib/prices';
 import type { DispatchSlot } from '@/lib/optimizer';
@@ -32,8 +32,8 @@ export function useChartData(
   startSocKwh = batteryKwh / 2,
 ) {
   const chartPrices = useMemo(
-    () => limitPricesToPlan(data.prices, [...(pastDispatchSlots ?? []), ...(dispatchSchedule ?? [])]),
-    [data.prices, pastDispatchSlots, dispatchSchedule],
+    () => limitPricesToThreeDays(data.prices, data.today),
+    [data.prices, data.today],
   );
 
   // Past slots first, live schedule second: on the one key both could theoretically share (the

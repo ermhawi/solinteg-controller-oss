@@ -128,6 +128,22 @@ export function limitPricesToPlan(prices: PriceSlot[], dispatch: Pick<DispatchSl
   return prices.filter((price) => price.startTime <= lastPlannedTime);
 }
 
+/**
+ * The price chart is a forecast view, not a window into the executable battery plan.
+ * Preserve up to three Stockholm calendar days of prices even when the dispatch plan
+ * (intentionally) covers only actual spot prices. Never show a partial fourth day.
+ * Date.UTC is used just for calendar arithmetic; the local slot timestamps retain
+ * their 92/96/100-slot daylight-saving-time day lengths.
+ */
+export function limitPricesToThreeDays(prices: PriceSlot[], today: string): PriceSlot[] {
+  const [year, month, day] = today.split('-').map(Number);
+  const thirdDay = new Date(Date.UTC(year, month - 1, day + 2)).toISOString().slice(0, 10);
+  return prices.filter((slot) => {
+    const date = slot.startTime.slice(0, 10);
+    return date >= today && date <= thirdDay;
+  });
+}
+
 /** Whether the tooltip should show a small battery export outside a deliberate sell zone. */
 export function shouldShowSupplementalBatteryExport(point: ChartPoint): boolean {
   return point.decision == null && point.batteryToGridKwh != null && point.batteryToGridKwh > 0;

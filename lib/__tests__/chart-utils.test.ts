@@ -18,6 +18,7 @@ import {
   isMinorGridCharge,
   isBandDivergent,
   limitPricesToPlan,
+  limitPricesToThreeDays,
   priceYScale,
   pinchZoomRange,
   shouldShowSupplementalBatteryExport,
@@ -31,6 +32,19 @@ import type { ActionBand, ChartPoint } from '../chart-utils';
 import type { ActualSlotFlows } from '../actual-flows';
 import type { DispatchSlot } from '../optimizer';
 import type { PriceSlot } from '../prices';
+
+describe('limitPricesToThreeDays', () => {
+  it('keeps all three calendar days even with no published dispatch plan', () => {
+    const rows = ['2026-10-30T23:45:00', '2026-10-31T00:00:00',
+      '2026-11-01T23:45:00', '2026-11-02T00:00:00',
+      '2026-11-03T00:00:00'].map((startTime) => ({
+      startTime, endTime: '', price: 10, priceIncludingTaxAndSurcharge: 20,
+    }));
+    expect(limitPricesToThreeDays(rows, '2026-10-31').map((x) => x.startTime)).toEqual([
+      '2026-10-31T00:00:00', '2026-11-01T23:45:00', '2026-11-02T00:00:00',
+    ]);
+  });
+});
 
 describe('limitPricesToPlan', () => {
   it('hides price slots after the last planned slot', () => {
