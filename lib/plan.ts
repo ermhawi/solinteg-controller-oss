@@ -201,19 +201,13 @@ export async function producePlan(): Promise<PlanResult> {
       // the last loaded day) yields an empty slice, which optimizeDispatch and the
       // dispatch loop both already treat as "no plan right now" safely.
       const nowSlotIdx = Math.max(0, currentSlotIndexInPrices(data.today, now));
-      // Display all three days of forecast prices, but do NOT silently expand the live
-      // battery controller's planning horizon just because a retired forecast API was fixed.
-      // While physically armed, retain its previous input policy: only published actual
-      // day-ahead prices (today and tomorrow once available). Forecast-driven multi-day
-      // battery dispatch must be authorized and safety-tested separately, particularly
-      // against the site's 20 A per-phase limit. Disarmed/shadow runs may use forecasts.
-      const dispatchInputs = process.env.SOLINTEG_CONTROL_ARMED === '1'
-        ? allSlots.filter((slot) => slot.priceSource !== 'forecast')
-        : allSlots;
-      // Do not let a partial future day become the DP's terminal point. The optimizer has zero
-      // terminal value, so it would otherwise spend the battery at the end of whatever rolling
-      // horizon the price provider happened to return (e.g. 22:30 on the final day).
-      const optimizerSlots = trimIncompleteTerminalDays(dispatchInputs.slice(nowSlotIdx), data.today);
+      // The forecast horizon is part of the normal, previously deployed battery plan,
+      // whether physically armed or in shadow mode. Do not discard forecast-priced
+      // slots here: doing so truncates the plan at midnight before next-day spot
+      // prices are published, and changes today's charge/discharge decisions too.
+      // Trimming only incomplete terminal days retains three complete calendar days
+      // without planning against an arbitrary partial fourth day.
+      const optimizerSlots = trimIncompleteTerminalDays(allSlots.slice(nowSlotIdx), data.today);
 
       // The DP has zero terminal value, so the horizon's LENGTH is itself a policy input: a plan
       // that only reaches tonight will deliberately spend the battery down to the floor by

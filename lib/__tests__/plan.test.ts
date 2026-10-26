@@ -259,27 +259,28 @@ describe('producePlan — hold-mode gating', () => {
   });
 });
 
-describe('producePlan — armed dispatch horizon does not follow UI-only forecast', () => {
+describe('producePlan — forecast horizon restored for both armed and shadow installations', () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it('uses only actual price slots when physically armed, while the dashboard gets all prices', async () => {
+  it('includes tomorrow and the day after tomorrow when physically armed, and publishes the full plan', async () => {
     vi.stubEnv('SOLINTEG_CONTROL_ARMED', '1');
-    const nextDay = Array.from({ length: 96 }, (_, i): OptimizerSlot => ({
+    const makeDay = (date: string) => Array.from({ length: 96 }, (_, i): OptimizerSlot => ({
       ...ALL_SLOTS[0],
-      startTime: `2026-01-16T${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}:00`,
+      startTime: `${date}T${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}:00`,
       priceSource: 'forecast',
     }));
     const actualToday = ALL_SLOTS.map((s) => ({ ...s, priceSource: 'actual' as const }));
-    vi.mocked(buildOptimizerSlots).mockReturnValue([...actualToday, ...nextDay]);
+    const threeDayInputs = [...actualToday, ...makeDay('2026-01-16'), ...makeDay('2026-01-17')];
+    vi.mocked(buildOptimizerSlots).mockReturnValue([...threeDayInputs, ...makeDay('2026-01-18').slice(0, 4)]);
     const result = await producePlan();
     expect(result.data).toBe(PRICE_DATA);
-    expect(optimizeDispatch).toHaveBeenCalledWith(actualToday, 7.5, expect.anything());
+    expect(optimizeDispatch).toHaveBeenCalledWith(threeDayInputs, 7.5, expect.anything());
     expect(logOptimizerRun).toHaveBeenCalledWith(
-      PRICE_DATA.today, PRICE_DATA.hasTomorrow, 7.5, actualToday, DISPATCH_FIXTURE, true,
+      PRICE_DATA.today, PRICE_DATA.hasTomorrow, 7.5, threeDayInputs, DISPATCH_FIXTURE, true,
     );
   });
 
-  it('still allows 3-day forecast planning for an explicitly disarmed shadow instance', async () => {
+  it('also allows 3-day forecast planning for an explicitly disarmed shadow instance', async () => {
     vi.stubEnv('SOLINTEG_CONTROL_ARMED', '0');
     const makeDay = (date: string) => Array.from({ length: 96 }, (_, i): OptimizerSlot => ({
       ...ALL_SLOTS[0],
