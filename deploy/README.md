@@ -165,6 +165,29 @@ Rollback: set mode `0` and restart dispatch, or restore previous
 `dispatch_loop.py` plus the prior env file. Inverter/SoC recovery and watchdog
 remain authoritative.
 
+**Independent L3 grid-charge guard:** `l3_charge_guard.py` limits *additional
+high-power battery charging*; it does not control the Volvo, EVSE, or provide
+certified per-phase fuse protection. It runs **after** SoC recovery and the
+optional L3 battery coordination above, so a high charge requested by either
+policy is still subject to the charge cap. The poller reads register 50006
+using its **existing** Modbus TCP connection and includes
+`grid_unbalanced_output_raw` in `live.json`. The charge guard requires
+fresh, consistent L1/L2/L3 data and an integer `50006 = 0` to estimate L3
+house load. Without trustworthy data it caps a high-power battery charge to
+the configured SoC recovery baseline (300 W by default), rather than treating
+missing data as spare capacity. A limited charge deliberately bypasses the
+plan-vs-SoC divergence veto; physical SoC safety checks still apply.
+
+`DISPATCH_L3_CHARGE_GUARD_MODE=shadow` (default) computes and records the
+suggested cap without changing inverter commands. `0` disables the guard,
+`1` enables the cap. `DISPATCH_L3_CHARGE_BUDGET_W=4000` is shared with the
+battery-only L3 policy; the allowed range is 300–4600 W, not an overcurrent
+trip threshold. `DISPATCH_L3_BATTERY_MODE` remains independent, default `0`.
+Start with `shadow`, validate real EV and appliance load overlaps, and do not
+enable active mode without a separately approved physical test. Roll back
+this guard by setting `DISPATCH_L3_CHARGE_GUARD_MODE=0` and restarting dispatch.
+No behavior change is made by merely syncing code to Git.
+
 **solinteg-healthcheck** (every 5 min) and **solinteg-heartbeat-ping** (every 10 min) need
 two accounts, both free, both one-time setup done in their own app/website — nothing to
 install:

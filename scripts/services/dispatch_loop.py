@@ -264,6 +264,7 @@ from zoneinfo import ZoneInfo
 
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
 from l3_battery_policy import observe_l3, suggest_battery_target
+from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
     FreezeNotEnforced,
@@ -423,7 +424,15 @@ LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
 L3_BATTERY_MODE = os.environ.get("DISPATCH_L3_BATTERY_MODE", "0").lower()
 if L3_BATTERY_MODE not in ("0", "shadow", "1"):
     raise ValueError("DISPATCH_L3_BATTERY_MODE must be 0, shadow, or 1")
+# Separate charge-side economic guard (default shadow); does not control the EVSE
+# or provide fuse protection. Active mode caps high-power grid charging only
+# when the poller's fresh L1/L2/L3 and same-session 50006 read are trustworthy.
+L3_CHARGE_GUARD_MODE = os.environ.get("DISPATCH_L3_CHARGE_GUARD_MODE", "shadow").lower()
+if L3_CHARGE_GUARD_MODE not in ("0", "shadow", "1"):
+    raise ValueError("DISPATCH_L3_CHARGE_GUARD_MODE must be 0, shadow, or 1")
 L3_CHARGE_BUDGET_W = int(os.environ.get("DISPATCH_L3_CHARGE_BUDGET_W", "4000"))
+if not 300 <= L3_CHARGE_BUDGET_W <= 4600:
+    raise ValueError("DISPATCH_L3_CHARGE_BUDGET_W must be between 300 and 4600 W")
 L3_EV_LIKE_THRESHOLD_W = int(os.environ.get("DISPATCH_L3_EV_LIKE_THRESHOLD_W", "2500"))
 L3_BASELINE_W = int(os.environ.get("DISPATCH_L3_NON_EV_BASELINE_W", "600"))
 L3_EV_EST_MAX_W = int(os.environ.get("DISPATCH_L3_EST_EV_MAX_W", "4300"))
@@ -781,6 +790,46 @@ def coordinate_l3_battery(action: str, power_w: int, expected_soc_kwh, solar_ski
     detail = (f"L3 battery coordination: {suggested.reason}; L3 inferred "
               f"{observation.house_l3_w:.0f} W; {detail}")
     return suggested.action, suggested.power_w, None, False, detail, numbers
+
+
+def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
+                    now: datetime):
+    """Limit high-power charging using *verified* fresh L3 readings, never EVCC.
+
+    The independent Sunwoda low-SoC recovery stays at 300 W when phase data is
+    unknown. This is not a fuse protection system (CT updates are not instant).
+    """
+    if action != "charge" or power_w <= SOC_FLOOR_RECOVERY_W or L3_CHARGE_GUARD_MODE == "0":
+        return power_w, detail, numbers, False
+
+    reading = common.read_json(LIVE_JSON_PATH)
+    house_l3_w = observe_l3_house_w(reading, now)
+    # Poller reads 50006 with its EXISTING Modbus session, so the dispatcher
+    # does not open an extra session immediately before the physical write.
+    # Unknown, missing or stale readback => fail-closed to the 300 W baseline.
+    raw_balance = reading.get("grid_unbalanced_output_raw") if isinstance(reading, dict) else None
+    balanced_output = (house_l3_w is not None and type(raw_balance) is int and raw_balance == 0)
+
+    capped_w, reason = cap_grid_charge_w(
+        power_w,
+        house_l3_w=house_l3_w,
+        balanced_output=balanced_output,
+        budget_w=L3_CHARGE_BUDGET_W,
+        efficiency=ONE_WAY_EFF,
+        min_charge_w=SOC_FLOOR_RECOVERY_W,
+    )
+    numbers["l3_charge_guard_mode"] = L3_CHARGE_GUARD_MODE
+    numbers["l3_charge_guard_balanced"] = balanced_output
+    numbers["l3_charge_guard_budget_w"] = L3_CHARGE_BUDGET_W
+    if house_l3_w is not None:
+        numbers["l3_charge_guard_load_w"] = round(house_l3_w)
+    numbers["l3_charge_guard_suggested_w"] = capped_w
+    if L3_CHARGE_GUARD_MODE == "shadow":
+        return power_w, f"{detail}; L3 charge guard SHADOW: {reason}", numbers, False
+    limited = capped_w < power_w
+    if limited:
+        log.info("L3 charge guard limited battery charging: %s", reason)
+    return capped_w, f"{detail}; L3 charge guard: {reason}", numbers, limited
 
 
 def read_live_reading(now: datetime):
@@ -1756,6 +1805,15 @@ def main() -> None:
                     action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
             except Exception as exc:  # noqa: BLE001 — advisory battery policy, never crash dispatch
                 log.warning("L3 battery coordination failed (%s) — original dispatch retained", exc)
+            # Independent charge-side guard runs last, so it can cap a high charge
+            # recommended by either the optimizer or L3 battery coordination.
+            # Missing/old phase data never means spare L3 capacity.
+            power_w, detail, numbers, l3_limited = guard_l3_charge(
+                action, power_w, detail, numbers, iteration_now)
+            if l3_limited:
+                # The cap intentionally slows the plan's SoC trajectory. Do not
+                # reject the safer setpoint or fall back to battery-draining Auto.
+                expected_soc_kwh = None
             effective_action, effective_power, solar_skipped_now = effective_target(
                 action, power_w, solar_skip)
             target = (slot_time, effective_action, effective_power)
