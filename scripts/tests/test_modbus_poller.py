@@ -133,6 +133,36 @@ class ReadInverterTests(unittest.TestCase):
         self.assertEqual(data["work_mode_raw"], 0x101)
         self.assertEqual((data["meter_l1_w"], data["meter_l2_w"], data["meter_l3_w"]), (1500, 1460, 1420))
 
+    def test_optional_grid_balance_read_uses_existing_modbus_client(self):
+        for value in (0, 1):
+            with self.subTest(value=value):
+                c = seed_client()
+                c.regs[50006] = value
+                data = mp.read_inverter(c)
+                self.assertEqual(data["grid_unbalanced_output_raw"], value)
+                self.assertEqual(c.calls.count(("read", 50006, 1)), 1)
+                self.assertEqual(c.write_calls(), [])
+
+    def test_optional_grid_balance_failure_keeps_core_telemetry(self):
+        for failure in ("error", "short", "timeout"):
+            with self.subTest(failure=failure):
+                c = seed_client()
+                real_read = c.read_holding_registers
+
+                def read(addr, count=1, device_id=1):
+                    if addr == 50006:
+                        if failure == "timeout":
+                            raise TimeoutError("optional balance read timed out")
+                        return FakeModbusResult(registers=[] if failure == "short" else [1],
+                                                error=failure == "error")
+                    return real_read(addr, count=count, device_id=device_id)
+
+                c.read_holding_registers = read
+                data = mp.read_inverter(c)
+                self.assertIsNone(data["grid_unbalanced_output_raw"])
+                self.assertEqual(data["grid_w"], 4380)
+                self.assertEqual(data["meter_l3_w"], 1420)
+
     def test_per_phase_meter_keeps_sign_and_order(self):
         # Importing on L1/L2 while L3 exports a little: each phase must land in its own field
         # with its own sign. The block now starts at 10994, so every later field moved by six
