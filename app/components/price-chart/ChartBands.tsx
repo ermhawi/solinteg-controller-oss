@@ -1,6 +1,6 @@
 'use client';
 
-import { isBandDivergent, isMinorGridCharge, sumActualForBand } from '@/lib/chart-utils';
+import { CHARGE_LABEL, isBandDivergent, isMinorGridCharge, sumActualForBand } from '@/lib/chart-utils';
 import type { ActionBand, BandKind } from '@/lib/chart-utils';
 import type { ChartFrame } from './frame';
 
@@ -116,7 +116,8 @@ export function DecisionBands({ frame, bands }: { frame: ChartFrame; bands: Acti
         // gap or a zone still partly in the future must never flag a false ⚠.
         const actualSummary = !isHold ? sumActualForBand(band, chartData, timeIndex) : null;
         const divergent = actualSummary != null && isBandDivergent(band.kwh, actualSummary);
-        const label = divergent ? `${BAND_LABEL[band.kind]} ⚠` : BAND_LABEL[band.kind];
+        const chargeLabel = band.kind === 'buy' && band.chargeLevel ? CHARGE_LABEL[band.chargeLevel] : BAND_LABEL[band.kind];
+        const label = divergent ? `${chargeLabel} ⚠` : chargeLabel;
         const labelW = label.length * 6.4 + 14;
         return (
           <g key={i}>

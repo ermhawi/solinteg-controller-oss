@@ -1,6 +1,6 @@
 'use client';
 
-import { interventionLabel, isBandDivergent, shouldShowSupplementalBatteryExport } from '@/lib/chart-utils';
+import { CHARGE_LABEL, interventionLabel, isBandDivergent, shouldShowSupplementalBatteryExport } from '@/lib/chart-utils';
 import type { ActionBand, BandActualSummary, ChartPoint } from '@/lib/chart-utils';
 
 /**
@@ -89,8 +89,9 @@ export default function ChartTooltip({
     >
       <div className="mb-0.5 font-bold" style={{ fontFamily: 'var(--font-heading)' }}>
         {point.time.slice(0, 10)} {point.time.slice(11, 16)}
+        {point.time.endsWith('#2') ? ' (andra timmen, CET)' : point.dstFirstFold ? ' (första timmen, CEST)' : ''}
         {/* deliberate decisions (match the zones) in band colors; default self-use behaviour muted */}
-        {point.decision === 'buy' && <span style={{ color: 'var(--color-charge-band)' }}> · Laddar från nätet</span>}
+        {point.decision === 'buy' && <span style={{ color: 'var(--color-charge-band)' }}> · {point.chargeLevel ? CHARGE_LABEL[point.chargeLevel] : 'Laddar'} från nätet</span>}
         {point.decision === 'sell' && <span style={{ color: 'var(--color-sell-band)' }}> · Säljer till nätet</span>}
         {point.decision === 'hold' && <span style={{ color: 'var(--color-hold-band)' }}> · Sparar batteriet</span>}
         {point.decision == null && point.action === 'discharge' && (
@@ -100,7 +101,7 @@ export default function ChartTooltip({
           </span>
         )}
         {point.decision == null && point.action === 'charge' && (
-          <span style={{ color: 'var(--text-muted)' }}> · Laddar</span>
+          <span style={{ color: 'var(--text-muted)' }}> · {point.chargeLevel ? CHARGE_LABEL[point.chargeLevel] : 'Laddar'}</span>
         )}
         {/* optimizer 'hold' (decline the surplus, export it) never forms a band — classifyBand
             works off flows and sees neither grid-to-battery nor battery-to-grid — so it only
@@ -118,6 +119,14 @@ export default function ChartTooltip({
         label={point.solarSource === 'forecast' ? 'Sol (prognos)' : 'Sol (typisk)'}
         value={`${point.solarKwh.toFixed(2)} kWh`}
       />
+
+      {point.plannedChargeKw != null && (
+        <TooltipRow
+          color="var(--color-charge-band)"
+          label="Planerad laddeffekt"
+          value={`${point.plannedChargeKw.toFixed(1)} kW`}
+        />
+      )}
 
       {/* planned dispatch quantities — only for deliberate buy/sell decisions, matching the
           zones; the amount shown is the flow the zone is classified from (grid→battery for a

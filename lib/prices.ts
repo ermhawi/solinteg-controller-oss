@@ -123,14 +123,33 @@ export function mergePriceHorizon(
   horizonEndLocal: string,
 ): { prices: PriceSlot[]; hasTomorrow: boolean; actualSlots: number; forecastSlots: number } {
   const horizonStartLocal = actual[0]?.startTime;
+  // Two different slots share each 02:xx local label on the autumn DST change.
+  // Match forecast/actual by occurrence, so neither fold is lost when combining feeds.
   const byTime = new Map<string, PriceSlot>();
-  for (const slot of forecast) {
-    if (slot.startTime < horizonEndLocal && (!horizonStartLocal || slot.startTime >= horizonStartLocal)) {
-      byTime.set(slot.startTime, slot);
+  const addSlots = (slots: PriceSlot[], authoritative: boolean) => {
+    const occurrences = new Map<string, number>();
+    for (const slot of slots) {
+      if (slot.startTime >= horizonEndLocal || (horizonStartLocal && slot.startTime < horizonStartLocal)) continue;
+      const occurrence = occurrences.get(slot.startTime) ?? 0;
+      occurrences.set(slot.startTime, occurrence + 1);
+      byTime.set(`${slot.startTime}#${occurrence}`, authoritative ? { ...slot, source: 'actual' } : slot);
     }
-  }
-  for (const slot of actual) if (slot.startTime < horizonEndLocal) byTime.set(slot.startTime, { ...slot, source: 'actual' });
-  const prices = [...byTime.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  };
+  addSlots(forecast, false);
+  addSlots(actual, true);
+
+  // The second 02:00–02:45 comes after the first 02:45, not beside the first 02:00.
+  const fallDays = new Map<string, boolean>();
+  const sortKey = (key: string): string => {
+    const date = key.slice(0, 10);
+    if (!fallDays.has(date)) fallDays.set(date, slotsInStockholmDay(date) === 100);
+    const minute = minutesOfDay(key);
+    const extra = fallDays.get(date) && (minute >= 180 || (minute >= 120 && key.endsWith('#1'))) ? 60 : 0;
+    return `${date}#${String(minute + extra).padStart(4, '0')}`;
+  };
+  const prices = [...byTime.entries()]
+    .sort(([a], [b]) => sortKey(a).localeCompare(sortKey(b)))
+    .map(([, slot]) => slot);
   const actualSlots = prices.filter((p) => p.source === 'actual').length;
   const firstDate = prices[0]?.startTime.slice(0, 10);
   return {

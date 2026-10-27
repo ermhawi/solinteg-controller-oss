@@ -1359,6 +1359,109 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
                                        ("18:15", "discharge", 50), effective_a, effective_w, False,
                                        soc_recovery=bool(numbers.get("soc_recovery"))))
 
+    def test_unverified_reserve_at_20_percent_does_not_activate_zero_w_hold(self):
+        # Economic reserve 20% is permitted without any hardware hold approval.
+        # After recovery has completed, the unverified reserve_hold action may
+        # not be issued even if the live SoC briefly touches 20%.
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 20.0), \
+             mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", False), \
+             mock.patch.object(dl, "SOC_RECOVERY_ENTRY_PCT", 19.5), \
+             mock.patch.object(dl, "SOC_RECOVERY_EXIT_PCT", 21.0):
+            dl._soc_recovery_active = False
+            action, power_w, _, _, _, numbers = self.run_decision(
+                20.0, action="idle", power_w=0)
+        self.assertEqual((action, power_w), ("idle", 0))
+        self.assertNotIn("reserve_hold", numbers)
+
+    def test_reserve_hold_blocks_discharge_at_16_percent_without_grid_charging(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0), \
+             mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", True):
+            dl._soc_recovery_active = False
+            a, w, expected, skip, detail, numbers = self.run_decision(16.0)
+        self.assertEqual((a, w, expected, skip), ("reserve_hold", 0, None, False))
+        self.assertTrue(numbers["reserve_hold"])
+        self.assertNotIn("soc_recovery", numbers)
+
+    def test_reserve_hold_prevents_idle_auto_self_consumption(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0), \
+             mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", True):
+            dl._soc_recovery_active = False
+            a, w, *_ = self.run_decision(16.5, action="idle", power_w=0)
+        self.assertEqual((a, w), ("reserve_hold", 0))
+
+    def test_reserve_allows_pv_surplus_into_battery_instead_of_holding(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0), \
+             mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", True):
+            dl._soc_recovery_active = False
+            a, w, expected, skip, *_ = self.run_decision(
+                16.5, action="discharge", power_w=2500, surplus_w=500)
+        self.assertEqual((a, w, expected, skip), ("idle", 0, None, False))
+
+    def test_reserve_does_not_block_economic_charge_or_high_soc_discharge(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0), \
+             mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", True):
+            dl._soc_recovery_active = False
+            a, w, *_ = self.run_decision(16.5, action="charge", power_w=3000)
+            self.assertEqual((a, w), ("charge", 3000))
+            a, w, *_ = self.run_decision(17.5, action="discharge", power_w=800)
+            self.assertEqual((a, w), ("discharge", 800))
+
+    def test_solar_veto_at_reserve_does_not_demote_to_auto_and_drain(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0), \
+             mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", True):
+            dl._soc_recovery_active = False
+            a, w, expected, skip, *_ = self.run_decision(
+                16.2, action="charge", power_w=2000, solar_skip=True)
+        self.assertEqual((a, w, expected, skip), ("reserve_hold", 0, None, False))
+
+    def test_reserve_hold_invokes_open_cap_hold_instead_of_auto(self):
+        inv = object()
+        with mock.patch.object(dl, "force_hold", return_value=True) as hold, \
+             mock.patch.object(dl, "return_to_auto") as auto:
+            dl.apply_target(inv, "reserve_hold", 0)
+        hold.assert_called_once_with(inv, dl.SOC_FLOOR_PCT)
+        auto.assert_not_called()
+
+    def test_reserve_hold_at_physical_floor_recovers_instead_of_auto(self):
+        inv = object()
+        with mock.patch.object(dl, "force_hold", return_value=False), \
+             mock.patch.object(dl, "force_charge") as charge:
+            dl.apply_target(inv, "reserve_hold", 0)
+        charge.assert_called_once_with(inv, dl.SOC_FLOOR_RECOVERY_W)
+
+
+
+    def test_sundsvall_calibrated_guard_allows_normal_operation_at_15_percent(self):
+        # Read-only Solinteg/BMS probe on 2026-10-23: hardware on-grid minimum
+        # 10%, BMS permitted 18.8 A discharge at 15%. 12% operational floor
+        # is unchanged; only the emergency band is narrower.
+        cap = 15.055
+        floor = cap * 0.12
+        headroom = 0.15
+        entry = (floor + headroom) / cap * 100
+        with mock.patch.multiple(
+            dl, BATTERY_KWH=cap, BATTERY_FLOOR_KWH=floor,
+            SOC_FLOOR_GUARD_HEADROOM_KWH=headroom,
+            SOC_RECOVERY_ENTRY_PCT=entry, SOC_RECOVERY_EXIT_PCT=16.0,
+        ):
+            dl._soc_recovery_active = False
+            a, w, *_ = self.run_decision(15.0)
+            self.assertEqual((a, w), ("discharge", 3800))
+            self.assertFalse(dl._soc_recovery_active)
+
+            # Recovery still precedes the 12% software floor.
+            a, w, *_ = self.run_decision(12.9)
+            self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+            self.assertTrue(dl._soc_recovery_active)
+            a, w, *_ = self.run_decision(15.0)
+            self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+            a, w, *_ = self.run_decision(16.0)
+            self.assertEqual((a, w), ("discharge", 3800))
+            self.assertFalse(dl._soc_recovery_active)
+
+            a, w, *_ = self.run_decision(11.5, action="freeze", power_w=0)
+            self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+
 
 if __name__ == "__main__":
     unittest.main()

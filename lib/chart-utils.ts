@@ -20,6 +20,18 @@ import type { ActualSlotFlows } from './actual-flows';
 // deliberately rendered as a gap — "not this slot" (a momentary price dip) is itself a decision
 // worth seeing, so bands are never merged across sub-threshold slots.
 export type BandKind = 'buy' | 'sell' | 'hold';
+export type ChargeLevel = 'slow' | 'medium' | 'fast';
+
+/** Battery-side kW; labels are display-only, not inverter power limits. */
+export function chargeLevelForKw(kw: number): ChargeLevel {
+  return kw < 2 ? 'slow' : kw < 5 ? 'medium' : 'fast';
+}
+
+export const CHARGE_LABEL: Record<ChargeLevel, string> = {
+  slow: 'Laddar långsamt',
+  medium: 'Laddar',
+  fast: 'Laddar snabbt',
+};
 
 // kWh per 15-min slot (≈2 kW average) — below this a battery-grid flow is slot-granularity
 // slop around covering load, not a decision. Real planned buys/sells run ~2-2.7 kWh/slot.
@@ -72,6 +84,7 @@ export interface ActionBand {
   x2: string;
   kind: BandKind;
   kwh: number; // planned energy behind the decision, summed over the band's slots (see bandFlowKwh)
+  chargeLevel?: ChargeLevel;
 }
 
 /** The flow a band's kind is classified from — buy: grid→battery, sell: battery→grid,
@@ -86,6 +99,9 @@ function bandFlowKwh(d: DispatchSlot, kind: BandKind): number {
  *  is the operational SoC floor (BATTERY_MIN_SOC_KWH) — passed in rather than imported so this
  *  stays usable from the 'use client' chart hook (see buildChartData's own note below). */
 export function classifyBand(d: DispatchSlot, batteryFloorKwh: number): BandKind | null {
+  // A genuine planned charge must never be presented as "Sparar" merely because
+  // its grid share is below the old 0.5 kWh/slot strong-band threshold.
+  if (d.action === 'charge') return d.gridToBatteryKwh > 0 ? 'buy' : null;
   if (d.gridToBatteryKwh >= DECISION_GRID_KWH) return 'buy';
   if (d.batteryToGridKwh >= DECISION_GRID_KWH) return 'sell';
   if (d.loadFromGridKwh >= HOLD_LOAD_FROM_GRID_KWH && d.socAfter >= batteryFloorKwh + HOLD_SOC_HEADROOM_KWH) {
@@ -96,6 +112,7 @@ export function classifyBand(d: DispatchSlot, batteryFloorKwh: number): BandKind
 
 export interface ChartPoint {
   time: string;
+  dstFirstFold?: boolean; // repeated 02:xx hour, first (CEST) occurrence
   buy: number; // full consumer buy price: priceIncludingTaxAndSurcharge + skatt/överföring
   sell: number; // the sell price (spot + EXPORT_BONUS_ORE nätnytta) — the export/sell price
   priceSource?: 'actual' | 'forecast';
@@ -108,6 +125,8 @@ export interface ChartPoint {
   // Planned per-slot battery flows (kWh/15 min), for the tooltip's dispatch quantities —
   // null when the slot has no dispatch plan. Same attribution semantics as DispatchSlot.
   gridToBatteryKwh: number | null;
+  plannedChargeKw?: number | null; // battery-side planned charging rate, not whole-house grid draw
+  chargeLevel?: ChargeLevel;
   batteryToGridKwh: number | null;
   batteryToLoadKwh: number | null;
   // Measured (actual) per-slot battery flows, for the tooltip's plan-vs-actual reconciliation —
@@ -161,7 +180,11 @@ export function buildActualSocByTime(
   for (const r of readings) {
     if (r.soc_pct == null || !isFinite(r.soc_pct)) continue;
     const key = stockholmSlotKey(r.timestamp);
-    if (out[key] == null) out[key] = Math.round(r.soc_pct * 10) / 10;
+    // During the repeated autumn 02:xx hour, an hour earlier has the SAME
+    // local slot label. Preserve the second occurrence rather than losing it.
+    const earlier = stockholmSlotKey(new Date(Date.parse(r.timestamp) - 3_600_000).toISOString());
+    const uniqueKey = earlier === key ? `${key}#2` : key;
+    if (out[uniqueKey] == null) out[uniqueKey] = Math.round(r.soc_pct * 10) / 10;
   }
   return out;
 }
@@ -171,18 +194,30 @@ export function buildActualSocByTime(
  * taxonomy above classifyBand). Slots with no deliberate decision are skipped, and a
  * sub-threshold slot inside a run splits it — that gap is real signal, never merged over.
  */
-export function buildActionBands(schedule: DispatchSlot[], batteryFloorKwh: number): ActionBand[] {
+export function buildActionBands(
+  schedule: DispatchSlot[],
+  batteryFloorKwh: number,
+  plannedSocKwhByTime?: Record<string, number>,
+): ActionBand[] {
+  const levelFor = (d: DispatchSlot): ChargeLevel | undefined => {
+    const before = plannedSocKwhByTime?.[d.startTime];
+    if (d.action !== 'charge' || before == null || d.socAfter <= before) return undefined;
+    return chargeLevelForKw((d.socAfter - before) * 4);
+  };
   const bands: ActionBand[] = [];
   let i = 0;
   while (i < schedule.length) {
     const kind = classifyBand(schedule[i], batteryFloorKwh);
     if (kind !== null) {
       const x1 = schedule[i].startTime;
+      const chargeLevel = kind === 'buy' ? levelFor(schedule[i]) : undefined;
       let j = i + 1;
-      while (j < schedule.length && classifyBand(schedule[j], batteryFloorKwh) === kind) j++;
+      while (j < schedule.length && classifyBand(schedule[j], batteryFloorKwh) === kind &&
+        (kind !== 'buy' || levelFor(schedule[j]) === chargeLevel)) j++;
       let kwh = 0;
       for (let k = i; k < j; k++) kwh += bandFlowKwh(schedule[k], kind);
-      bands.push({ x1, x2: schedule[j - 1].startTime, kind, kwh: Math.round(kwh * 100) / 100 });
+      bands.push({ x1, x2: schedule[j - 1].startTime, kind, kwh: Math.round(kwh * 100) / 100,
+        ...(chargeLevel ? { chargeLevel } : {}) });
       i = j;
     } else {
       i++;
@@ -275,8 +310,11 @@ export function buildChartData(
   // slot boundary, not socAfter, otherwise each charge/discharge appears one slot
   // earlier than its decision band.
   const socAtStartByTime = new Map<string, number>();
+  const priceIndex = new Map(prices.map((p, i) => [p.startTime, i]));
+  const firstFoldTimes = new Set(prices.filter((p) => p.startTime.endsWith('#2')).map((p) => p.startTime.slice(0, 19)));
   let soc = startSocKwh;
-  for (const dispatch of Object.values(dispatchByTime).sort((a, b) => a.startTime.localeCompare(b.startTime))) {
+  for (const dispatch of Object.values(dispatchByTime).sort((a, b) =>
+    (priceIndex.get(a.startTime) ?? Infinity) - (priceIndex.get(b.startTime) ?? Infinity))) {
     socAtStartByTime.set(dispatch.startTime, soc);
     soc = dispatch.socAfter;
   }
@@ -284,20 +322,26 @@ export function buildChartData(
   return prices.map((slot) => {
     const { kwh: solarKwh, source: solarSource } = slotSolarKwh(slot.startTime, forecast, profiles);
     const dispatch = dispatchByTime[slot.startTime];
+    const socBefore = plannedSocKwhByTime[slot.startTime] ?? socAtStartByTime.get(slot.startTime);
+    const plannedChargeKw = dispatch?.action === 'charge' && socBefore != null
+      ? Math.max(0, (dispatch.socAfter - socBefore) * 4) : null;
     return {
       time: slot.startTime,
+      dstFirstFold: firstFoldTimes.has(slot.startTime),
       buy: slot.priceIncludingTaxAndSurcharge + skattOverforing,
       sell: slot.price,
       priceSource: slot.source,
       socPct: dispatch
         ? Math.round(((plannedSocKwhByTime[slot.startTime] ?? socAtStartByTime.get(slot.startTime) ?? dispatch.socAfter) / batteryKwh) * 1000) / 10
         : null,
-      actualSocPct: actualSocByTime[slot.startTime.slice(0, 16)] ?? null,
+      actualSocPct: actualSocByTime[slot.startTime.slice(0, 16) + (slot.startTime.endsWith('#2') ? '#2' : '')] ?? null,
       solarKwh,
       solarSource,
       action: dispatch?.action ?? 'idle',
       decision: dispatch ? classifyBand(dispatch, batteryFloorKwh) : null,
       gridToBatteryKwh: dispatch ? dispatch.gridToBatteryKwh : null,
+      plannedChargeKw,
+      chargeLevel: plannedChargeKw != null && plannedChargeKw > 0 ? chargeLevelForKw(plannedChargeKw) : undefined,
       batteryToGridKwh: dispatch ? dispatch.batteryToGridKwh : null,
       batteryToLoadKwh: dispatch ? dispatch.batteryToLoadKwh : null,
       actual: actualFlowsByTime[slot.startTime] ?? null,
@@ -341,6 +385,11 @@ export function computeNowSlotTime(now: Date, availableTimes: string[]): string 
   const hour = get('hour') === '24' ? '00' : get('hour'); // some engines emit 24 at midnight
   const flooredMin = Math.floor(parseInt(get('minute'), 10) / 15) * 15;
   const candidate = `${get('year')}-${get('month')}-${get('day')}T${hour}:${String(flooredMin).padStart(2, '0')}:00`;
+  // The repeated 02:xx hour has two real slots. Compare with the UTC instant
+  // one hour earlier: identical Stockholm wall-clock time means the CET fold.
+  const earlier = stockholmSlotKey(new Date(now.getTime() - 3_600_000).toISOString());
+  const secondFold = `${candidate}#2`;
+  if (earlier === candidate.slice(0, 16) && availableTimes.includes(secondFold)) return secondFold;
   return availableTimes.includes(candidate) ? candidate : null;
 }
 

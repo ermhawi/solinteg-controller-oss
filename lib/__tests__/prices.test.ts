@@ -263,6 +263,37 @@ describe('mergePriceHorizon', () => {
     expect(merged.actualSlots).toBe(96);
     expect(merged.forecastSlots).toBe(1);
   });
+
+  it('preserves the repeated 02:xx hour when merging forecast and actual autumn prices', () => {
+    const today = {
+      startTime: '2026-10-24T00:00:00', endTime: '2026-10-24T00:15:00',
+      price: 100, priceIncludingTaxAndSurcharge: 140, source: 'actual' as const,
+    };
+    // 2026-10-25 is a 25-hour Stockholm day: the same 02:xx labels occur twice.
+    const sunday = Array.from({ length: 100 }, (_, i) =>
+      forecastToSlot({
+        time: new Date(Date.parse('2026-10-24T22:00:00Z') + i * 900_000).toISOString(),
+        price: 50, source: 'forecast_issued',
+      }, 11.5),
+    );
+    const actual = [
+      today,
+      { ...sunday[8], price: 11, source: 'actual' as const },
+      { ...sunday[12], price: 22, source: 'actual' as const },
+    ];
+
+    const merged = mergePriceHorizon(actual, sunday, '2026-10-26T00:00:00');
+    const fallDay = merged.prices.slice(1);
+    expect(fallDay).toHaveLength(100);
+    expect(fallDay.slice(8, 17).map((p) => p.startTime.slice(11, 16))).toEqual([
+      '02:00', '02:15', '02:30', '02:45',
+      '02:00', '02:15', '02:30', '02:45', '03:00',
+    ]);
+    expect(fallDay[8].price).toBe(11);
+    expect(fallDay[12].price).toBe(22);
+    expect(fallDay[8].source).toBe('actual');
+    expect(fallDay[12].source).toBe('actual');
+  });
 });
 
 // ─── currentSlotIndexInPrices ─────────────────────────────────────────────────

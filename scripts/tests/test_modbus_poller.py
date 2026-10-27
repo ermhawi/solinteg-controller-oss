@@ -16,6 +16,7 @@ Run: py -m unittest scripts.tests.test_modbus_poller -v   (from the repo root)
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
@@ -134,6 +135,36 @@ class ReadInverterTests(unittest.TestCase):
         self.assertEqual(data["grid_unbalanced_output_raw"], 0)
         self.assertEqual((data["meter_l1_w"], data["meter_l2_w"], data["meter_l3_w"]), (1500, 1460, 1420))
 
+    def test_optional_grid_balance_read_uses_existing_modbus_client(self):
+        for value in (0, 1):
+            with self.subTest(value=value):
+                c = seed_client()
+                c.regs[50006] = value
+                data = mp.read_inverter(c)
+                self.assertEqual(data["grid_unbalanced_output_raw"], value)
+                self.assertEqual(c.calls.count(("read", 50006, 1)), 1)
+                self.assertEqual(c.write_calls(), [])
+
+    def test_optional_grid_balance_failure_keeps_core_telemetry(self):
+        for failure in ("error", "short", "timeout"):
+            with self.subTest(failure=failure):
+                c = seed_client()
+                real_read = c.read_holding_registers
+
+                def read(addr, count=1, device_id=1):
+                    if addr == 50006:
+                        if failure == "timeout":
+                            raise TimeoutError("optional balance read timed out")
+                        return FakeModbusResult(registers=[] if failure == "short" else [1],
+                                                error=failure == "error")
+                    return real_read(addr, count=count, device_id=device_id)
+
+                c.read_holding_registers = read
+                data = mp.read_inverter(c)
+                self.assertIsNone(data["grid_unbalanced_output_raw"])
+                self.assertEqual(data["grid_w"], 4380)
+                self.assertEqual(data["meter_l3_w"], 1420)
+
     def test_per_phase_meter_keeps_sign_and_order(self):
         # Importing on L1/L2 while L3 exports a little: each phase must land in its own field
         # with its own sign. The block now starts at 10994, so every later field moved by six
@@ -198,7 +229,7 @@ class ReadInverterTests(unittest.TestCase):
                     mp.read_inverter(c)
 
 
-    def test_unsupported_extended_ct_block_falls_back_to_legacy_and_caches_capability(self):
+    def test_unsupported_extended_ct_block_falls_back_and_retries_after_backoff(self):
         c = seed_client()
         real_read = c.read_holding_registers
         calls = []
@@ -210,16 +241,85 @@ class ReadInverterTests(unittest.TestCase):
             return real_read(addr, count=count, device_id=device_id)
 
         c.read_holding_registers = read
-        first = mp.read_inverter(c)
-        second = mp.read_inverter(c)
+        with mock.patch.object(mp.time, "monotonic", return_value=100.0):
+            first = mp.read_inverter(c)
+        with mock.patch.object(mp.time, "monotonic", return_value=219.0):
+            second = mp.read_inverter(c)
         self.assertEqual(first["grid_w"], 4380)
         self.assertEqual(first["pv_w"], 6080)
         self.assertIsNone(first["meter_l1_w"])
         self.assertIsNone(first["meter_l2_w"])
         self.assertIsNone(first["meter_l3_w"])
         self.assertEqual(second["house_load_w"], 6100 - 4380)
-        self.assertEqual(calls.count(10994), 1)  # no repeated unsupported Modbus read
+        self.assertEqual(calls.count(10994), 1)  # do not hammer unavailable Modbus registers
         self.assertEqual(calls.count(11000), 2)
+        self.assertEqual(c._phase_retry_after, 100 + mp.PHASE_RETRY_INITIAL_S)
+        with mock.patch.object(mp.time, "monotonic", return_value=100 + mp.PHASE_RETRY_INITIAL_S):
+            third = mp.read_inverter(c)
+        self.assertIsNone(third["meter_l3_w"])
+        self.assertEqual(calls.count(10994), 2)  # never permanently disabled
+        self.assertEqual(c._phase_retry_failures, 2)
+
+    def test_transient_ct_timeout_recovers_without_restart_and_logs_restoration(self):
+        c = seed_client(grid_w=-2700, phases=(-1800, -1000, 100))
+        real_read = c.read_holding_registers
+        attempts = 0
+
+        def read(addr, count=1, device_id=1):
+            nonlocal attempts
+            if addr == 10994:
+                attempts += 1
+                if attempts == 1:
+                    raise OSError("transient Modbus timeout")
+            return real_read(addr, count=count, device_id=device_id)
+
+        c.read_holding_registers = read
+        with mock.patch.object(mp.time, "monotonic", return_value=100.0):
+            first = mp.read_inverter(c)
+        self.assertIsNone(first["meter_l3_w"])
+        self.assertEqual(first["grid_w"], -2700)
+        with mock.patch.object(mp.time, "monotonic", return_value=219.0):
+            second = mp.read_inverter(c)
+        self.assertIsNone(second["meter_l3_w"])
+        self.assertEqual(attempts, 1)
+        with mock.patch.object(mp.time, "monotonic", return_value=220.0):
+            with self.assertLogs(mp.log, level="INFO") as logged:
+                restored = mp.read_inverter(c)
+        self.assertIn("Extended CT phase reads restored", " ".join(logged.output))
+        self.assertEqual((restored["meter_l1_w"], restored["meter_l2_w"], restored["meter_l3_w"]),
+                         (-1800, -1000, 100))
+        self.assertEqual(restored["grid_w"], -2700)
+        self.assertEqual(c._phase_retry_failures, 0)
+        self.assertEqual(c._phase_retry_after, 0)
+        with mock.patch.object(mp.time, "monotonic", return_value=250.0):
+            mp.read_inverter(c)
+        self.assertEqual(attempts, 3)  # after recovery, read phases on every poll
+
+    def test_repeated_ct_failures_back_off_but_never_permanently_disable(self):
+        c = seed_client()
+        real_read = c.read_holding_registers
+        calls = []
+
+        def read(addr, count=1, device_id=1):
+            if addr == 10994:
+                calls.append(addr)
+                raise TimeoutError("CT request timeout")
+            return real_read(addr, count=count, device_id=device_id)
+
+        c.read_holding_registers = read
+        now = 100.0
+        for n in range(1, 8):
+            with mock.patch.object(mp.time, "monotonic", return_value=now):
+                data = mp.read_inverter(c)
+            self.assertIsNone(data["meter_l3_w"])
+            expected_s = min(mp.PHASE_RETRY_MAX_S, mp.PHASE_RETRY_INITIAL_S * (2 ** (n - 1)))
+            self.assertEqual(c._phase_retry_after, now + expected_s)
+            self.assertEqual(len(calls), n)
+            with mock.patch.object(mp.time, "monotonic", return_value=now + expected_s - 1):
+                mp.read_inverter(c)
+            self.assertEqual(len(calls), n)
+            now += expected_s
+        self.assertEqual(expected_s, mp.PHASE_RETRY_MAX_S)
 
     def test_optional_balance_register_failure_is_nonfatal_and_fail_closed(self):
         c = seed_client()

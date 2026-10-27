@@ -114,6 +114,6 @@ describe('Action contract: lib/optimizer.ts <-> scripts/services/dispatch_loop.p
     expect(tsActionUnion()).toEqual(['charge', 'discharge', 'hold', 'idle']);
     expect(pyTuple('FORCED_ACTIONS')).toEqual(['charge', 'discharge']);
     expect(pyTuple('AUTO_ACTIONS')).toEqual(['hold', 'idle']);
-    expect(pyTuple('EXECUTOR_ACTIONS')).toEqual(['freeze']);
+    expect(pyTuple('EXECUTOR_ACTIONS')).toEqual(['freeze', 'reserve_hold']);
   });
 });

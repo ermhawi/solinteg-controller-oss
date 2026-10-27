@@ -1,8 +1,8 @@
 """Tests for scripts/tools/probe_hold_freeze.py, the on-device battery-freeze probe.
 
-A probe is a one-shot tool, but this one writes `50208 = 0`, a value nothing has ever written
-to this inverter, on the live system. The parts that can go wrong without the inverter ever
-complaining are exactly the parts worth pinning before it runs once for real:
+The default soft-hold probe leaves 50208/50209 unrestricted. Optional --full-freeze
+can write `50208 = 0`, a value nothing has ever written to this inverter, but only
+with explicit EPS confirmation. The safety-critical behaviours to pin are:
 
   - the WRITE ORDER: caps must land IN-MODE (an earlier probe proved pre-mode cap writes are
     silently dropped while reading back as stored), and the restore must put the caps back
@@ -87,6 +87,7 @@ class ProbeTestCase(unittest.TestCase):
         mock.patch.object(ic.time, "sleep").start()
         mock.patch.object(ph.time, "sleep").start()
         mock.patch.object(ph.ic, "_install_failsafe").start()   # no atexit/signal hooks in tests
+        mock.patch.object(ph, "dispatch_disarmed", return_value=True).start()
         mock.patch.object(ph.os.path, "expanduser", lambda _p: self.tmp.name).start()
         ic._forced_active = False
 
@@ -95,9 +96,9 @@ class ProbeTestCase(unittest.TestCase):
         ic._forced_active = False
         self.tmp.cleanup()
 
-    def run_probe(self, inv):
+    def run_probe(self, inv, *args):
         with mock.patch.object(ph, "Inverter", return_value=inv):
-            return ph.main(["probe_hold_freeze.py"])
+            return ph.main(["probe_hold_freeze.py", *args])
 
 
 class RefusalTests(unittest.TestCase):
@@ -111,6 +112,8 @@ class RefusalTests(unittest.TestCase):
         # The inverter's own floor behaviour with AC input blocked is the open question;
         # the probe must not be the thing that answers it by accident.
         self.assertIn("SoC", ph.refusal(self.pre(soc_pct=15.0)))
+        self.assertIn("SoC", ph.refusal(self.pre(soc_pct=20.0)))
+        self.assertIsNone(ph.refusal(self.pre(soc_pct=20.1)))
 
     def test_refuses_in_daylight(self):
         self.assertIn("PV", ph.refusal(self.pre(pv_w=900)))
@@ -137,9 +140,35 @@ class HeldTests(unittest.TestCase):
 
 
 class ProbeRunTests(ProbeTestCase):
-    def test_writes_caps_in_mode_and_restores_caps_before_leaving_it(self):
+    def test_default_soft_hold_never_writes_restrictive_caps(self):
         inv = night_inverter()
         self.assertEqual(self.run_probe(inv), 0)
+        writes = inv.client.write_calls()
+        self.assertNotIn((ic.REG_MAX_AC_OUTPUT, 0), writes)
+        self.assertNotIn((ic.REG_MAX_AC_INPUT, 0), writes)
+        self.assertIn((ic.REG_BATT_POWER_TARGET, 0), writes)
+        self.assertEqual(inv.client.regs[ic.REG_WORK_MODE], ORIGINAL_MODE)
+
+    def test_full_freeze_requires_explicit_eps_confirmation(self):
+        inv = night_inverter()
+        self.assertEqual(self.run_probe(inv, "--full-freeze"), 2)
+        self.assertEqual(inv.client.write_calls(), [])
+
+    def test_refuses_if_dispatch_process_is_still_armed(self):
+        inv = night_inverter()
+        with mock.patch.object(ph, "dispatch_disarmed", return_value=False):
+            self.assertEqual(self.run_probe(inv), 2)
+        self.assertEqual(inv.client.write_calls(), [])
+
+    def test_refuses_if_not_in_general_mode(self):
+        inv = night_inverter()
+        inv.client.regs[ic.REG_WORK_MODE] = ic.WORK_MODE_EMS_BATTCTRL
+        self.assertEqual(self.run_probe(inv), 2)
+        self.assertEqual(inv.client.write_calls(), [])
+
+    def test_writes_caps_in_mode_and_restores_caps_before_leaving_it(self):
+        inv = night_inverter()
+        self.assertEqual(self.run_probe(inv, "--full-freeze", "--eps-unused-confirmed"), 0)
         writes = inv.client.write_calls()
         mode_on = writes.index((ic.REG_WORK_MODE, ic.WORK_MODE_EMS_BATTCTRL))
         cap_in = writes.index((ic.REG_MAX_AC_INPUT, 0))
@@ -166,9 +195,9 @@ class ProbeRunTests(ProbeTestCase):
     def test_no_physics_means_no_hold_even_though_every_write_read_back_fine(self):
         # Readbacks all say "stored"; the battery never stopped. Must report NOT held.
         import json
-        self.run_probe(night_inverter(physics=False))
+        self.assertEqual(self.run_probe(night_inverter(physics=False)), 1)
         rec = json.loads((Path(self.tmp.name) / "probe_hold_result.json").read_text())
-        self.assertEqual(rec["verdict"], {"soft_hold": False, "freeze": False})
+        self.assertEqual(rec["verdict"], {"soft_hold": False})
 
     def test_refuses_without_writing_if_someone_else_is_writing(self):
         inv = night_inverter()
@@ -198,12 +227,21 @@ class ProbeRunTests(ProbeTestCase):
 
         inv.client.read_holding_registers = read
         with self.assertRaises(IOError):
-            self.run_probe(inv)
+            self.run_probe(inv, "--full-freeze", "--eps-unused-confirmed")
         regs = inv.client.regs
         self.assertEqual(regs[ic.REG_MAX_AC_OUTPUT], ic.GRID_CAP_RAW)
         self.assertEqual(regs[ic.REG_MAX_AC_INPUT], (-ic.GRID_CAP_RAW) & 0xFFFF)
         self.assertEqual(regs[ic.REG_WORK_MODE], ORIGINAL_MODE)
 
+
+    def test_unverified_restore_fails_closed(self):
+        import json
+        inv = night_inverter()
+        with mock.patch.object(ph, "restore", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "DO NOT RE-ARM"):
+                self.run_probe(inv)
+        rec = json.loads((Path(self.tmp.name) / "probe_hold_result.json").read_text())
+        self.assertFalse(rec["restore_ok"])
 
     def test_one_garbled_reply_is_retried_not_fatal(self):
         # The first real run died in Phase 0 on a single truncated reply.
@@ -260,7 +298,7 @@ class ManualRestoreTests(ProbeTestCase):
 
         inv.client.read_holding_registers = read
         with self.assertRaises(SystemExit):
-            self.run_probe(inv)
+            self.run_probe(inv, "--full-freeze", "--eps-unused-confirmed")
         self.assertEqual(inv.client.regs[ic.REG_MAX_AC_OUTPUT], ic.GRID_CAP_RAW)
         self.assertEqual(inv.client.regs[ic.REG_WORK_MODE], ORIGINAL_MODE)
 

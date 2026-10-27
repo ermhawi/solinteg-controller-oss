@@ -29,6 +29,9 @@ the moment the KIND of failure changes.
 
 Environment (beyond notify.py's own NTFY_*):
   TELEMETRY_DB_PATH             SQLite path (default /opt/solinteg/telemetry.db)
+  METER_PHASE_STALE_S           alert when all phase readings have been absent this long
+                                 while the core poller remains fresh (default 1800 = 30 min).
+                                 Only enabled for installations with prior valid phase readings.
   HEALTHCHECK_STATE_PATH        dedup state (default /opt/solinteg/healthcheck-state.json)
   HEALTHCHECK_ALERT_COOLDOWN_S  minimum time between repeat alerts for the same issue
                                 (default 14400 = 4 h)
@@ -161,6 +164,9 @@ METER_PHASE_DEAD_SHARE = float(os.environ.get("METER_PHASE_DEAD_SHARE", "0.95"))
 # window that is mostly empty (just after a poller restart, or the deploy that adds the columns)
 # can't page on a handful of rows.
 METER_PHASE_MIN_SAMPLES = int(os.environ.get("METER_PHASE_MIN_SAMPLES", "120"))
+# Distinct from a disconnected CT reporting zero: the extended Modbus block can stop working
+# while core meter readings remain fresh. No warning for devices that never supported phases.
+METER_PHASE_STALE_S = max(60, int(os.environ.get("METER_PHASE_STALE_S", "1800")))
 ORACLE_REVIEW_MIN_DAYS = int(os.environ.get("ORACLE_REVIEW_MIN_DAYS", "16"))
 # Default 0 = OFF, deliberately: this is a "go run this probe" nag, and the question it scouts
 # for has already been answered once on the reference deployment (see MODBUS.md). Opt in by
@@ -545,6 +551,47 @@ def check_weather_fallback_dead(state: dict, now: datetime):
             detail)
 
 
+def check_meter_phase_stale(con: sqlite3.Connection, now: datetime):
+    """Alert when L1/L2/L3 disappear but the poller is otherwise alive.
+
+    Only alert if this installation has previously produced a complete phase reading.
+    A device whose firmware never supported the extended CT registers must not alert
+    forever merely because it reports total grid power. Conversely, a missing extended
+    block on a previously working device must never silently look like healthy zero W.
+    The poller-stale check owns total-telemetry outages, so avoid duplicate alerts.
+    """
+    last_total = safe_scalar(con, "SELECT MAX(timestamp) FROM readings")
+    if last_total is None:
+        return None
+    try:
+        if (now - datetime.fromisoformat(last_total)).total_seconds() > POLLER_STALE_S:
+            return None
+    except (TypeError, ValueError):
+        return None
+    last_phase = safe_scalar(
+        con, "SELECT timestamp FROM readings WHERE meter_l1_w IS NOT NULL "
+        "AND meter_l2_w IS NOT NULL AND meter_l3_w IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 1",
+    )
+    if last_phase is None:
+        return None
+    try:
+        age_s = (now - datetime.fromisoformat(last_phase)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    if age_s <= METER_PHASE_STALE_S:
+        return None
+    return (
+        "meter_phase_stale", notify.PRIORITY_HIGH,
+        "Solinteg: L1/L2/L3 phase telemetry has stopped",
+        f"Total grid readings are fresh, but the last complete L1/L2/L3 reading was "
+        f"{age_s / 60:.0f} minutes ago ({last_phase}). The poller's extended Modbus "
+        f"register block 10994 may be timing out. Check solinteg-poller logs and "
+        f"confirm that automatic phase retries restore the measurements before relying "
+        f"on phase-specific fuse/load balancing.",
+    )
+
+
 def check_meter_phase_dead(con: sqlite3.Connection, now: datetime):
     """Is one of the grid meter's three CTs disconnected?
 
@@ -842,6 +889,7 @@ def run_checks(con: sqlite3.Connection, now: datetime):
         check_solar_cache_write_broken(con, now),
         check_control_errors(con, now),
         check_meter_phase_dead(con, now),
+        check_meter_phase_stale(con, now),
         check_disk_space(),
     ]
     return [c for c in checks if c is not None]

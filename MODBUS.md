@@ -302,8 +302,10 @@ charge target outbidding the house for PV, and a freeze commands `50207 = 0`.
 
 **UPSTREAM REFERENCE UNIT ONLY — NOT VERIFIED ON SUNDVALL.** The following 2026-10-03
 probe used another inverter/firmware. Its soft hold (0x303 + 50207=0 with OPEN caps) differs
-from the failed three-register freeze above. Our dispatch loop deliberately does NOT call
-`force_hold`; `DISPATCH_FREEZE_HOLDS` must remain OFF until a new, disarmed physical probe.
+from the failed three-register freeze above. The independent 17% planning-reserve feature
+(2026-10-23) CAN call `force_hold`, but remains strictly OFF until a Sundsvall
+hardware probe is documented and `DISPATCH_RESERVE_HOLD_VERIFIED=1` is explicitly set.
+The separate three-register `DISPATCH_FREEZE_HOLDS` feature must remain OFF.
 
 **HOLD PROBED ON THE UPSTREAM REFERENCE (`scripts/tools/probe_hold_freeze.py`, dark, SoC ~63 %,
 house ~700-840 W): both recipes held on that device; the simple one was enough.**

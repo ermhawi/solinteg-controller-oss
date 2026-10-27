@@ -4,6 +4,30 @@ Status: **Designspecifikation, revision 4, 2026-10-26**, med återinförd åttae
 
 Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff46f056eb2a8823b9bf817955d8e`, ABL:s dokumenterade register, **separat godkända Modbus-läs- och skrivprov 2026-10-21** samt etapp-/L3-planen i `91c2802` (2026-10-24). Datum, råtelegram och bevisnivå skiljs åt i avsnitt 13. Fältproven gjordes före dokumentrevisionen; inga nya laddkommandon utförs här.
 
+## 0. Nytt huvudspår: L3-samordning av husbatteriet, utan Waveshare
+
+**Bekräftat användarkrav 2026-10-24:** Volvon styr själv när den laddar och sin amperegräns (för närvarande 18 A). Solinteg-appen ska med växelriktarens befintliga Modbus-data minska **husbatteriets** laddning när L3 blir kraftigt belastad. Om bilen börjar ladda när huset går på husbatteri ska Solinteg minska batteriets urladdning så att **elnätet försörjer bilens tillkommande last** och lagrad batterienergi bevaras. Det kräver inte att husbatteriet laddas från nätet samtidigt som det laddas ur. Ingen ny bil-/EVCC-integration, och ingen säkerhetsgaranti för andra apparaters belastning på L3.
+
+**Avkänning och fysisk modell:** På aktuell enhet gav en read-only läsning av Modbus 50006 (Grid Unbalanced Output) värdet **0 = av** den 24 oktober. Under antagandet att invertereffekten därför fördelas jämnt kan husets L3-last skattas som `-meter_l3_w + inverter_ac_w/3`. Det är viktigare än `meter_l3_w` ensam, eftersom redan pågående batteriurladdning kan maskera bilens effekt i nätmätaren. I historiska prover 2026-10-23 ökade härledd L3-last från cirka 700 till 4250 W när bilen började ladda. Volvo HA-entiteten `sensor.volvo_xc40_charging_status` bytte till `charging` omkring 14:00 UTC, i linje med fassteg omkring 13:59 UTC. **Detta är ett klassificeringsantagande**, inte en exakt separat mätning av bilens ström; en stor annan L3-last kan också matcha. Beräkningen ska aldrig användas som säkringsskydd.
+
+**Styrpolicy, endast batteriet:**
+- Vid husbatteriladdning minskas laddningseffekten med hänsyn till en **ekonomisk mjuk L3-budget** (initialt 4000 W beräknad L3-huslast plus cirka en tredjedel av batteriladdningen). Denna budget är **inte** en huvud-/gruppsäkringsgräns. Minsta påtvingade laddmål är 300 W för att inte råka återgå till Auto som kan urladda batteriet till bilen.
+- Vid hög, bil-liknande L3-last (initialt minst 2500 W) reduceras planerad batteriurladdning med den uppskattade extra L3-lasten (max 4300 W efter 600 W schablonbaslast). När bara en liten urladdning återstår används ett 50 W batterisparläge, **inte Auto**, eftersom Auto kan använda husbatteriet för bilen och 0 W EMS utan verifierad funktion har kända risker.
+- När planen är Idle/Auto och en stor L3-last uppstår kan samma 50 W-läge låta nätet försörja huvuddelen av bilen. **Det är inte ett riktigt 0 W-hålläge**: historiska kontrollrader 2026-10-24 visar att 50 W beordrad urladdning gav cirka 160–260 W fysisk batterieffekt (bl.a. inverterförluster). Det begränsar kraftigt urladdningen men garanterar inte absolut oförändrat SoC. Ett riktigt 0 W-hålläge måste verifieras separat vid högre SoC, innan det kan användas. När bilen slutar ladda återgår ursprunglig plan. PV-överskott får inte onödigt hindras; SoC-recovery, BMS-golv, watchdog och befintliga säkra skydd har alltid företräde.
+- Vid saknade/gamla/inkonsekventa L1/L2/L3-värden eller om 50006 inte kan verifieras till 0 i aktivt läge **avstår** den frivilliga ekonomiska L3-justeringen. Det innebär inte garanterat batteriskydd under mätbortfall. Latens cirka 30 s pollning plus 60 s dispatch accepteras för **ekonomisk** samordning, inte för överlastskydd.
+
+**Implementationsstatus:** `scripts/services/l3_battery_policy.py` innehåller testbar ren beslutskod. Befintlig dispatch integreras via `DISPATCH_L3_BATTERY_MODE=0|shadow|1`, **default 0**. `shadow` beräknar/loggar utan att ändra styrkommandon. `1` får endast aktiveras efter replay, oberoende kontroll av 50006=0, och kontrollerad jämförelse av faktisk batteri-/nätförbrukning under samtidigt bilpåslag och högre SoC. Historiken verifierar **endast** att 50 W-batterisparläget minskar faktisk urladdning till cirka 160–260 W; den fullständiga funktionen under bilens belastning är inte verifierad. Ingen EVCC-kommunikation krävs. Den separat framtagna `evcc_ascii.py` är inte en del av detta huvudspår.
+
+---
+
+## 1. Mål, beslut och avgränsning
+
+Solinteg ska automatiskt planera laddningen när Volvo XC40 Recharge Twin Plus ansluts till DEFA eRange Uno / ABL eMH1. Planeringen ska minimera hushållets och bilens **gemensamma** förväntade elkostnad, nå önskat SoC när det är möjligt och respektera installations- och utrustningsgränser.
+
+**Integrationsstatus 2026-10-27:** Två lokala utvecklingsspår konsolideras på `Sundsvall`. Batteripolicyn och laddningsvakten hålls skilda; fysisk aktivering av EVCC och nya batterilägen kräver separat godkännande och verifiering. Texten nedan om EVCC är en möjlig senare etapp, inte en beställning om att aktivera skrivningarna.
+
+---
+
 ## 1. Mål, beslut och avgränsning
 
 Solinteg-appen ska automatiskt planera och styra laddningen när användarens Volvo XC40 Recharge Twin Plus ansluts till DEFA eRange Uno / ABL eMH1. Målet är låg gemensam kostnad för hushåll och bil, ett genomförbart laddmål och bevarade installationsgränser. Automatisk planering vid anslutning betyder inte att ström omedelbart måste slås på.

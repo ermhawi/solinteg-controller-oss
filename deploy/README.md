@@ -129,6 +129,65 @@ forces it back to auto — a hard crash (power loss, OOM kill) skips `dispatch_l
 clean-exit fail-safe entirely, so this is a second, independent process watching for exactly
 that. It needs no external setup; it just needs to be running.
 
+**L1/L2/L3 Modbus telemetry:** The poller reads the three phase CTs from the extended
+block starting at register 10994. A transient timeout no longer disables this block
+until a manual restart: the poller continues collecting total grid/battery readings via
+the legacy block, retries the CT read after 2 minutes, and exponentially backs off
+up to 30 minutes while it remains unavailable. It logs a restoration when extended
+reads resume. `POLL_PHASE_RETRY_INITIAL_S` and `POLL_PHASE_RETRY_MAX_S` control the
+retry schedule. The healthcheck (every 5 minutes) alerts via ntfy if a device that
+previously reported all three phases stops doing so for over 30 minutes while total
+meter data is still fresh (`METER_PHASE_STALE_S`, default 1800). This is **telemetry
+recovery, not phase-aware fuse protection**: do not assume the controller can limit
+a single phase's current just because these readings exist.
+
+**Battery-only L3 charging coordination (no Waveshare):** The optional `l3_battery_policy.py`
+reduces forced house-battery charging when calculated house L3 demand is high and
+reduces house-battery discharge when a car-like load begins. Volvo remains in
+charge of its own charging schedule and max current. The calculation uses the
+three phase CTs and **assumes symmetric inverter output (read-only register
+50006 = 0)**. It is not certified fuse/load balancing, nor is the derived L3
+house power a separately measured car current.
+
+`DISPATCH_L3_BATTERY_MODE=0` (default) leaves ALL previous behaviour intact;
+`shadow` logs suggested battery actions without changing registers, and `1`
+allows the battery-only adjustments after verifying register 50006. When
+the poller loses CT data or SoC recovery is active, the L3 policy yields to
+existing controls. Optional thresholds: `DISPATCH_L3_CHARGE_BUDGET_W=4000`,
+`DISPATCH_L3_EV_LIKE_THRESHOLD_W=2500`,
+`DISPATCH_L3_NON_EV_BASELINE_W=600`, `DISPATCH_L3_EST_EV_MAX_W=4300`.
+A suggested 50 W battery-save setpoint **is not a physical zero**: around
+160–260 W actual battery discharge was seen during previous holds, so the goal
+is to avoid nearly all EV-related battery depletion rather than absolutely
+no depletion. Do not enable mode `1` without recorded simultaneous EV-load
+and battery response validation; the operator should begin with `shadow`.
+Rollback: set mode `0` and restart dispatch, or restore previous
+`dispatch_loop.py` plus the prior env file. Inverter/SoC recovery and watchdog
+remain authoritative.
+
+**Independent L3 grid-charge guard:** `l3_charge_guard.py` limits *additional
+high-power battery charging*; it does not control the Volvo, EVSE, or provide
+certified per-phase fuse protection. It runs **after** SoC recovery and the
+optional L3 battery coordination above, so a high charge requested by either
+policy is still subject to the charge cap. The poller reads register 50006
+using its **existing** Modbus TCP connection and includes
+`grid_unbalanced_output_raw` in `live.json`. The charge guard requires
+fresh, consistent L1/L2/L3 data and an integer `50006 = 0` to estimate L3
+house load. Without trustworthy data it caps a high-power battery charge to
+the configured SoC recovery baseline (300 W by default), rather than treating
+missing data as spare capacity. A limited charge deliberately bypasses the
+plan-vs-SoC divergence veto; physical SoC safety checks still apply.
+
+`DISPATCH_L3_CHARGE_GUARD_MODE=shadow` (default) computes and records the
+suggested cap without changing inverter commands. `0` disables the guard,
+`1` enables the cap. `DISPATCH_L3_CHARGE_BUDGET_W=4000` is shared with the
+battery-only L3 policy; the allowed range is 300–4600 W, not an overcurrent
+trip threshold. `DISPATCH_L3_BATTERY_MODE` remains independent, default `0`.
+Start with `shadow`, validate real EV and appliance load overlaps, and do not
+enable active mode without a separately approved physical test. Roll back
+this guard by setting `DISPATCH_L3_CHARGE_GUARD_MODE=0` and restarting dispatch.
+No behavior change is made by merely syncing code to Git.
+
 **solinteg-healthcheck** (every 5 min) and **solinteg-heartbeat-ping** (every 10 min) need
 two accounts, both free, both one-time setup done in their own app/website — nothing to
 install:

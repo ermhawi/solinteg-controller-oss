@@ -263,6 +263,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
+from l3_battery_policy import observe_l3, suggest_battery_target
 from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
@@ -270,6 +271,7 @@ from inverter_control import (
     Inverter,
     force_charge,
     force_discharge,
+    force_hold,
     freeze_battery,
     return_to_auto,
     clamp_power_w,
@@ -308,7 +310,7 @@ AUTO_ACTIONS = ("hold", "idle")
 # — Auto, the ~220 W battery-save emulation, or a real freeze (see FREEZE_HOLDS). Keeping it out of
 # the shared vocabulary is what stops lib/__tests__/action-contract.test.ts from demanding a TS
 # counterpart for a purely local execution strategy.
-EXECUTOR_ACTIONS = ("freeze",)
+EXECUTOR_ACTIONS = ("freeze", "reserve_hold")
 
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
@@ -390,9 +392,14 @@ SOC_FLOOR_GUARD_HEADROOM_KWH = float(os.environ.get("DISPATCH_SOC_FLOOR_GUARD_HE
 # than the inverter's minimum. This is an operational target, not a claimed BMS setting.
 SOC_RECOVERY_EXIT_PCT = float(os.environ.get("DISPATCH_SOC_RECOVERY_EXIT_PCT", str(SOC_FLOOR_PCT + 8)))
 SOC_RECOVERY_ENTRY_PCT = (BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH) / BATTERY_KWH * 100
+# Independent economic planning reserve, already defined alongside battery capacity.
+# Its value may be 20% while the physical/BMS floor remains 12%.
+# Reserve hold is an UNVERIFIED, separately gated actuator. A planning reserve
+# must not require enabling unverified zero-power hardware control.
+RESERVE_HOLD_VERIFIED = os.environ.get("DISPATCH_RESERVE_HOLD_VERIFIED", "0") == "1"
 if PLANNER_RESERVE_PCT > SOC_FLOOR_PCT:
-    # At 20% planned reserve, recover again below 19.5%, until 21%.
-    # The independent hard inverter/BMS floor remains 12%.
+    # At a 20% planning reserve, recovery begins below 19.5% and
+    # continues to >=21%, without changing the physical safety floor.
     SOC_RECOVERY_ENTRY_PCT = max(SOC_RECOVERY_ENTRY_PCT, PLANNER_RESERVE_PCT - 0.5)
     SOC_RECOVERY_EXIT_PCT = max(SOC_RECOVERY_EXIT_PCT, PLANNER_RESERVE_PCT + 1.0)
 if not SOC_RECOVERY_ENTRY_PCT < SOC_RECOVERY_EXIT_PCT < 98:
@@ -421,6 +428,19 @@ if L3_CHARGE_BUDGET_W < 300 or L3_CHARGE_BUDGET_W > 4600:
     raise ValueError("DISPATCH_L3_CHARGE_BUDGET_W must be between 300 and 4600 W")
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
+# House battery L3 economic coordination, never EVCC control or a fuse safety device.
+# "shadow" computes/logs proposed battery targets but writes NOTHING differently.
+# "1" may change battery-only setpoints. Before every active interval it verifies
+# inverter register 50006==0 (balanced output) independently through read-only Modbus.
+L3_BATTERY_MODE = os.environ.get("DISPATCH_L3_BATTERY_MODE", "0").lower()
+if L3_BATTERY_MODE not in ("0", "shadow", "1"):
+    raise ValueError("DISPATCH_L3_BATTERY_MODE must be 0, shadow, or 1")
+L3_EV_LIKE_THRESHOLD_W = int(os.environ.get("DISPATCH_L3_EV_LIKE_THRESHOLD_W", "2500"))
+L3_BASELINE_W = int(os.environ.get("DISPATCH_L3_NON_EV_BASELINE_W", "600"))
+L3_EV_EST_MAX_W = int(os.environ.get("DISPATCH_L3_EST_EV_MAX_W", "4300"))
+L3_BALANCED_CHECK_INTERVAL_S = 600
+_l3_checked_until = 0.0
+_l3_balanced_output = False
 # Same env vars lib/constants.ts reads (kept in sync by the cross-language test). ONE_WAY_EFF must
 # mirror EFF_ONE_WAY there exactly: it is the METER-to-stored per-leg efficiency, so it carries the
 # inverter's conversion losses as well as the cells'. Using the battery-terminal DC figure alone
@@ -693,6 +713,125 @@ def slot_power_w(dispatch: list, idx: int, prev_soc: float) -> int:
     """
     delta_kwh = dispatch[idx]["socAfter"] - prev_soc
     return clamp_power_w(abs(delta_kwh) / SLOT_HOURS * 1000)
+
+
+def verify_l3_balanced_output() -> bool:
+    """Periodically verify register 50006==0; fail closed on errors or unbalance.
+
+    This is an economic *battery-only* policy, but the algebra for recovering
+    house L3 demand relies on balanced inverter power. Never apply a suggestion
+    just because we happened to read 50006=0 on a previous day.
+    """
+    global _l3_checked_until, _l3_balanced_output
+    if time.monotonic() < _l3_checked_until:
+        return _l3_balanced_output
+    _l3_checked_until = time.monotonic() + L3_BALANCED_CHECK_INTERVAL_S
+    inv = None
+    try:
+        inv = Inverter()
+        setting = inv.read_u16(50006)
+        _l3_balanced_output = setting == 0
+        if not _l3_balanced_output:
+            log.warning("L3 battery coordination disarmed: unbalanced inverter output (50006=%s)", setting)
+    except Exception as exc:  # noqa: BLE001
+        _l3_balanced_output = False
+        log.warning("L3 battery coordination disarmed: cannot verify register 50006 (%s)", exc)
+    finally:
+        if inv is not None:
+            inv.close()
+    return _l3_balanced_output
+
+
+def coordinate_l3_battery(action: str, power_w: int, expected_soc_kwh, solar_skip: bool,
+                          detail: str, numbers: dict, now: datetime):
+    """Optional post-plan, post-recovery battery setpoint adjustment.
+
+    Existing SoC recovery and hardware guards have priority. This never alters
+    inverter registers on its own, never talks to the EVSE, and returns the exact
+    original decision when off, shadow, invalid/old phase data, or uncertain
+    inverter balance. Active changes intentionally set expected_soc_kwh=None:
+    this policy *deliberately* deviates from the plan's SoC trajectory, while
+    force_discharge/force_charge still enforce the physical SoC floor.
+    """
+    if L3_BATTERY_MODE == "0" or numbers.get("soc_recovery"):
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    reading = common.read_json(LIVE_JSON_PATH)
+    observation = observe_l3(reading or {}, now)
+    if observation is None:
+        numbers["l3_policy_status"] = "unavailable"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    current_action, current_power, _ = effective_target(action, power_w, solar_skip)
+    suggested = suggest_battery_target(
+        current_action, current_power, observation,
+        l3_charge_budget_w=L3_CHARGE_BUDGET_W,
+        ev_like_threshold_w=L3_EV_LIKE_THRESHOLD_W,
+        non_ev_baseline_w=L3_BASELINE_W,
+        estimated_ev_max_w=L3_EV_EST_MAX_W,
+    )
+    numbers.update(suggested.metrics)
+    numbers["l3_policy_mode"] = L3_BATTERY_MODE
+    numbers["l3_policy_suggested_action"] = suggested.action
+    numbers["l3_policy_suggested_power_w"] = suggested.power_w
+    if (suggested.action, suggested.power_w) == (current_action, current_power):
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    if L3_BATTERY_MODE == "shadow":
+        log.info("L3 battery coordination SHADOW: %s %dW -> %s %dW (%s)",
+                 current_action, current_power, suggested.action, suggested.power_w, suggested.reason)
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    # A '1' mode cannot use the symmetric inverter/3 inference unless register
+    # 50006 is currently OFF. This check is completely independent of live.json.
+    if not verify_l3_balanced_output():
+        numbers["l3_policy_status"] = "inverter_balance_unknown_or_on"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    numbers["l3_policy_status"] = "applied"
+    detail = (f"L3 battery coordination: {suggested.reason}; L3 inferred "
+              f"{observation.house_l3_w:.0f} W; {detail}")
+    return suggested.action, suggested.power_w, None, False, detail, numbers
+
+
+def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
+                    now: datetime):
+    """Limit high-power charging using *verified* fresh L3 readings, never EVCC.
+
+    The independent Sunwoda low-SoC recovery stays at 300 W when phase data is
+    unknown. This is not a fuse protection system (CT updates are not instant).
+    """
+    if action != "charge" or power_w <= SOC_FLOOR_RECOVERY_W or L3_CHARGE_GUARD_MODE == "0":
+        return power_w, detail, numbers, False
+
+    reading = common.read_json(LIVE_JSON_PATH)
+    house_l3_w = observe_l3_house_w(reading, now)
+    # Poller reads 50006 with its EXISTING Modbus session, so the dispatcher
+    # does not open an extra session immediately before the physical write.
+    # Unknown, missing or stale readback => fail-closed to the 300 W baseline.
+    raw_balance = reading.get("grid_unbalanced_output_raw") if isinstance(reading, dict) else None
+    balanced_output = (house_l3_w is not None and type(raw_balance) is int and raw_balance == 0)
+
+    capped_w, reason = cap_grid_charge_w(
+        power_w,
+        house_l3_w=house_l3_w,
+        balanced_output=balanced_output,
+        budget_w=L3_CHARGE_BUDGET_W,
+        efficiency=ONE_WAY_EFF,
+        min_charge_w=SOC_FLOOR_RECOVERY_W,
+    )
+    numbers["l3_charge_guard_mode"] = L3_CHARGE_GUARD_MODE
+    numbers["l3_charge_guard_balanced"] = balanced_output
+    numbers["l3_charge_guard_budget_w"] = L3_CHARGE_BUDGET_W
+    if house_l3_w is not None:
+        numbers["l3_charge_guard_load_w"] = round(house_l3_w)
+    numbers["l3_charge_guard_suggested_w"] = capped_w
+    if L3_CHARGE_GUARD_MODE == "shadow":
+        return power_w, f"{detail}; L3 charge guard SHADOW: {reason}", numbers, False
+    limited = capped_w < power_w
+    if limited:
+        log.info("L3 charge guard limited battery charging: %s", reason)
+    return capped_w, f"{detail}; L3 charge guard: {reason}", numbers, limited
 
 
 def read_live_reading(now: datetime):
@@ -1196,6 +1335,29 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
         if was_active:
             log.info("SoC recovery complete: %.2f%% (exit %.2f%%)", live_soc_kwh / BATTERY_KWH * 100,
                      SOC_RECOVERY_EXIT_PCT)
+        # Prevent the *normal* optimizer, including its idle->Auto and battery-save
+        # fallbacks, from draining the battery right back into emergency recovery.
+        # Real zero-power hold (caps OPEN) is a separate executor-only action.
+        # Keep Auto when there is live PV surplus so the battery can charge freely.
+        live_pct = live_soc_kwh / BATTERY_KWH * 100
+        # An unverified open-cap hold is NEVER activated merely by setting an
+        # economic reserve; physical approval is an independent gate.
+        if (RESERVE_HOLD_VERIFIED and PLANNER_RESERVE_PCT > SOC_FLOOR_PCT
+                and live_pct <= PLANNER_RESERVE_PCT):
+            if action == "charge" and not solar_skip:
+                return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+            if action == "freeze":
+                return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+            surplus = read_live_solar_surplus_w(now)
+            if surplus is not None and surplus > 100:
+                numbers["reserve_auto_solar_w"] = round(surplus)
+                return "idle", 0, None, False, detail, numbers
+            numbers["reserve_hold"] = True
+            numbers["soc_pct"] = round(live_pct, 2)
+            numbers["planner_reserve_pct"] = PLANNER_RESERVE_PCT
+            detail = (f"Planner reserve hold at {live_pct:.2f}% <= {PLANNER_RESERVE_PCT:.1f}%: "
+                      f"grid covers house, no discharge; previously {action} {power_w} W; {detail}")
+            return "reserve_hold", 0, None, False, detail, numbers
         return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
 
     surplus_w = read_live_solar_surplus_w(now)
@@ -1221,46 +1383,6 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
 
 
 
-def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
-                    now: datetime):
-    """Limit high-power charging using *verified* fresh L3 readings, never EVCC.
-
-    The independent Sunwoda low-SoC recovery stays at 300 W when phase data is
-    unknown. This is not a fuse protection system (CT updates are not instant).
-    """
-    if action != "charge" or power_w <= SOC_FLOOR_RECOVERY_W or L3_CHARGE_GUARD_MODE == "0":
-        return power_w, detail, numbers, False
-
-    reading = common.read_json(LIVE_JSON_PATH)
-    house_l3_w = observe_l3_house_w(reading, now)
-    # Poller reads 50006 with its EXISTING Modbus session, so the dispatcher
-    # does not open an extra session immediately before the physical write.
-    # Unknown, missing or stale readback => fail-closed to the 300 W baseline.
-    raw_balance = reading.get("grid_unbalanced_output_raw") if isinstance(reading, dict) else None
-    balanced_output = (house_l3_w is not None and type(raw_balance) is int and raw_balance == 0)
-
-    capped_w, reason = cap_grid_charge_w(
-        power_w,
-        house_l3_w=house_l3_w,
-        balanced_output=balanced_output,
-        budget_w=L3_CHARGE_BUDGET_W,
-        efficiency=ONE_WAY_EFF,
-        min_charge_w=SOC_FLOOR_RECOVERY_W,
-    )
-    numbers["l3_charge_guard_mode"] = L3_CHARGE_GUARD_MODE
-    numbers["l3_charge_guard_balanced"] = balanced_output
-    numbers["l3_charge_guard_budget_w"] = L3_CHARGE_BUDGET_W
-    if house_l3_w is not None:
-        numbers["l3_charge_guard_load_w"] = round(house_l3_w)
-    numbers["l3_charge_guard_suggested_w"] = capped_w
-    if L3_CHARGE_GUARD_MODE == "shadow":
-        return power_w, f"{detail}; L3 charge guard SHADOW: {reason}", numbers, False
-    limited = capped_w < power_w
-    if limited:
-        log.info("L3 charge guard limited battery charging: %s", reason)
-    return capped_w, f"{detail}; L3 charge guard: {reason}", numbers, limited
-
-
 def apply_target(inv: Inverter, action: str, power_w: int) -> None:
     """Apply one dispatch decision. See the ACTION CONTRACT note beside FORCED_ACTIONS.
 
@@ -1279,6 +1401,12 @@ def apply_target(inv: Inverter, action: str, power_w: int) -> None:
         force_charge(inv, power_w)
     elif action == "discharge":
         force_discharge(inv, power_w)
+    elif action == "reserve_hold":
+        # Open-cap zero-power EMS hold, probed on reference firmware; unlike Auto it
+        # does not drain the battery to serve the house during a no-solar deficit.
+        # The physical 12% safety guard remains independent and takes priority.
+        if not force_hold(inv, SOC_FLOOR_PCT):
+            force_charge(inv, SOC_FLOOR_RECOVERY_W)
     elif action == "freeze":
         # A freeze that the inverter accepts but does not enforce is not a transient: it is the
         # documented pre-mode failure shape (MODBUS.md), i.e. this firmware does not do what the
@@ -1516,7 +1644,7 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             # emulation, and a freeze (whose three-register combination is not probe-verified — the
             # expected failure is "stored but not enforced", which only a readback plus the measured
             # battery power can distinguish).
-            if (applied_action == "freeze"
+            if (applied_action in ("freeze", "reserve_hold")
                     or (applied_action == "discharge" and "battery_save_w" in numbers)
                     or numbers.get("soc_recovery")):
                 try:
@@ -1683,11 +1811,21 @@ def main() -> None:
                 last_target = None
             action, power_w, expected_soc_kwh, solar_skip, detail, numbers = prioritize_soc_recovery(
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
+            # Battery-only L3 coordination sits AFTER the SoC recovery decision so a
+            # low-SoC recovery charge always wins; default 0 means no behaviour change.
+            try:
+                action, power_w, expected_soc_kwh, solar_skip, detail, numbers = coordinate_l3_battery(
+                    action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
+            except Exception as exc:  # noqa: BLE001 — advisory battery policy, never crash dispatch
+                log.warning("L3 battery coordination failed (%s) — original dispatch retained", exc)
+            # Independent charge-side guard runs last, so it can cap a high charge
+            # recommended by either the optimizer or L3 battery coordination.
+            # Missing/old phase data never means spare L3 capacity.
             power_w, detail, numbers, l3_limited = guard_l3_charge(
                 action, power_w, detail, numbers, iteration_now)
             if l3_limited:
-                # This is intentionally slower than the planned SoC trajectory.
-                # Its divergence is not a reason to drop into battery-draining Auto.
+                # The cap intentionally slows the plan's SoC trajectory. Do not
+                # reject the safer setpoint or fall back to battery-draining Auto.
                 expected_soc_kwh = None
             effective_action, effective_power, solar_skipped_now = effective_target(
                 action, power_w, solar_skip)

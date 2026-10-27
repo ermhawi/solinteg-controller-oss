@@ -15,6 +15,7 @@ import {
 import type { PriceData } from '@/lib/prices';
 import type { DispatchSlot } from '@/lib/optimizer';
 import type { ActualSlotFlows } from '@/lib/actual-flows';
+import { chartSlotsForDisplay } from '@/lib/chart-slot-keys';
 
 export function useChartData(
   data: PriceData,
@@ -36,38 +37,42 @@ export function useChartData(
     [data.prices, data.today],
   );
 
+  const displaySlots = useMemo(
+    () => chartSlotsForDisplay(chartPrices, pastDispatchSlots ?? [], dispatchSchedule ?? []),
+    [chartPrices, pastDispatchSlots, dispatchSchedule],
+  );
+
   // Past slots first, live schedule second: on the one key both could theoretically share (the
   // live plan's first slot vs a past run's last, which readPastDispatchSlots' cutoff already
   // excludes), the live plan wins — it's the more current view of that slot's decision.
   const dispatchByTime = useMemo(() => {
     return Object.fromEntries(
-      [...(pastDispatchSlots ?? []), ...(dispatchSchedule ?? [])].map((d) => [d.startTime, d]),
+      [...displaySlots.past, ...displaySlots.future].map((d) => [d.startTime, d]),
     );
-  }, [pastDispatchSlots, dispatchSchedule]);
-
-  // Historical bands (already-elapsed slots, reconstructed from past plans — see
-  // lib/telemetry readPastDispatchSlots) come strictly before dispatchSchedule's own slots, so
-  // concatenating keeps the array time-ordered and buildActionBands' run-collapsing works
-  // unchanged across the past/live boundary.
-  const actionBands = useMemo(
-    () => buildActionBands([...(pastDispatchSlots ?? []), ...(dispatchSchedule ?? [])], batteryFloorKwh),
-    [pastDispatchSlots, dispatchSchedule, batteryFloorKwh],
-  );
+  }, [displaySlots]);
 
   const plannedSocKwhByTime = useMemo(() => {
     const out = { ...pastPlannedSocKwhByTime };
     let soc = startSocKwh;
-    for (const dispatch of [...(dispatchSchedule ?? [])].sort((a, b) => a.startTime.localeCompare(b.startTime))) {
+    for (const dispatch of displaySlots.future) {
       out[dispatch.startTime] = soc;
       soc = dispatch.socAfter;
     }
     return out;
-  }, [pastPlannedSocKwhByTime, dispatchSchedule, startSocKwh]);
+  }, [pastPlannedSocKwhByTime, displaySlots, startSocKwh]);
+
+  // Historical bands (already-elapsed slots, reconstructed from past plans — see
+  // lib/telemetry readPastDispatchSlots) come strictly before the live plan. Charge-speed
+  // labels use the planned battery-side delta, not net household grid import.
+  const actionBands = useMemo(
+    () => buildActionBands([...displaySlots.past, ...displaySlots.future], batteryFloorKwh, plannedSocKwhByTime),
+    [displaySlots, batteryFloorKwh, plannedSocKwhByTime],
+  );
 
   const chartData = useMemo(
     () =>
       buildChartData(
-        chartPrices,
+        displaySlots.prices,
         solarForecast,
         solarProfiles,
         dispatchByTime,
@@ -81,7 +86,7 @@ export function useChartData(
         plannedSocKwhByTime,
       ),
     [
-      chartPrices,
+      displaySlots,
       solarForecast,
       solarProfiles,
       dispatchByTime,
@@ -96,11 +101,11 @@ export function useChartData(
     ],
   );
 
-  const xTicks = useMemo(() => buildXTicks(chartPrices), [chartPrices]);
+  const xTicks = useMemo(() => buildXTicks(displaySlots.prices), [displaySlots]);
 
   const tomorrowIdx = useMemo(
-    () => chartPrices.findIndex((p) => p.startTime.startsWith(data.tomorrow)),
-    [chartPrices, data.tomorrow],
+    () => displaySlots.prices.findIndex((p) => p.startTime.startsWith(data.tomorrow)),
+    [displaySlots, data.tomorrow],
   );
 
   const firstTime = chartData[0]?.time ?? null;

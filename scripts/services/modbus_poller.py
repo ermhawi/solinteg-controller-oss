@@ -39,6 +39,8 @@ Environment variables:
   INVERTER_DATA_PATH   Output JSON file path (default /opt/solinteg/live.json)
   TELEMETRY_DB_PATH    SQLite time-series path (default /opt/solinteg/telemetry.db)
   POLL_INTERVAL        Poll interval in seconds (default 30)
+  POLL_PHASE_RETRY_INITIAL_S  Delay after first extended CT read failure (default 120)
+  POLL_PHASE_RETRY_MAX_S      Maximum exponential retry delay (default 1800)
 """
 
 import logging
@@ -62,6 +64,11 @@ SLAVE_ID = int(os.environ.get("SOLINTEG_SLAVE_ID", "1"))
 DATA_PATH = Path(os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json"))
 DB_PATH = Path(os.environ.get("TELEMETRY_DB_PATH", "/opt/solinteg/telemetry.db"))
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
+# An extended CT read may fail because of a transient Modbus timeout, not unsupported firmware.
+# Back off to avoid hammering an unsupported device, but ALWAYS retry so one outage cannot
+# permanently disable L1/L2/L3 until someone manually restarts the poller.
+PHASE_RETRY_INITIAL_S = max(30, int(os.environ.get("POLL_PHASE_RETRY_INITIAL_S", "120")))
+PHASE_RETRY_MAX_S = max(PHASE_RETRY_INITIAL_S, int(os.environ.get("POLL_PHASE_RETRY_MAX_S", "1800")))
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
 BATTERY_KWH = float(os.environ.get("SOLINTEG_BATTERY_KWH", "25.6"))  # Enershare Energy-Core usable capacity
@@ -103,12 +110,13 @@ WORK_MODES = {
 
 
 def read_inverter(client: ModbusTcpClient) -> dict:
-    # Prefer the extended block (per-phase CT data), but NEVER let unsupported registers
-    # break the original poller. A firmware that rejects 10994 falls back to 11000–11029.
-    # Cache this negative capability per connection to avoid a Modbus error every 30 seconds.
+    # Prefer the extended block (per-phase CT data), without risking the core poller if it
+    # fails. A single timeout MUST NOT disable phase telemetry for the life of the process:
+    # the same client survives socket reconnections. Retry after a bounded exponential
+    # backoff (2, 4, 8, ... 30 min by default) even on unsupported firmware.
     phase_w = (None, None, None)
     offset = 0
-    if not getattr(client, "_phase_block_disabled", False):
+    if time.monotonic() >= getattr(client, "_phase_retry_after", 0.0):
         try:
             r1 = client.read_holding_registers(10994, count=36, device_id=SLAVE_ID)
             if r1.isError() or len(r1.registers) != 36:
@@ -126,9 +134,18 @@ def read_inverter(client: ModbusTcpClient) -> dict:
                 phase_w = (None, None, None)
             else:
                 client._phase_mismatch_logged = False
+            failures = getattr(client, "_phase_retry_failures", 0)
+            client._phase_retry_failures = 0
+            client._phase_retry_after = 0.0
+            if failures:
+                log.info("Extended CT phase reads restored after %d failed attempt(s)", failures)
         except Exception as exc:
-            client._phase_block_disabled = True
-            log.warning("Extended CT read unavailable (%s); using legacy block 11000–11029", exc)
+            failures = min(getattr(client, "_phase_retry_failures", 0) + 1, 32)
+            client._phase_retry_failures = failures
+            retry_s = min(PHASE_RETRY_MAX_S, PHASE_RETRY_INITIAL_S * (2 ** min(failures - 1, 16)))
+            client._phase_retry_after = time.monotonic() + retry_s
+            log.warning("Extended CT read unavailable (%s); using legacy block 11000–11029, "
+                        "retrying phases in %ds (failure %d)", exc, retry_s, failures)
     if offset == 0:
         r1 = client.read_holding_registers(11000, count=30, device_id=SLAVE_ID)
         if r1.isError() or len(r1.registers) != 30:
