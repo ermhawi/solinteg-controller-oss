@@ -1,0 +1,22 @@
+[Unit]
+Description=Independent expiry and safety rollback for EV L3 battery-grid priority trial
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/solinteg
+ExecStart=/usr/bin/python3 /opt/solinteg/app/scripts/services/ev_grid_trial_watchdog.py
+TimeoutStartSec=40
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/solinteg
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX

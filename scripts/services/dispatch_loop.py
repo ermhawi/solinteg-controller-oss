@@ -260,10 +260,12 @@ import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
 from l3_battery_policy import observe_l3, suggest_battery_target
+from ev_grid_priority_guard import guard_dispatch as guard_ev_grid_priority
 from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
@@ -1818,6 +1820,13 @@ def main() -> None:
                     action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
             except Exception as exc:  # noqa: BLE001 — advisory battery policy, never crash dispatch
                 log.warning("L3 battery coordination failed (%s) — original dispatch retained", exc)
+            # Time-bounded, independently watched EV L3 priority trial:
+            # only REDUCES forced discharge using fresh EVCC C2/Ict2 + inverter
+            # balanced-phase evidence. Unarmed/expired gate is exactly a no-op.
+            action, power_w, expected_soc_kwh, solar_skip, detail, numbers = guard_ev_grid_priority(
+                action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now,
+                live_path=Path(LIVE_JSON_PATH),
+                evcc_path=Path("/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json"))
             # Independent charge-side guard runs last, so it can cap a high charge
             # recommended by either the optimizer or L3 battery coordination.
             # Missing/old phase data never means spare L3 capacity.
