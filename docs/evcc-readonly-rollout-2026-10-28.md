@@ -145,6 +145,17 @@ Carlo Gavazzi EM111 energy meter is not yet integrated into this series.
 The inverter's L3 column stores **watts**, not independently measured
 RMS phase current. We should not claim this alone enforces the 20 A fuse.
 
+**Later 2026-10-28 field observation:** Waveshare connectivity returned
+and the user started charging. FC03 then showed `C2` and **Ict2=6,0 A**
+with `PWM=100/100` (6 A), while Ict1/Ict3 measured about 0,1 A each.
+The observer's `measured_current_a=6,2` is the **three-channel sum**,
+not the active phase's 6,0 A. The separate, deployed read-only
+`ev_ac_capture.py` now logs Ict2 and integrates only adjacent,
+verified `C2` observations no more than 45 s apart, using explicitly
+**assumed 230 V / power factor 1.0**. It does **not** depend on EM111,
+alter the EVCC's 6 A limit, supply RMS fuse protection, or create
+billable cost. Details in `docs/ev-cost-ledger.md`.
+
 Check service liveness without restarting the house services:
 
     systemctl is-active solinteg-ev-ha solinteg-ev-shadow solinteg-ev-observer solinteg-ev-history

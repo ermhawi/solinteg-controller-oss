@@ -1,0 +1,12 @@
+[Unit]
+Description=Sample EVCC read-only current evidence every 15 seconds
+
+[Timer]
+OnCalendar=*-*-* *:*:00,15,30,45
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=solinteg-ev-ac-capture.service
+
+[Install]
+WantedBy=timers.target

@@ -201,6 +201,82 @@ måste tillkomma. Därför är `kr/mil=null` och `cost_quality=unavailable`
 fortfarande **korrekt**, även med 30 dagars kör- och prisbevis.
 Husets livereglering, bilens 6 A-gräns och HA-dashboarden ändrades inte.
 
+## EVCC-strömmen används nu för uppskattad laddenergi (2026-10-28)
+
+Efter att användaren kopplade in Waveshare igen och startade
+**Volvo XC40:s laddning** kom nya **färska** FC03-svar:
+`state=C2`, `configured_pwm_raw=100`, `pilot_pwm_raw=100`
+(= **6,0 A**), `channel_currents_a=[0.1,6.0,0.1]`,
+`measured_current_a=6.2` (summan av kanalerna). **Den aktiva
+Ict2-kanalen är 6,0 A**; Ict1 och Ict3 innehåller cirka 0,1 A
+vardera och ska **inte** betraktas som bilens laddström.
+Länken svarade också på ett separat TCP-anslutningstest.
+Detta ersätter inte tidigare felhistorik utan visar att kommunikationen
+återkommit vid det senare observationstillfället.
+
+Enbart `scripts/services/ev_ac_capture.py` läser observerarens
+redan tillgängliga `evcc-readonly.json` – **inga egna FC03-anrop**,
+inga Modbus-, bil-, HA-, nätverks- eller inverterskrivningar.
+En separat isolerad `solinteg-ev-ac-capture.timer` kontrollerar
+snapshoten var 15:e sekund men skriver endast **ett** källprov per
+unikt observerartidsstämpel (observeraren uppdaterar ungefär
+var 30:e sekund). Den privata `ev-ac-estimate.sqlite` innehåller
+anonyma råbevis och härledda delintervall som är idempotenta.
+Tjänsten körs som `solinteg-evshadow` med nätverk helt förbjudet,
+`EV_ENABLED=0`, `EVCC_CONTROL_ARMED=0`, dedikerad
+`EV_AC_CAPTURE_ENABLED=1` bara i tjänsten samt privat filmode 0600.
+Ingen annan befintlig tjänst behövde startas om.
+
+**Beräkningen är uttryckligen en uppskattning:**
+`P_estimate = Ict2_A × 230 V × PF 1,0`. Under den
+verifierade laddningen gav detta cirka **1,38 kW**. Summan
+`estimated_ac_kwh_covered_only` beräknas genom trapetsintegral
+av två **intilliggande**, färska, lyckade, 6 A-verifierade
+`C2`-observationer. Mellanrum över 45 s, misslyckade FC03-läsningar,
+annan pilot, extra kanallast eller förlorat källtillstånd räknas
+**inte** som uppmätt 0 kWh eller fortsatt laddning.
+Ingen energi före den första godkända observationspunkten
+gissas fram. Detta är ett estimat på AC-energi **till bilen**, inklusive
+eventuella ombordladdningsförluster och samtidiga bilförbrukare –
+inte en uppmätt EM111-kWh-mängd, faktisk DC-ökning eller fakturakostnad.
+
+```bash
+sudo -n -u solinteg-evshadow python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ev_ac_capture.py --summary
+
+systemctl is-active solinteg-ev-ac-capture.timer
+systemctl show solinteg-ev-ac-capture.service -p Result -p ExecMainStatus
+
+# Avgränsad rollback: stoppa ENDAST denna nya insamlare
+sudo systemctl disable --now solinteg-ev-ac-capture.timer
+```
+
+**Första fältverifiering:** efter två godkända C2-observationer
+registrerade den nya källan ett 30,05 s långt delintervall,
+`0,011518 kWh` uppskattad AC-energi utan fysisk skrivning;
+efter tre prover hade den 60,09 s täckning och `0,023036 kWh`.
+Det är **inte** total energi för hela laddsessionen, som startade
+innan den nya loggern startades. Kvalitet = `estimated`,
+`cost_ore=null` och `vehicle_battery_dc_kwh=null`.
+
+**Husbatteriskyddet:** från Solintegs synkroniserade historik
+(UTC 19:04–19:09:30 jämfört med 19:10:30–19:16:30) ökade
+L3:s nätimport från cirka **76 W** till **1 487 W** (≈ 1,41 kW),
+samtidigt som husbatteriets genomsnittliga urladdning var
+**224 W** före och **213 W** under laddningen. Detta är starkt
+förenligt med att bilen matas av **nätet** utan tillkommande
+urladdning från husbatteriet, men är **inte** en direkt mätning
+av varje elektrons källa eller garanti under andra belastningar.
+L3-värdet är momentan nettoeffekt, **inte** oberoende RMS-fasström
+för 20 A-säkringsskyddet. Befintliga begränsningar och skuggläge
+behålls; laddboxens 6 A-tak har **inte** skrivits eller ändrats.
+
+**Nästa verifiering:** jämför fortsatta 6 A-prover med samtidiga
+L3-deltan och Volvos laddstatus/SoC under ett längre förlopp.
+Kontrollera batteri-/laddförlustmodell och faktiska tariffer innan
+något `charge`-event med `kr` läggs i kostnadsbokföringen.
+EM111 vore en precisionsförbättring men är **inte ett krav** för
+att logga tydligt märkt uppskattad AC-energi genom EVCC.
+
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 
 Inmatning är avsiktligt **explicit** tills betrodda automationskällor finns.
