@@ -1,6 +1,6 @@
 # EVCC: två laddlägen, pris och solöverskott (skuggläge, 2026-10-28)
 
-**Status: kod och offlinetester klara, INTE driftsatt eller hårdvaruverifierad.**
+**Status 2026-10-28:** isolerade HA-, Waveshare- och prisobservatörer är nu driftsatta på Dell. Den nya Next.js-sidan och fysisk bil-/inverterstyrning är fortfarande **inte driftsatta**; inga enheter har fått skrivkommandon.
 Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-design.md`.
 
 ## Kod
@@ -46,20 +46,19 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   Ingen FC10 på den vägen. `EV_ENABLED=0` (default) betyder **ingen
   EVCC-anslutning**, inga skrivningar och inga effekter på `optimizer_runs`
   eller befintlig batteridispatch.
-- `scripts/services/ha_ev_session.py`: **ett** read-only HA REST GET mot
-  `sensor.volvo_charge_priority_volvo_energy_snapshot`, som publiceras
-  av vår befintliga HA-integration vid uppdatering av Volvos API-data.
-  Snapshoten innehåller batteri-SoC, laddkabelstatus och bilens lokala 80 %-mål,
-  **med Volvos fältspecifika ursprungstidsstämplar**. Kräver
-  `schema_version=1`, `timestamp_origin=volvo_energy_state_field`,
-  fullständiga färska (max 20 min) OEM-tider och högst 5 min gammal
-  faktisk API-uppdatering. Varken senaste HA GET, HA `last_reported`
-  eller koordinatorsensorns nyare tidstämpel är tillåten fallback. Kräver explicit
-  kalibrerad **användbar** kapacitet och AC-verkningsgrad; HA:s
-  `sensor.volvo_xc40_battery_capacity` (tidigare 81,608 kWh) används inte
-  automatiskt som verifierad användbar kapacitet. Sätter
-  `observed_at_utc` till **äldsta** källtidsstämpel; vid fel
-  ogiltigförklaras tidigare giltig sessionsfil **omedelbart**.
+- `scripts/services/ha_ev_session.py`: ett skrivskyddat HA GET mot
+  `sensor.volvo_charge_priority_volvo_energy_snapshot` (schema v2).
+  Separata tider visar när Volvo Energy State senast hämtades och när
+  enskilda fordonsvärden senast **ändrades**. Det senare är inte en
+  verifierad fysisk BMS-mättid. Den strikta EV-styrsessionen förblir
+  ogiltig och en separat skuggsession kan bara skapas med uttryckliga
+  och tydligt märkta energiantaganden.
+- `scripts/services/evcc_observer.py`: en självständig observerare med
+  en transport som **enbart konstruerar Modbus FC03**, för två kända
+  registerfönster. Rapporterad kanalström är inte L3:s RMS-skydd.
+- `scripts/services/ev_shadow_planner.py`: läser skuggsessionen,
+  Solintegs prisplan, invertertelemetri och EVCC-observation.
+  Föreslagen ström är endast en simulering; fysisk tillåtelse är 0 A.
 - `app/ev/page.tsx`, `app/components/EvChargingPlanner.tsx` och
   `app/api/ev/*`: Solintegs separata mobilanpassade
   `/solinteg/ev`-sida (vid basväg `/solinteg`) med två laddlägen,
@@ -69,10 +68,11 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   hemlig nyckel på minst 32 tecken, kontrollerad i konstant tid.
   Utan dessa går lägena att förhandsvisa men inte spara.
   Hemligheten exponeras aldrig från servern till webbsidan eller källkoden.
-- `deploy/solinteg-ev-ha.service` och
-  `deploy/solinteg-evcc.service`: **inaktiva** systemd-enheter;
-  ingen automatisk installation, start, deploy eller ändring
-  av skarp Solinteg.
+- `deploy/solinteg-ev-ha.service`, `deploy/solinteg-ev-shadow.service`
+  och `deploy/solinteg-ev-observer.service` körs nu separat, som
+  `solinteg-evshadow`, från `/opt/solinteg/ev-shadow-runtime`.
+  Den äldre `solinteg-evcc.service` med manuella skrivmöjligheter
+  är varken installerad eller aktiverad. Se rollout-dokumentet.
 
 ## Delat elpris, men ännu inte gemensam verkställande plan
 
@@ -328,13 +328,14 @@ systemd-drift. En bekräftad FC10-kvittens är inte en verifierad fysisk
 paus. Vid utebliven kvittens behandlas status som **okänd**; ingen
 automatisk retry eller återstart görs.
 
-**Hårdvarublockering 2026-10-28:** Dell rapporterade `No route to host`
-mot den tidigare verifierade Waveshare-adressen/porten; ingen FC03 eller
-FC10 kunde testas live. EVCC:s upstream-timeout har tidigare visats
-vara avstängd. Utan ett verifierat *oberoende* stoppskydd/fasbudget får
-ingen automatisk EVCC-styrning aktiveras; `solar_permitted_a` är alltid
-0 i den aktuella skuggservicen. `solar_suggested_a` är **inte** en säker
-styrsignal.
+**Länken återställd 2026-10-28:** Waveshare svarar nu från Dell på
+`192.168.0.20:4196`. En separat FC03-observatör läser `0x000F` och
+`0x002E` var 30:e sekund och rapporterar EVCC-status `B2`,
+`configured_pwm_raw=267`, `pilot_pwm_raw=267` och cirka 0,3 A kanalström.
+Pilotens inställning motsvarar cirka 16 A **tillgänglig** ström, inte
+bevis för att bilen laddar med 16 A. Inga EVCC-skrivningar har utförts.
+Upstream-timeout var tidigare avstängd och oberoende skydd för 20 A på
+L3 saknas. Både `charging_permitted_a` och `solar_permitted_a` är 0 A.
 
 Vid återupptag: verifiera länken, status, paus `0x03E8`, laddström 0 A,
 återstart 6 A, avbruten kommunikation och fysisk säkerhetsfunktion.

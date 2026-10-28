@@ -1,27 +1,38 @@
 [Unit]
-Description=Solinteg Volvo price + solar scenario (SHADOW ONLY, NO EVCC)
-After=network-online.target solinteg-ev-ha.service
-Wants=network-online.target
+Description=Solinteg Volvo economic shadow planner (NO CONTROLS)
+After=solinteg-ev-ha.service
 
+# Isolated observational runtime. NEVER reuse the armed inverter environment.
 [Service]
 Type=simple
-User=solinteg
-WorkingDirectory=/opt/solinteg/app
-EnvironmentFile=/opt/solinteg/solinteg.env
-ExecStart=/opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/ev_shadow_planner.py --watch
+User=solinteg-evshadow
+Group=solinteg
+WorkingDirectory=/opt/solinteg/ev-shadow-runtime
+EnvironmentFile=/opt/solinteg/ev-shadow-runtime/ev-shadow.env
+Environment=EV_ENABLED=0
+Environment=EVCC_CONTROL_ARMED=0
+Environment=EVCC_MANUAL_TEST=0
+Environment=EVCC_START_APPROVED=0
 Restart=on-failure
-RestartSec=20
+RestartSec=15
+UMask=0027
 NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/solinteg
-UMask=0077
-
-# This unit NEVER connects to Waveshare/EVCC or imports inverter write tools.
-# Only a local JSON economic scenario is saved. The entire EV control and
-# EV_SHADOW_PLANNER_ENABLED switches remain OFF by default.
-# Installing this unit does not start or enable it.
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
+MemoryMax=128M
+IPAddressDeny=any
+ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ev_shadow_planner.py --watch
+RestrictAddressFamilies=AF_UNIX
 
 [Install]
 WantedBy=multi-user.target

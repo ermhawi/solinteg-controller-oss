@@ -127,6 +127,66 @@ class ShadowEconomicTests(unittest.TestCase):
         self.assertIsNone(result["energy_estimate_unverified"])
         self.assertEqual(streak, 0)
 
+    def test_evcc_reader_is_read_only_and_stale_observations_are_discarded(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evcc.json"
+            valid = {
+                "timestamp": NOW.isoformat(),
+                "source": "waveshare_evcc_fc03_readonly",
+                "read_ok": True,
+                "modbus_function": "FC03",
+                "physical_control_eligible": False,
+                "writes": 0,
+                "pilot_matches_config": True,
+                "measured_current_a": 9.6,
+                "charging_detected": True,
+                "configured_pwm_raw": 166,
+                "pilot_pwm_raw": 166,
+                "state": "B2",
+            }
+            path.write_text(json.dumps(valid))
+            parsed = planner.read_evcc_observation(str(path), now=NOW)
+            self.assertEqual(parsed["measured_current_a"], 9.6)
+            self.assertTrue(parsed["charging_detected"])
+            self.assertFalse(parsed["physical_control_eligible"])
+            self.assertIsNone(planner.read_evcc_observation(
+                str(path), now=NOW + timedelta(minutes=3)))
+            for key, value in (("writes", 1), ("physical_control_eligible", True),
+                               ("modbus_function", "FC10"),
+                               ("read_ok", False), ("charging_detected", False)):
+                with self.subTest(key=key):
+                    path.write_text(json.dumps({**valid, key: value}))
+                    self.assertIsNone(planner.read_evcc_observation(str(path), now=NOW))
+
+    def test_observed_evcc_traffic_updates_shadow_not_physical_permission(self):
+        observed = dict(
+            measured_current_a=6.0,
+            charging_detected=True,
+            configured_pwm_raw=100,
+            pilot_pwm_raw=100,
+            pilot_matches_config=True,
+            state="C2",
+            physical_control_eligible=False,
+        )
+        with mock.patch.object(planner, "read_shadow_ev_session", return_value=session()), \
+             mock.patch.object(planner, "read_house_price_plan",
+                               return_value=plan((0,) * 32)), \
+             mock.patch.object(planner, "read_evcc_observation",
+                               return_value=observed), \
+             mock.patch.object(planner.common, "read_json",
+                               return_value=live(grid_w=-300, soc=100)):
+            result, _ = planner.monitor_once(now=NOW, streak=3)
+        self.assertEqual(result["source"], "ha_price_scenario_with_evcc")
+        self.assertEqual(result["ev_measured_current_a"], 6)
+        self.assertTrue(result["ev_measured_current_available"])
+        self.assertEqual(result["evcc_state"], "C2")
+        self.assertEqual(result["evcc_configured_pwm_raw"], 100)
+        self.assertEqual(result["charging_permitted_a"], 0)
+        self.assertEqual(result["solar_permitted_a"], 0)
+        self.assertEqual(result["writes"], 0)
+
     def test_service_is_disabled_by_default_and_never_touches_hardware(self):
         buffer = io.StringIO()
         with mock.patch.dict(os.environ, {"EV_SHADOW_PLANNER_ENABLED": "0"}), \

@@ -1,0 +1,40 @@
+[Unit]
+Description=Solinteg Waveshare EVCC FC03 observer (READ-ONLY)
+After=network-online.target
+Wants=network-online.target
+
+# Isolated observational runtime. NEVER reuse the armed inverter environment.
+[Service]
+Type=simple
+User=solinteg-evshadow
+Group=solinteg
+WorkingDirectory=/opt/solinteg/ev-shadow-runtime
+EnvironmentFile=/opt/solinteg/ev-shadow-runtime/ev-shadow.env
+Environment=EV_ENABLED=0
+Environment=EVCC_CONTROL_ARMED=0
+Environment=EVCC_MANUAL_TEST=0
+Environment=EVCC_START_APPROVED=0
+Restart=on-failure
+RestartSec=15
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
+MemoryMax=128M
+IPAddressDeny=any
+ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/evcc_observer.py --watch
+IPAddressAllow=192.168.0.20/32
+RestrictAddressFamilies=AF_UNIX AF_INET
+
+[Install]
+WantedBy=multi-user.target

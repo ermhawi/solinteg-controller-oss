@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,42 @@ from datetime import datetime, timezone
 import common
 from ev_price_policy import decide_grid_price, read_house_price_plan, read_shadow_ev_session
 from ev_solar_policy import decide_solar
+
+
+def read_evcc_observation(path: str, *, now: datetime) -> dict | None:
+    """Consume only a fresh FC03 monitor result; it grants NO control rights."""
+    record = common.read_json(path)
+    if not isinstance(record, dict):
+        return None
+    if (record.get("source") != "waveshare_evcc_fc03_readonly"
+            or record.get("read_ok") is not True
+            or record.get("modbus_function") != "FC03"
+            or record.get("physical_control_eligible") is not False
+            or type(record.get("writes")) is not int or record["writes"] != 0
+            or type(record.get("pilot_matches_config")) is not bool):
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(record["timestamp"]).replace("Z", "+00:00"))
+        if stamp.tzinfo is None or not -5 <= (now - stamp).total_seconds() <= 90:
+            return None
+        current = float(record["measured_current_a"])
+        if not math.isfinite(current) or not 0 <= current <= 32:
+            return None
+        is_charging = record["charging_detected"]
+        if type(is_charging) is not bool or is_charging != (current >= 1):
+            return None
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return None
+    return {
+        "measured_current_a": current,
+        "charging_detected": is_charging,
+        "configured_pwm_raw": record.get("configured_pwm_raw"),
+        "pilot_pwm_raw": record.get("pilot_pwm_raw"),
+        "pilot_matches_config": record["pilot_matches_config"],
+        "state": record.get("state"),
+        "observed_at_utc": stamp.isoformat(),
+        "physical_control_eligible": False,
+    }
 
 
 def monitor_once(*, now: datetime | None = None, streak: int = 0) -> tuple[dict, int]:
@@ -35,14 +72,19 @@ def monitor_once(*, now: datetime | None = None, streak: int = 0) -> tuple[dict,
     )
     live = common.read_json(os.environ.get("INVERTER_DATA_PATH",
                                            "/opt/solinteg/live.json"))
+    evcc = read_evcc_observation(
+        os.environ.get("EVCC_READONLY_PATH", "/opt/solinteg/evcc-readonly.json"),
+        now=now,
+    )
+    ev_measured = (evcc["measured_current_a"] if evcc and evcc["charging_detected"]
+                   else 0.0)
     params = {
         "live": live,
         "now": now,
-        # No EVCC connection: use 0A *in the calculation*, NEVER claim
-        # to know actual EV current. Existing EV load may reduce observed
-        # export; omitting it is conservative and may understate surplus.
-        "ev_measured_a": 0,
-        "ev_running": False,
+        # EVCC readbacks can improve shadow export accounting, not fuse
+        # protection. Unknown/stale reads contribute 0 A (conservative).
+        "ev_measured_a": ev_measured,
+        "ev_running": evcc is not None and evcc["charging_detected"],
         "phase_guard_verified": False,
         "max_current_a": max_current_a,
         "solar_allowed": price.solar_allowed,
@@ -62,7 +104,8 @@ def monitor_once(*, now: datetime | None = None, streak: int = 0) -> tuple[dict,
     return {
         "timestamp": now.isoformat(),
         "mode": "shadow",
-        "source": "ha_price_scenario_no_evcc",
+        "source": ("ha_price_scenario_with_evcc" if evcc
+                   else "ha_price_scenario_no_evcc"),
         "charge_mode": session["charge_mode"] if session else None,
         "target_soc_pct": 80 if session else None,
         "remaining_ev_ac_kwh": session["remaining_ac_kwh"] if session else None,
@@ -73,8 +116,13 @@ def monitor_once(*, now: datetime | None = None, streak: int = 0) -> tuple[dict,
         "observation_quality": session["observation_quality"] if session else None,
         "energy_estimate_unverified": True if session else None,
         "phase_guard_verified": False,
-        "ev_measured_current_available": False,
-        "state": "no_evcc_link_read",
+        "ev_measured_current_available": evcc is not None,
+        "ev_measured_current_a": evcc["measured_current_a"] if evcc else None,
+        "evcc_state": evcc["state"] if evcc else "unknown",
+        "evcc_configured_pwm_raw": evcc["configured_pwm_raw"] if evcc else None,
+        "evcc_pilot_pwm_raw": evcc["pilot_pwm_raw"] if evcc else None,
+        "evcc_pilot_matches_config": evcc["pilot_matches_config"] if evcc else None,
+        "state": "evcc_fc03_observed" if evcc else "no_evcc_link_read",
         "solar_suggested_a": solar.suggested_amps,
         "solar_permitted_a": 0,
         "charging_suggested_a": decision.suggested_amps,
