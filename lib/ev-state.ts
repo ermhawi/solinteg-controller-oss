@@ -60,24 +60,44 @@ export async function readEvOverview(): Promise<EvOverview> {
       reason: stringValue(statusRecord.reason),
       battery_soc_pct: numberValue(statusRecord.battery_soc_pct),
       battery_reported_at_utc: stringValue(statusRecord.battery_reported_at_utc),
+      energy_api_received_at_utc: stringValue(statusRecord.energy_api_received_at_utc),
+      observation_quality: stringValue(statusRecord.observation_quality),
       timestamp_origin: stringValue(statusRecord.timestamp_origin),
+      shadow_observation_usable: statusRecord.shadow_observation_usable === true,
+      shadow_estimate_ready: statusRecord.shadow_estimate_ready === true,
+      shadow_reason: stringValue(statusRecord.shadow_reason),
+      energy_estimate_unverified: statusRecord.energy_estimate_unverified === true,
+      assumed_usable_capacity_kwh: numberValue(statusRecord.assumed_usable_capacity_kwh),
+      assumed_ac_efficiency: numberValue(statusRecord.assumed_ac_efficiency),
+      remaining_soc_pct: numberValue(statusRecord.remaining_soc_pct),
       connected: typeof statusRecord.connected === 'boolean' ? statusRecord.connected : null,
       remaining_ac_kwh: numberValue(statusRecord.remaining_ac_kwh),
     };
   }
 
-  const rawShadow = await jsonFile(
-    process.env.EVCC_SHADOW_PATH || '/opt/solinteg/evcc-shadow.json',
+  // Prefer the separate, read-only HA/price scenario. It has NO EVCC
+  // dependency, and physical current is always zero. The older EVCC
+  // read-only monitor may supply diagnostic data when no scenario exists.
+  const priceShadow = await jsonFile(
+    process.env.EV_SHADOW_PLAN_PATH || '/opt/solinteg/ev-shadow-plan.json',
   );
+  const rawShadow = priceShadow.data === null && priceShadow.error === null
+    ? await jsonFile(process.env.EVCC_SHADOW_PATH || '/opt/solinteg/evcc-shadow.json')
+    : priceShadow;
   const shadowRecord = record(rawShadow.data);
   let shadow: EvShadow | null = null;
   if (shadowRecord?.mode === 'shadow') {
     shadow = {
       timestamp: stringValue(shadowRecord.timestamp) ?? '',
+      source: stringValue(shadowRecord.source),
+      energy_estimate_unverified: shadowRecord.energy_estimate_unverified === true,
+      observation_quality: stringValue(shadowRecord.observation_quality),
       charge_mode: shadowRecord.charge_mode === 'deadline' || shadowRecord.charge_mode === 'economy'
         ? shadowRecord.charge_mode : null,
       charging_suggested_a: numberValue(shadowRecord.charging_suggested_a),
-      charging_permitted_a: numberValue(shadowRecord.charging_permitted_a) ?? 0,
+      // This dashboard is scenario-only. Do not present an untrusted JSON
+      // field as permission to actually energize the car.
+      charging_permitted_a: 0,
       grid_topup_suggested_a: numberValue(shadowRecord.grid_topup_suggested_a) ?? 0,
       price_buy_ore_kwh: numberValue(shadowRecord.price_buy_ore_kwh),
       price_cheap_threshold_ore_kwh: numberValue(shadowRecord.price_cheap_threshold_ore_kwh),

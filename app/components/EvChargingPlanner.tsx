@@ -257,40 +257,78 @@ export default function EvChargingPlanner({ initialOverview }: {
           <h2 className="text-lg font-bold">Volvo i Home Assistant</h2>
           {!actual ? (
             <p className="mt-3 text-sm" style={muted}>
-              Ingen färsk, verifierad Volvo-session.
+              Ingen aktuell Volvo-observation från läsaren.
               {overview.status?.reason ? ' Orsak: ' + overview.status.reason : ''}
-              {' '}Inga laddbeslut tillåts på osäkra data.
+              {' '}Inga laddförslag grundas på ett gammalt API-svar.
             </p>
           ) : (
             <>
               <div className="mt-3 flex items-baseline gap-3">
                 <strong className="text-3xl font-bold">
-                  {actual.battery_soc_pct === null ? '–' : String(actual.battery_soc_pct) + ' %'}
+                  {actual.shadow_observation_usable && actual.battery_soc_pct !== null
+                    ? String(actual.battery_soc_pct) + ' %' : '–'}
                 </strong>
-                <span className="text-sm" style={muted}>Mål 80 %</span>
+                <span className="text-sm" style={muted}>Laddmål 80 %</span>
               </div>
               <p className="mt-2 text-sm" style={muted}>
-                {actual.connected ? 'Laddkabel ansluten' : 'Kabelstatus osäker'}
-                {' · '}Volvos tidsstämpel: {timeInSweden(actual.battery_reported_at_utc)}
+                {actual.shadow_observation_usable
+                  ? (actual.connected ? 'Laddkabel ansluten' : 'Kabel ej ansluten')
+                  : 'Observation inte verifierad'}
+              </p>
+              <p className="mt-2 text-[13px]" style={muted}>
+                Volvo-API hämtat: {timeInSweden(actual.energy_api_received_at_utc)}
+              </p>
+              <p className="mt-1 text-[13px]" style={muted}>
+                Batterivärdet senast ändrat: {timeInSweden(actual.battery_reported_at_utc)}
               </p>
               <p className="mt-2 text-sm" style={muted}>
-                Återstående beräknat AC-behov: {actual.remaining_ac_kwh === null
-                  ? 'okänt' : String(actual.remaining_ac_kwh) + ' kWh'}
+                Kvar till 80 %: {actual.remaining_soc_pct === null
+                  ? 'okänt' : String(actual.remaining_soc_pct) + ' procentenheter'}
               </p>
-              {!actual.valid_for_planning &&
-                <p className="mt-3 text-sm" style={{ color: 'var(--flow-red)' }}>
-                  Ej godkänd för planering: {actual.reason ?? 'Verifiering saknas'}
-                </p>}
+              {actual.shadow_estimate_ready && actual.remaining_ac_kwh !== null ? (
+                <p className="mt-2 text-sm" style={muted}>
+                  Illustrativt AC-behov: {actual.remaining_ac_kwh} kWh,
+                  antaget {actual.assumed_usable_capacity_kwh} kWh användbar
+                  kapacitet och {actual.assumed_ac_efficiency === null
+                    ? 'okänd' : Math.round(actual.assumed_ac_efficiency * 100) + ' %'}{' '}
+                  laddverkningsgrad.
+                </p>
+              ) : (
+                <p className="mt-2 text-sm" style={muted}>
+                  Ingen energiberäkning är aktiverad. Skuggsimulering kräver
+                  uttryckligt angivna och markerat obekräftade antaganden
+                  om kapacitet och laddförluster.
+                </p>
+              )}
+              <p className="mt-3 text-[13px] font-semibold" style={muted}>
+                {actual.shadow_observation_usable
+                  ? 'Preliminär API-observation – inte verifierad BMS-mätning.'
+                  : 'Ingen godkänd API-observation för skuggläge.'}
+              </p>
+              {actual.shadow_reason && <p className="mt-1 text-xs" style={muted}>
+                {actual.shadow_reason}
+              </p>}
+              {!actual.shadow_observation_usable && actual.reason && (
+                <p className="mt-2 text-xs" style={{ color: 'var(--flow-red)' }}>
+                  {actual.reason}
+                </p>
+              )}
             </>
           )}
           <p className="mt-3 text-xs" style={muted}>
-            Sensorvärden är endast observationer. Batterikapacitet och
-            laddförluster måste vara kalibrerade för att räkna kWh.
+            Volvos senast ändrat-tid är inte samma sak som tidpunkten för en
+            ny batterimätning. Fysisk laddstyrning är alltid spärrad här.
           </p>
         </section>
 
         <section className="card-surface p-4 md:p-5">
-          <h2 className="text-lg font-bold">Solintegs EVCC-förslag</h2>
+          <h2 className="text-lg font-bold">Simulerad laddplan</h2>
+          {unsaved && (
+            <p className="mt-2 text-[13px]" style={muted}>
+              Simuleringen nedan gäller fortfarande det senast sparade laddläget.
+              Ändringarna ovan är endast en förhandsvisning.
+            </p>
+          )}
           {shadow ? (
             <>
               <p className="mt-3 text-3xl font-bold">
@@ -298,9 +336,21 @@ export default function EvChargingPlanner({ initialOverview }: {
                   ? '–' : String(shadow.charging_suggested_a) + ' A'}
               </p>
               <p className="mt-2 text-sm" style={muted}>
-                Förslag, inte utförande. Tillåten fysisk ström:
+                Endast förslag, inte utförande. Tillåten fysisk ström:
                 {' '}{shadow.charging_permitted_a} A.
               </p>
+              {shadow.source === 'ha_price_scenario_no_evcc' && (
+                <p className="mt-2 text-[13px] font-semibold" style={muted}>
+                  Skuggscenario från husets prisplan och Volvo-API. Bilens
+                  verkliga laddström är inte mätt via EVCC.
+                </p>
+              )}
+              {shadow.energy_estimate_unverified && (
+                <p className="mt-2 text-[13px]" style={muted}>
+                  Varning: kWh-behovet bygger på antaganden om bilens kapacitet
+                  och laddförluster, inte på en kalibrerad mätning.
+                </p>
+              )}
               <p className="mt-2 text-sm" style={muted}>
                 Köppris: {shadow.price_buy_ore_kwh === null
                   ? 'okänt' : String(shadow.price_buy_ore_kwh) + ' öre/kWh'}
@@ -317,8 +367,9 @@ export default function EvChargingPlanner({ initialOverview }: {
             </>
           ) : (
             <p className="mt-3 text-sm" style={muted}>
-              Ingen färsk EVCC-skuggsimulering. EVCC-tjänsten är
-              ännu inte driftsatt och Waveshare-länken måste verifieras.
+              Ingen färsk skuggsimulering. Den separata, skrivskyddade
+              prisplaneraren måste vara aktiverad. Waveshare krävs inte
+              för detta steg.
             </p>
           )}
           <p className="mt-3 text-xs font-semibold" style={{ color: 'var(--logo-color)' }}>

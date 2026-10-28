@@ -139,6 +139,123 @@ def _oem_snapshot_states(snapshot: dict, *, now: datetime) -> dict[str, dict]:
     return states
 
 
+def read_shadow_observation(snapshot: dict, *, now: datetime) -> dict:
+    """One confirmed API observation; never a verified BMS sample.
+
+    A fresh API response can reuse a last-changed value for days. We allow
+    SHADOW use with explicit quality flags, but the source is FOREVER
+    advisory-only: it cannot be promoted into EV_SESSION_PATH or a device
+    control signal by the caller.
+    """
+    if not isinstance(snapshot, dict) or snapshot.get("entity_id") != OEM_SNAPSHOT:
+        raise UnsafeSession("Volvo shadow OEM snapshot missing")
+    attrs = snapshot.get("attributes")
+    if not isinstance(attrs, dict):
+        raise UnsafeSession("Volvo shadow OEM attributes missing")
+    if (snapshot.get("state") not in ("observed", "ready")
+            or type(attrs.get("schema_version")) is not int
+            or attrs["schema_version"] != 2
+            or attrs.get("timestamp_origin") != "volvo_energy_state_field"
+            or attrs.get("oem_timestamp_role") != "last_changed_not_sampled"
+            or attrs.get("api_fetch_confirmed") is not True
+            or attrs.get("advisory_only") is not True
+            or attrs.get("physical_control_eligible") is not False
+            or type(attrs.get("physical_writes")) is not int
+            or attrs["physical_writes"] != 0):
+        raise UnsafeSession("Volvo energy API observation unavailable: " +
+                            str(attrs.get("reason", "invalid_source"))[:180])
+    api_at = _utc(attrs.get("api_received_at_utc"))
+    api_age = (now - api_at).total_seconds()
+    if not -5 <= api_age <= MAX_COORDINATOR_AGE_SECONDS:
+        raise UnsafeSession("Volvo energy API observation stale")
+    soc = _number(attrs.get("battery_soc_pct"))
+    target = _number(attrs.get("target_soc_pct"))
+    connection = attrs.get("connection")
+    if not 0 <= soc <= 100 or target != TARGET_SOC:
+        raise UnsafeSession("invalid Volvo SoC or local 80-percent target")
+    if connection not in ("connected", "charging", "disconnected"):
+        raise UnsafeSession("invalid Volvo cable observation")
+
+    changed: dict[str, str | None] = {}
+    for key in ("battery_oem_at_utc", "connection_oem_at_utc", "target_oem_at_utc"):
+        raw = attrs.get(key)
+        if raw is None:
+            changed[key] = None  # Explicitly unknown, NEVER last fetched.
+            continue
+        ts = _utc(raw)
+        if ts > api_at + timedelta(seconds=5):
+            raise UnsafeSession("OEM change timestamp after energy API fetch")
+        changed[key] = ts.isoformat()
+    # The high-confidence source tier ("recent changed value") is still not
+    # a physical measurement. It merely informs the UI how long since a
+    # field last changed.
+    return {
+        "vehicle_soc_pct": soc,
+        "target_soc_pct": target,
+        "connected": connection in ("connected", "charging"),
+        "connection_state": connection,
+        "energy_api_received_at_utc": api_at.isoformat(),
+        "api_fetch_confirmed": True,
+        "oem_timestamps_complete": attrs.get("oem_timestamps_complete") is True,
+        "oem_timestamps_recent": attrs.get("oem_timestamps_recent") is True,
+        "oem_timestamp_role": "last_changed_not_sampled",
+        "timestamp_origin": "volvo_energy_state_field",
+        "observation_quality": (
+            "api_recent_fields_changed_recently"
+            if snapshot["state"] == "ready"
+            else "api_recent_field_change_unverified"
+        ),
+        "advisory_only": True,
+        "physical_control_eligible": False,
+        **changed,
+    }
+
+
+def shadow_session_from_observation(*, observation: dict, settings: dict,
+                                    now: datetime, capacity: object,
+                                    ac_efficiency: object) -> dict:
+    """Price-only scenario; assumptions must be intentionally enabled.
+
+    This JSON is categorically NOT a verified charging session and must
+    never be consumed by the EVCC actuator or future physical controller.
+    """
+    if os.environ.get("EV_SHADOW_ASSUMPTIONS_ENABLED") != "1":
+        raise UnsafeSession("shadow energy assumptions not explicitly enabled")
+    if capacity is None or ac_efficiency is None:
+        raise UnsafeSession("shadow energy assumptions missing")
+    usable = _number(capacity)
+    efficiency = _number(ac_efficiency)
+    if not 45 <= usable <= 100 or not 0.7 <= efficiency <= 1:
+        raise UnsafeSession("invalid shadow energy assumptions")
+    soc = observation["vehicle_soc_pct"]
+    remaining = round(max(0, TARGET_SOC - soc) / 100 * usable / efficiency, 3)
+    session = {
+        "source": "home_assistant_shadow",
+        "shadow_only": True,
+        "physical_control_eligible": False,
+        "api_fetch_confirmed": True,
+        "observation_quality": observation["observation_quality"],
+        # This time means an API RESPONSE, not an OEM/BMS sample.
+        "observed_at_utc": observation["energy_api_received_at_utc"],
+        "observation_time_semantics": "api_fetch_not_bms_sample",
+        "connected": observation["connected"],
+        "charge_mode": settings["charge_mode"],
+        "target_soc_pct": TARGET_SOC,
+        "vehicle_soc_pct": soc,
+        "remaining_ac_kwh": remaining,
+        "energy_estimate_unverified": True,
+        "assumed_usable_capacity_kwh": usable,
+        "assumed_ac_efficiency": efficiency,
+        "max_buy_ore_per_kwh": settings.get("max_buy_ore_per_kwh"),
+        "battery_oem_at_utc": observation["battery_oem_at_utc"],
+        "oem_timestamp_role": "last_changed_not_sampled",
+    }
+    if settings["charge_mode"] == "deadline":
+        session["departure_at_utc"] = next_departure(
+            settings["departure_local_time"], now=now).isoformat()
+    return session
+
+
 def load_settings(path: str) -> dict:
     """Fail-closed on malformed user intent; never guess a price ceiling."""
     raw = DEFAULT_SETTINGS.copy()
@@ -312,47 +429,93 @@ def _read_token() -> str:
 
 
 def once(*, now: datetime | None = None) -> dict:
-    """One bounded read; local JSON snapshots only. Unknown -> invalidate."""
+    """One HA GET, three local read-only records. Zero physical writes.
+
+    The strict session remains INVALID until an independent physical sample
+    trust model and EVCC/L3 safeguards have been built and verified. A
+    separate scenario session may drive pure PRICE/SOLAR simulations ONLY.
+    """
     now = now or datetime.now(UTC)
     session_path = os.environ.get("EV_SESSION_PATH", "/opt/solinteg/volvo-energy-session.json")
+    shadow_path = os.environ.get("EV_SHADOW_SESSION_PATH",
+                                 "/opt/solinteg/ev-shadow-session.json")
     status_path = os.environ.get("EV_STATUS_PATH", "/opt/solinteg/ev-session-status.json")
     settings_path = os.environ.get("EV_SETTINGS_PATH", "/opt/solinteg/ev-settings.json")
-    status: dict = {"checked_at_utc": now.isoformat(),
-                    "source": "home_assistant",
-                    "mode": "shadow",
-                    "valid_for_planning": False,
-                    "writes_to_devices": 0}
-    session: dict = {"source": "home_assistant", "connected": False,
-                     "invalid_reason": "not validated"}
+    status: dict = {
+        "checked_at_utc": now.isoformat(),
+        "source": "home_assistant",
+        "mode": "shadow",
+        "valid_for_planning": False,
+        "shadow_observation_usable": False,
+        "shadow_estimate_ready": False,
+        "advisory_only": True,
+        "physical_control_eligible": False,
+        "writes_to_devices": 0,
+    }
+    # Never let an API fetch be promoted to a source-verified control session.
+    session: dict = {
+        "source": "home_assistant",
+        "connected": False,
+        "physical_control_eligible": False,
+        "invalid_reason": "OEM last-change timestamp is not a verified BMS sample",
+    }
+    shadow: dict = {
+        "source": "home_assistant_shadow",
+        "connected": False,
+        "shadow_only": True,
+        "physical_control_eligible": False,
+        "invalid_reason": "not validated",
+    }
     try:
         settings = load_settings(settings_path)
         status.update(settings)
-        capacity_str = os.environ.get("EV_USABLE_BATTERY_KWH")
-        efficiency_str = os.environ.get("EV_AC_CHARGE_EFFICIENCY")
         token = _read_token()
         base = os.environ.get("HA_API_URL", "")
-        # Exactly ONE HA GET: the read-only custom integration's atomic
-        # per-field OEM source snapshot. No fallback to raw HA sensor states.
-        raw_snapshot = _ha_state(base, token, OEM_SNAPSHOT)
-        states = _oem_snapshot_states(raw_snapshot, now=now)
-        session, detail = make_session(
-            states=states, settings=settings, now=now,
-            usable_capacity_kwh=capacity_str,
-            ac_efficiency=efficiency_str,
-        )
-        status.update(detail)
-        status["timestamp_origin"] = "volvo_energy_state_field"
-        status["energy_api_received_at_utc"] = raw_snapshot["attributes"]["api_received_at_utc"]
-        status["valid_for_planning"] = True
+        # Exactly ONE HA GET: atomic, source-labeled API observation.
+        # Neither HA's per-sensor last_reported nor the wall-clock time of
+        # this GET is treated as a Volvo/BMS sample timestamp.
+        observed = read_shadow_observation(
+            _ha_state(base, token, OEM_SNAPSHOT), now=now)
+        status.update({
+            "battery_soc_pct": observed["vehicle_soc_pct"],
+            "battery_reported_at_utc": observed["battery_oem_at_utc"],
+            "connection_reported_at_utc": observed["connection_oem_at_utc"],
+            "target_reported_at_utc": observed["target_oem_at_utc"],
+            "target_soc_pct": observed["target_soc_pct"],
+            "connected": observed["connected"],
+            "timestamp_origin": observed["timestamp_origin"],
+            "oem_timestamp_role": observed["oem_timestamp_role"],
+            "observation_quality": observed["observation_quality"],
+            "oem_timestamps_recent": observed["oem_timestamps_recent"],
+            "energy_api_received_at_utc": observed["energy_api_received_at_utc"],
+            "remaining_soc_pct": round(
+                max(0, TARGET_SOC - observed["vehicle_soc_pct"]), 1),
+            "shadow_observation_usable": True,
+            "reason": "API-observation, not a verified physical BMS measurement",
+        })
+        try:
+            shadow = shadow_session_from_observation(
+                observation=observed, settings=settings, now=now,
+                capacity=os.environ.get("EV_SHADOW_ASSUMED_USABLE_KWH"),
+                ac_efficiency=os.environ.get("EV_SHADOW_ASSUMED_AC_EFFICIENCY"),
+            )
+            status["shadow_estimate_ready"] = observed["connected"]
+            status["remaining_ac_kwh"] = shadow["remaining_ac_kwh"]
+            status["energy_estimate_unverified"] = True
+            status["assumed_usable_capacity_kwh"] = shadow["assumed_usable_capacity_kwh"]
+            status["assumed_ac_efficiency"] = shadow["assumed_ac_efficiency"]
+        except (UnsafeSession, KeyError, TypeError) as exc:
+            status["shadow_reason"] = str(exc) if isinstance(exc, UnsafeSession) else type(exc).__name__
+            shadow["invalid_reason"] = status["shadow_reason"]
     except (UnsafeSession, KeyError, OSError, TypeError, ValueError,
             urllib.error.URLError, json.JSONDecodeError) as exc:
-        # Never print URLs, bearer tokens, or raw HA payloads on failures.
         status["reason"] = str(exc) if isinstance(exc, UnsafeSession) else type(exc).__name__
-        session["invalid_reason"] = status["reason"]
-        log.warning("Volvo HA session not usable: %s", status["reason"])
-    # Always replace a previously valid session immediately when a read fails,
-    # rather than leaving a 19-minute authorization window on stale data.
+        shadow["invalid_reason"] = status["reason"]
+        log.warning("Volvo shadow observation unavailable: %s", status["reason"])
+    # Replace invalid/failed records immediately so an old success cannot
+    # remain a valid session after a later read failure.
     common.write_json_atomic(session_path, session, indent=2)
+    common.write_json_atomic(shadow_path, shadow, indent=2)
     common.write_json_atomic(status_path, status, indent=2)
     return status
 

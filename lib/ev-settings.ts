@@ -49,7 +49,16 @@ export interface EvStatus {
   reason: string | null;
   battery_soc_pct: number | null;
   battery_reported_at_utc: string | null;
+  energy_api_received_at_utc: string | null;
+  observation_quality: string | null;
   timestamp_origin: string | null;
+  shadow_observation_usable: boolean;
+  shadow_estimate_ready: boolean;
+  shadow_reason: string | null;
+  energy_estimate_unverified: boolean;
+  assumed_usable_capacity_kwh: number | null;
+  assumed_ac_efficiency: number | null;
+  remaining_soc_pct: number | null;
   connected: boolean | null;
   remaining_ac_kwh: number | null;
   source: 'home_assistant';
@@ -57,6 +66,9 @@ export interface EvStatus {
 
 export interface EvShadow {
   timestamp: string;
+  source: string | null;
+  energy_estimate_unverified: boolean;
+  observation_quality: string | null;
   charge_mode: EvChargeMode | null;
   charging_suggested_a: number | null;
   charging_permitted_a: number;

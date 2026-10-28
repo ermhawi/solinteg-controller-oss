@@ -1,0 +1,27 @@
+[Unit]
+Description=Solinteg Volvo price + solar scenario (SHADOW ONLY, NO EVCC)
+After=network-online.target solinteg-ev-ha.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=solinteg
+WorkingDirectory=/opt/solinteg/app
+EnvironmentFile=/opt/solinteg/solinteg.env
+ExecStart=/opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/ev_shadow_planner.py --watch
+Restart=on-failure
+RestartSec=20
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/solinteg
+UMask=0077
+
+# This unit NEVER connects to Waveshare/EVCC or imports inverter write tools.
+# Only a local JSON economic scenario is saved. The entire EV control and
+# EV_SHADOW_PLANNER_ENABLED switches remain OFF by default.
+# Installing this unit does not start or enable it.
+
+[Install]
+WantedBy=multi-user.target

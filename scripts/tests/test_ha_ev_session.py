@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
 import ha_ev_session as reader
-from ev_price_policy import read_ev_session
+from ev_price_policy import read_ev_session, read_shadow_ev_session
 
 
 NOW = datetime(2026, 10, 28, 10, 0, tzinfo=timezone.utc)
@@ -52,6 +52,28 @@ def oem_snapshot(*, soc=63, connection="connected", target=80,
             "reason": "all_oem_fields_recent" if ready else "missing_oem_timestamp",
         },
     }
+
+
+def advisory_snapshot(*, soc=63, target=80, connection="connected",
+                      poll_at=NOW, soc_changed=NOW, target_changed=NOW,
+                      changed_missing=False, observed=True):
+    snap = oem_snapshot(soc=soc, target=target, connection=connection,
+                        poll_at=poll_at, soc_at=soc_changed,
+                        target_at=target_changed)
+    snap["state"] = "observed" if observed else "ready"
+    attrs = snap["attributes"]
+    attrs.update({
+        "schema_version": 2,
+        "oem_timestamp_role": "last_changed_not_sampled",
+        "api_fetch_confirmed": True,
+        "advisory_only": True,
+        "physical_control_eligible": False,
+        "oem_timestamps_complete": not changed_missing,
+        "oem_timestamps_recent": not observed,
+    })
+    if changed_missing:
+        attrs.pop("battery_oem_at_utc")
+    return snap
 
 
 def settings(*, mode="deadline", time="07:00", cap=None):
@@ -174,49 +196,164 @@ class HaEnergyTests(unittest.TestCase):
                                   encoding="utf-8")
             self.assertEqual(reader.load_settings(path)["max_buy_ore_per_kwh"], 77.5)
 
-    def test_session_is_immediately_invalidated_when_any_source_goes_stale(self):
+    def test_shadow_uses_recent_api_even_when_target_last_changed_ten_days_ago(self):
         with tempfile.TemporaryDirectory() as tmp:
             preferences = Path(tmp) / "preferences.json"
             preferences.write_text(json.dumps(settings(mode="economy")))
-            output = Path(tmp) / "session.json"
+            output = Path(tmp) / "strict.json"
+            shadow_path = Path(tmp) / "shadow.json"
             report = Path(tmp) / "status.json"
-            env = {"EV_SESSION_PATH": str(output), "EV_STATUS_PATH": str(report),
-                   "EV_SETTINGS_PATH": str(preferences), "HA_READONLY_TOKEN": "test-only",
-                   "HA_API_URL": "http://10.43.1.2:8123",
-                   "EV_USABLE_BATTERY_KWH": "78", "EV_AC_CHARGE_EFFICIENCY": "0.9"}
-            result = oem_snapshot()
+            env = {
+                "EV_SESSION_PATH": str(output),
+                "EV_SHADOW_SESSION_PATH": str(shadow_path),
+                "EV_STATUS_PATH": str(report),
+                "EV_SETTINGS_PATH": str(preferences),
+                "HA_READONLY_TOKEN": "test-only",
+                "HA_API_URL": "http://10.43.1.2:8123",
+                "EV_SHADOW_ASSUMPTIONS_ENABLED": "1",
+                "EV_SHADOW_ASSUMED_USABLE_KWH": "78",
+                "EV_SHADOW_ASSUMED_AC_EFFICIENCY": "0.9",
+            }
+            snapshot = advisory_snapshot(
+                soc_changed=NOW - timedelta(minutes=40),
+                target_changed=NOW - timedelta(days=10))
             with mock.patch.dict(os.environ, env), \
-                 mock.patch.object(reader, "_ha_state", return_value=result) as getter:
-                valid = reader.once(now=NOW)
-                self.assertTrue(valid["valid_for_planning"])
-                self.assertEqual(read_ev_session(str(output), now=NOW)["charge_mode"], "economy")
+                 mock.patch.object(reader, "_ha_state", return_value=snapshot) as getter:
+                seen = reader.once(now=NOW)
+                self.assertTrue(seen["shadow_observation_usable"])
+                self.assertTrue(seen["shadow_estimate_ready"])
+                self.assertFalse(seen["valid_for_planning"])
+                self.assertFalse(seen["physical_control_eligible"])
+                self.assertEqual(seen["battery_soc_pct"], 63)
+                self.assertEqual(seen["energy_api_received_at_utc"], NOW.isoformat())
                 self.assertEqual(getter.call_count, 1)
                 self.assertEqual(getter.call_args.args[-1], reader.OEM_SNAPSHOT)
-                self.assertEqual(valid["timestamp_origin"], "volvo_energy_state_field")
-                result["attributes"]["battery_oem_at_utc"] = (
-                    NOW - timedelta(minutes=30)).isoformat()
-                invalid = reader.once(now=NOW)
-                self.assertFalse(invalid["valid_for_planning"])
                 self.assertIsNone(read_ev_session(str(output), now=NOW))
-                self.assertFalse(json.loads(output.read_text())["connected"])
-                self.assertIn("stale", json.loads(report.read_text())["reason"])
+                scenario = read_shadow_ev_session(str(shadow_path), now=NOW)
+                self.assertEqual(scenario["charge_mode"], "economy")
+                self.assertEqual(scenario["remaining_ac_kwh"], 14.733)
+                self.assertFalse(scenario["physical_control_eligible"])
+                self.assertTrue(json.loads(shadow_path.read_text())[
+                    "energy_estimate_unverified"])
+                # A later genuinely STALE API result invalidates the shadow
+                # scenario without ever producing a strict control session.
+                snapshot["attributes"]["api_received_at_utc"] = (
+                    NOW - timedelta(minutes=6)).isoformat()
+                seen = reader.once(now=NOW)
+                self.assertFalse(seen["shadow_observation_usable"])
+                self.assertFalse(seen["shadow_estimate_ready"])
+                self.assertFalse(json.loads(shadow_path.read_text())["connected"])
+                self.assertIsNone(read_shadow_ev_session(str(shadow_path), now=NOW))
+                self.assertIsNone(read_ev_session(str(output), now=NOW))
 
     def test_token_or_calibration_never_appear_in_session_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "session.json"
             status = Path(tmp) / "status.json"
             env = {"EV_SESSION_PATH": str(output), "EV_STATUS_PATH": str(status),
+                   "EV_SHADOW_SESSION_PATH": str(Path(tmp) / "shadow.json"),
                    "EV_SETTINGS_PATH": str(Path(tmp) / "missing.json"),
+                   "EV_SHADOW_ASSUMPTIONS_ENABLED": "0",
                    "HA_READONLY_TOKEN": "TOPSECRET",
                    "HA_API_URL": "http://10.43.1.2:8123",
                    "EV_USABLE_BATTERY_KWH": "78", "EV_AC_CHARGE_EFFICIENCY": "0.9"}
             with mock.patch.dict(os.environ, env), \
-                 mock.patch.object(reader, "_ha_state", return_value=oem_snapshot()):
+                 mock.patch.object(reader, "_ha_state", return_value=advisory_snapshot()):
                 reader.once(now=NOW)
             self.assertNotIn("TOPSECRET", output.read_text())
             self.assertNotIn("TOPSECRET", status.read_text())
             self.assertEqual(reader.load_settings(env["EV_SETTINGS_PATH"])["charge_mode"],
                              "deadline")
+
+    def test_shadow_observation_is_valid_with_old_source_changes_but_no_physical_grade(self):
+        sample = advisory_snapshot(
+            soc=63, soc_changed=NOW - timedelta(hours=1),
+            target_changed=NOW - timedelta(days=10))
+        observation = reader.read_shadow_observation(sample, now=NOW)
+        self.assertTrue(observation["api_fetch_confirmed"])
+        self.assertEqual(observation["vehicle_soc_pct"], 63)
+        self.assertFalse(observation["oem_timestamps_recent"])
+        self.assertEqual(observation["observation_quality"],
+                         "api_recent_field_change_unverified")
+        self.assertEqual(observation["target_oem_at_utc"],
+                         (NOW - timedelta(days=10)).isoformat())
+        self.assertFalse(observation["physical_control_eligible"])
+        self.assertEqual(observation["energy_api_received_at_utc"], NOW.isoformat())
+
+    def test_shadow_observation_rejects_false_provenance_or_old_api_fetch(self):
+        for field, value in [
+            ("schema_version", 1),
+            ("timestamp_origin", "ha_last_reported"),
+            ("oem_timestamp_role", "verified_bms_sample"),
+            ("api_fetch_confirmed", False),
+            ("advisory_only", False),
+            ("physical_control_eligible", True),
+            ("physical_writes", 1),
+            ("physical_writes", False),
+        ]:
+            with self.subTest(field=field):
+                sample = advisory_snapshot()
+                sample["attributes"][field] = value
+                with self.assertRaises(reader.UnsafeSession):
+                    reader.read_shadow_observation(sample, now=NOW)
+        with self.assertRaisesRegex(reader.UnsafeSession, "stale"):
+            reader.read_shadow_observation(
+                advisory_snapshot(poll_at=NOW-timedelta(minutes=6)), now=NOW)
+        with self.assertRaisesRegex(reader.UnsafeSession, "unavailable"):
+            sample = advisory_snapshot()
+            sample["state"] = "unavailable"
+            reader.read_shadow_observation(sample, now=NOW)
+        with self.assertRaisesRegex(reader.UnsafeSession, "snapshot missing"):
+            reader.read_shadow_observation(states()[reader.BATTERY], now=NOW)
+
+    def test_shadow_observation_handles_missing_last_change_without_inventing_it(self):
+        sample = advisory_snapshot(changed_missing=True)
+        observation = reader.read_shadow_observation(sample, now=NOW)
+        self.assertIsNone(observation["battery_oem_at_utc"])
+        self.assertTrue(observation["api_fetch_confirmed"])
+        self.assertFalse(observation["oem_timestamps_complete"])
+        self.assertFalse(observation["physical_control_eligible"])
+
+    def test_assumptions_are_opt_in_and_never_physical(self):
+        observation = reader.read_shadow_observation(advisory_snapshot(), now=NOW)
+        with mock.patch.dict(os.environ, {"EV_SHADOW_ASSUMPTIONS_ENABLED": "0"}):
+            with self.assertRaisesRegex(reader.UnsafeSession, "not explicitly"):
+                reader.shadow_session_from_observation(
+                    observation=observation, settings=settings(),
+                    now=NOW, capacity=78, ac_efficiency=0.9)
+        with mock.patch.dict(os.environ, {"EV_SHADOW_ASSUMPTIONS_ENABLED": "1"}):
+            for cap, efficiency in ((None, 0.9), (78, None), (200, 0.9),
+                                    (78, float("nan"))):
+                with self.subTest(cap=cap, efficiency=efficiency):
+                    with self.assertRaises(reader.UnsafeSession):
+                        reader.shadow_session_from_observation(
+                            observation=observation, settings=settings(),
+                            now=NOW, capacity=cap, ac_efficiency=efficiency)
+            result = reader.shadow_session_from_observation(
+                observation=observation, settings=settings(),
+                now=NOW, capacity=78, ac_efficiency=0.9)
+            self.assertEqual(result["charge_mode"], "deadline")
+            self.assertEqual(result["remaining_ac_kwh"], 14.733)
+            self.assertEqual(result["departure_at_utc"],
+                             "2026-10-29T06:00:00+00:00")
+            self.assertEqual(result["observation_time_semantics"],
+                             "api_fetch_not_bms_sample")
+            self.assertTrue(result["energy_estimate_unverified"])
+            self.assertFalse(result["physical_control_eligible"])
+            self.assertNotEqual(result["observed_at_utc"],
+                                (NOW - timedelta(days=10)).isoformat())
+
+    def test_shadow_mode_stops_estimating_need_after_80(self):
+        for soc in (80, 81, 100):
+            with self.subTest(soc=soc):
+                observed = reader.read_shadow_observation(
+                    advisory_snapshot(soc=soc), now=NOW)
+                with mock.patch.dict(os.environ, {"EV_SHADOW_ASSUMPTIONS_ENABLED": "1"}):
+                    result = reader.shadow_session_from_observation(
+                        observation=observed, settings=settings(mode="economy"),
+                        now=NOW, capacity=78, ac_efficiency=0.9)
+                    self.assertEqual(result["remaining_ac_kwh"], 0)
+                    self.assertNotIn("departure_at_utc", result)
 
     def test_only_private_http_addresses_and_direct_get_without_proxy(self):
         for forbidden in (

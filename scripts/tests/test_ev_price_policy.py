@@ -10,7 +10,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
-from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan
+from ev_price_policy import (decide_grid_price, read_ev_session,
+                             read_house_price_plan, read_shadow_ev_session)
 
 
 NOW = datetime(2026, 10, 28, 10, 0, tzinfo=timezone.utc)
@@ -270,6 +271,97 @@ class GridPriceTests(unittest.TestCase):
             record["charge_mode"] = "unknown"
             path.write_text(json.dumps(record))
             self.assertIsNone(read_ev_session(str(path), now=NOW))
+
+    def test_shadow_scenarios_use_separate_parser_and_never_pass_control_parser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shadow.json"
+            record = dict(
+                source="home_assistant_shadow", shadow_only=True,
+                physical_control_eligible=False, api_fetch_confirmed=True,
+                energy_estimate_unverified=True,
+                observation_time_semantics="api_fetch_not_bms_sample",
+                oem_timestamp_role="last_changed_not_sampled",
+                observation_quality="api_recent_field_change_unverified",
+                observed_at_utc=NOW.isoformat(), connected=True,
+                charge_mode="economy", target_soc_pct=80, vehicle_soc_pct=63,
+                assumed_usable_capacity_kwh=78, assumed_ac_efficiency=0.9,
+                remaining_ac_kwh=14.733, max_buy_ore_per_kwh=85,
+            )
+            path.write_text(json.dumps(record))
+            parsed = read_shadow_ev_session(str(path), now=NOW)
+            self.assertEqual(parsed["remaining_ac_kwh"], 14.733)
+            self.assertEqual(parsed["charge_mode"], "economy")
+            self.assertFalse(parsed["physical_control_eligible"])
+            self.assertIsNone(parsed["departure_at_utc"])
+            self.assertIsNone(read_ev_session(str(path), now=NOW))
+            self.assertIsNone(read_shadow_ev_session(
+                str(path), now=NOW + timedelta(minutes=6)))
+
+            record["charge_mode"] = "deadline"
+            record["departure_at_utc"] = DEPARTURE.isoformat()
+            path.write_text(json.dumps(record))
+            self.assertEqual(read_shadow_ev_session(
+                str(path), now=NOW)["departure_at_utc"], DEPARTURE)
+
+    def test_shadow_parser_rejects_tampering_unverified_or_mismatched_energy(self):
+        baseline = dict(
+            source="home_assistant_shadow", shadow_only=True,
+            physical_control_eligible=False, api_fetch_confirmed=True,
+            energy_estimate_unverified=True,
+            observation_time_semantics="api_fetch_not_bms_sample",
+            oem_timestamp_role="last_changed_not_sampled",
+            observation_quality="api_recent_field_change_unverified",
+            observed_at_utc=NOW.isoformat(), connected=True,
+            charge_mode="economy", target_soc_pct=80,
+            vehicle_soc_pct=63, assumed_usable_capacity_kwh=78,
+            assumed_ac_efficiency=0.9, remaining_ac_kwh=14.733,
+        )
+        bad = [
+            ("source", "home_assistant"),
+            ("physical_control_eligible", True),
+            ("shadow_only", False),
+            ("api_fetch_confirmed", False),
+            ("energy_estimate_unverified", False),
+            ("observation_time_semantics", "verified_bms_sample"),
+            ("oem_timestamp_role", "measured_at"),
+            ("observation_quality", "verified"),
+            ("connected", False),
+            ("target_soc_pct", 85),
+            ("vehicle_soc_pct", 103),
+            ("remaining_ac_kwh", 99),
+            ("remaining_ac_kwh", float("nan")),
+            ("assumed_ac_efficiency", 1.5),
+            ("assumed_usable_capacity_kwh", 180),
+            ("charge_mode", "unknown"),
+            ("departure_at_utc", DEPARTURE.isoformat()),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scenario.json"
+            for key, value in bad:
+                with self.subTest(key=key, value=value):
+                    path.write_text(json.dumps({**baseline, key: value}))
+                    self.assertIsNone(read_shadow_ev_session(str(path), now=NOW),
+                                      msg=f"tampered {key}")
+
+    def test_shadow_parser_80_percent_target_stops_price_advice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shadow.json"
+            record = dict(
+                source="home_assistant_shadow", shadow_only=True,
+                physical_control_eligible=False, api_fetch_confirmed=True,
+                energy_estimate_unverified=True,
+                observation_time_semantics="api_fetch_not_bms_sample",
+                oem_timestamp_role="last_changed_not_sampled",
+                observation_quality="api_recent_fields_changed_recently",
+                observed_at_utc=NOW.isoformat(), connected=True,
+                charge_mode="economy", target_soc_pct=80,
+                vehicle_soc_pct=80, assumed_usable_capacity_kwh=78,
+                assumed_ac_efficiency=0.9, remaining_ac_kwh=0,
+            )
+            path.write_text(json.dumps(record))
+            scenario = read_shadow_ev_session(str(path), now=NOW)
+            self.assertEqual(scenario["remaining_ac_kwh"], 0)
+            self.assertEqual(decide(plan((0,) * 32), s=scenario).grid_budget_a, 0)
 
 
 if __name__ == "__main__":

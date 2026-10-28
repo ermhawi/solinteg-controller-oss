@@ -62,6 +62,7 @@ describe('shared EV mode configuration', () => {
       process.env.EV_SETTINGS_PATH = join(dir, 'ev-settings.json');
       process.env.EV_STATUS_PATH = join(dir, 'status.json');
       process.env.EVCC_SHADOW_PATH = join(dir, 'shadow.json');
+      process.env.EV_SHADOW_PLAN_PATH = join(dir, 'price-shadow.json');
       delete process.env.EV_SHADOW_SETTINGS_WRITES_ENABLED;
       const overview = await readEvOverview();
       expect(overview.settings).toEqual(DEFAULT_EV_SETTINGS);
@@ -81,6 +82,7 @@ describe('shared EV mode configuration', () => {
       process.env.EV_SETTINGS_PATH = join(dir, 'ev-settings.json');
       process.env.EV_STATUS_PATH = join(dir, 'status.json');
       process.env.EVCC_SHADOW_PATH = join(dir, 'shadow.json');
+      process.env.EV_SHADOW_PLAN_PATH = join(dir, 'price-shadow.json');
       await writeFile(process.env.EV_SETTINGS_PATH, JSON.stringify({ charge_mode: 'fast' }));
       const overview = await readEvOverview();
       expect(overview.settingsError).toMatch(/ogiltig/i);
@@ -107,12 +109,61 @@ describe('shared EV mode configuration', () => {
     }
   });
 
+  it('prefers HA price shadow while keeping independently observed API and last-change times', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ev-ui-scenario-'));
+    try {
+      process.env.EV_SETTINGS_PATH = join(dir, 'settings.json');
+      process.env.EV_STATUS_PATH = join(dir, 'status.json');
+      process.env.EVCC_SHADOW_PATH = join(dir, 'evcc.json');
+      process.env.EV_SHADOW_PLAN_PATH = join(dir, 'price-shadow.json');
+      const checked = new Date().toISOString();
+      const changed = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      await writeFile(process.env.EV_STATUS_PATH, JSON.stringify({
+        source: 'home_assistant', checked_at_utc: checked,
+        valid_for_planning: false, shadow_observation_usable: true,
+        shadow_estimate_ready: true, observation_quality: 'api_recent_field_change_unverified',
+        battery_soc_pct: 63, battery_reported_at_utc: changed,
+        energy_api_received_at_utc: checked,
+        connected: true, remaining_soc_pct: 17,
+        remaining_ac_kwh: 14.733,
+        assumed_usable_capacity_kwh: 78,
+        assumed_ac_efficiency: 0.9,
+        energy_estimate_unverified: true,
+      }));
+      await writeFile(process.env.EVCC_SHADOW_PATH, JSON.stringify({
+        mode: 'shadow', timestamp: checked, source: 'evcc_poll',
+        charging_suggested_a: 0, charging_permitted_a: 0,
+      }));
+      await writeFile(process.env.EV_SHADOW_PLAN_PATH, JSON.stringify({
+        mode: 'shadow', timestamp: checked, source: 'ha_price_scenario_no_evcc',
+        charge_mode: 'economy', charging_suggested_a: 6,
+        charging_permitted_a: 6, // Tampered: UI may NEVER echo this.
+        price_buy_ore_kwh: 25, energy_estimate_unverified: true,
+        observation_quality: 'api_recent_field_change_unverified',
+      }));
+      const overview = await readEvOverview();
+      expect(overview.statusFresh).toBe(true);
+      expect(overview.status?.shadow_observation_usable).toBe(true);
+      expect(overview.status?.energy_api_received_at_utc).toBe(checked);
+      expect(overview.status?.battery_reported_at_utc).toBe(changed);
+      expect(overview.status?.remaining_soc_pct).toBe(17);
+      expect(overview.status?.energy_estimate_unverified).toBe(true);
+      expect(overview.shadow?.source).toBe('ha_price_scenario_no_evcc');
+      expect(overview.shadow?.charging_suggested_a).toBe(6);
+      expect(overview.shadow?.charging_permitted_a).toBe(0);
+      expect(overview.shadow?.energy_estimate_unverified).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reports stale or valid shadow data but never presents it as physical control', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ev-ui-status-'));
     try {
       process.env.EV_SETTINGS_PATH = join(dir, 'ev-settings.json');
       process.env.EV_STATUS_PATH = join(dir, 'status.json');
       process.env.EVCC_SHADOW_PATH = join(dir, 'shadow.json');
+      process.env.EV_SHADOW_PLAN_PATH = join(dir, 'price-shadow.json');
       const now = new Date().toISOString();
       await writeFile(process.env.EV_STATUS_PATH, JSON.stringify({
         source: 'home_assistant', checked_at_utc: now,

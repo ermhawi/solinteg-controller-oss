@@ -130,6 +130,71 @@ def read_ev_session(path: str | None, *, now: datetime) -> dict | None:
         return None
 
 
+def read_shadow_ev_session(path: str | None, *, now: datetime) -> dict | None:
+    """Read an unverified EV energy *scenario* only for shadow planners.
+
+    Kept separate from read_ev_session: these assumptions and an API fetch
+    timestamp are NOT source-verified BMS measurements and MUST NEVER enable
+    EVCC/inverter/vehicle commands. A shadow session cannot pass the strict
+    read_ev_session source check.
+    """
+    if not path or now.tzinfo is None:
+        return None
+    try:
+        with open(path, encoding="utf-8") as source:
+            value = json.load(source)
+        if (not isinstance(value, dict)
+                or value.get("source") != "home_assistant_shadow"
+                or value.get("shadow_only") is not True
+                or value.get("physical_control_eligible") is not False
+                or value.get("api_fetch_confirmed") is not True
+                or value.get("energy_estimate_unverified") is not True
+                or value.get("observation_time_semantics") != "api_fetch_not_bms_sample"
+                or value.get("oem_timestamp_role") != "last_changed_not_sampled"
+                or value.get("observation_quality") not in (
+                    "api_recent_fields_changed_recently",
+                    "api_recent_field_change_unverified",
+                ) or value.get("connected") is not True):
+            return None
+        age = (now - _instant(value["observed_at_utc"])).total_seconds()
+        if not -5 <= age <= 5 * 60:
+            return None
+        mode = value["charge_mode"]
+        soc = _number(value["vehicle_soc_pct"])
+        target = _number(value["target_soc_pct"])
+        capacity = _number(value["assumed_usable_capacity_kwh"])
+        efficiency = _number(value["assumed_ac_efficiency"])
+        remaining = _number(value["remaining_ac_kwh"])
+        if (mode not in CHARGE_MODES or not 0 <= soc <= 100 or target != 80
+                or not 45 <= capacity <= 100 or not 0.7 <= efficiency <= 1
+                or not 0 <= remaining <= 100
+                or abs(remaining - round(max(0, target - soc) / 100
+                                          * capacity / efficiency, 3)) > 0.002):
+            return None
+        price_cap = value.get("max_buy_ore_per_kwh")
+        if price_cap is not None:
+            price_cap = _number(price_cap)
+            if not -200 <= price_cap <= 3000:
+                return None
+        departure = None
+        if mode == "deadline":
+            departure = _instant(value["departure_at_utc"])
+            if not now < departure <= now + timedelta(hours=48):
+                return None
+        elif value.get("departure_at_utc") is not None:
+            return None
+        return {
+            "charge_mode": mode, "departure_at_utc": departure,
+            "remaining_ac_kwh": remaining, "target_soc_pct": 80,
+            "max_buy_ore_per_kwh": price_cap,
+            "shadow_only": True, "physical_control_eligible": False,
+            "observation_quality": value["observation_quality"],
+            "energy_estimate_unverified": True,
+        }
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return None
+
+
 def decide_grid_price(plan: dict | None, *, now: datetime,
                       session: dict | None, max_current_a: int = 6,
                       voltage_v: int = 230,

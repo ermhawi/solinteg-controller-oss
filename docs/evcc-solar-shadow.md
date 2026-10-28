@@ -188,8 +188,10 @@ stopp vid för gammal data har företräde framför båda energikällorna.
 HA:s batterisensor hade flera timmar gammal `last_reported` medan
 laddstatus uppdaterades oftare. Den tidigare Solinteg-läsaren gav därför
 `valid_for_planning=false`. Nya läsaren kräver Volvos ursprungliga
-fälttider i `sensor.volvo_charge_priority_volvo_energy_snapshot` och
-avvisar gamla, saknade eller tvetydiga sådana. **Inga HA-, Volvo-,
+fälttider i `sensor.volvo_charge_priority_volvo_energy_snapshot`.
+Den strikta kontrollsessionen avvisar gamla, saknade eller tvetydiga
+sådana även fortsättningsvis; separata **preliminära skuggscenarier**
+kan däremot använda lyckade API-observationer. **Inga HA-, Volvo-,
 EVCC- eller inverterskrivningar utfördes i diagnostiken.**
 
 ## Fälttidsstämplar verifierade mot live Volvo 2026-10-28
@@ -210,18 +212,93 @@ Ett verkligt snapshot visade vid cirka 12:51 UTC:
 
 **Viktig datatolkning:** `updatedAt` kan avse **senast ändrat värde**,
 inte senast mätt. Att laddmålet är oförändrat i tio dagar betyder inte
-att den nya hämtningen misslyckats. Den nuvarande HA-snapshoten är
-medvetet `unavailable` vid så gamla fälttider, och Solinteg-läsaren
-avvisar den. Det är en säker men för konservativ policy för ett
-framtida skarpt laddschema.
+att den nya hämtningen misslyckats. **Den första diagnostikversionen**
+gav `unavailable` vid så gamla fälttider. Version 2 gör i stället
+skillnad mellan `observed` för preliminära förslag och
+en fortsatt spärrad, separat kontrollsession.
 
-**Nästa nödvändiga förbättring:** en tvådelad kvalitetsmodell med
-`api_received_at_utc` (faktiskt färsk energihämtning) och
-`field_updated_at_utc` (senaste ändring). Detta kan användas för
-markerade **skuggförslag**, men får **aldrig** räknas som verifierat
-fysiskt SoC-prov utan oberoende stöd från Volvo/EVCC. Så länge
-källans mättid inte kan fastställas, oberoende L3-skydd saknas och
-EVCC-paus/readback inte verifierats är fysisk EV-styrning avstängd.
+**Implementerat i version 2:** en tvådelad kvalitetsmodell med
+`api_received_at_utc` (ny lyckad energihämtning) och fältspecifika
+`*_oem_at_utc` (senast ändrat). Den kan användas för tydligt märkta
+**skuggförslag** men är inte ett verifierat fysiskt BMS-prov.
+Så länge källans fysiska mättid inte kan fastställas, oberoende
+L3-skydd saknas och EVCC-paus/readback inte verifierats är fysisk
+EV-styrning avstängd.
+
+## Separat observationsnivå för skuggläget (2026-10-28)
+
+**Version 2** av den egna HA-sensorn publicerar två oberoende tidsfält:
+
+- `api_received_at_utc` anger när den befintliga Volvo-koordinatorn
+  **fick ett nytt lyckat Energy State-resultat**. Initial läsning av
+  `coordinator.data` utan en ny callback ger inte någon bekräftad
+  hämtning. Ett nytt resultat måste ha samtliga tre energifält.
+- `battery_oem_at_utc`, `connection_oem_at_utc` och
+  `target_oem_at_utc` betyder **senast ändrat i Volvo-API:t**,
+  inte en verifierad tidpunkt när bilens BMS mätte värdet.
+  En oförändrad målgräns kan med rätta ha en gammal tid.
+
+HA-sensorn använder `ready` när alla fält ändrats nyligen,
+`observed` när ett nytt giltigt API-svar innehåller fält vars
+senaste ändring är gammal, och `unavailable` om API-resultatet
+saknas eller har ogiltiga värden. Samtliga nivåer har
+`advisory_only=true` och `physical_control_eligible=false`.
+
+**Isoleringen mellan prisförslag och styrning är avsiktlig:**
+
+- `EV_SESSION_PATH` innehåller **alltid en ogiltig styrsession**.
+  Ingen ny API-observation, även med nyligen ändrade värden, gör
+  det möjligt att använda den som källa för automatisk EVCC-styrning.
+- `EV_SHADOW_SESSION_PATH` är en **separat typ** med
+  `source=home_assistant_shadow`,
+  `observation_time_semantics=api_fetch_not_bms_sample` och
+  `energy_estimate_unverified=true`. Den kan bara skapas vid
+  färskt (max 5 min) bekräftat API-resultat, anslutningsstatus,
+  exakt lokalt 80 %-mål, och uttryckligt val
+  `EV_SHADOW_ASSUMPTIONS_ENABLED=1` tillsammans med angivna
+  antaganden `EV_SHADOW_ASSUMED_USABLE_KWH` och
+  `EV_SHADOW_ASSUMED_AC_EFFICIENCY`.
+  Inga antaganden fylls i automatiskt.
+- `scripts/services/ev_shadow_planner.py` läser **endast**
+  shadow-sessionen, husets befintliga `optimizer_runs` och färsk
+  invertertelemetri (read-only). Den kan köra båda laddlägena utan
+  Waveshare/EVCC. Med `EV_SHADOW_PLANNER_ENABLED=0` (default)
+  arbetar den inte alls. Dess `charging_permitted_a` och
+  `solar_permitted_a` är **alltid 0**, oavsett förslag.
+- Gränssnittet kan läsa `EV_SHADOW_PLAN_PATH` och visar då
+  både källtiderna, att energibehovet är hypotetiskt och att
+  den föreslagna strömmen inte är ett utfört laddkommando.
+
+**Live skuggprov 2026-10-28:** efter att HA-snapshot v2
+(`ermhawi/ha-kube` `main`, commit `30a4086`) blivit frisk
+(`Synced/Healthy`) gav den `state=observed`, nytt bekräftat
+Energy State-resultat och en SoC-observation 63 %. Den äldre
+`updatedAt=2026-10-28T12:05:06Z` behölls som **senaste ändring**.
+Ett engångsprov mot **riktiga** `optimizer_runs` och invertermätvärden
+använde endast temporära, privata filer och ett uttryckligt **okontrollerat
+testantagande** om 81,608 kWh användbar kapacitet och 90 % AC-verkningsgrad.
+Det gav 15,415 kWh *illustrativt* AC-behov till 80 %, köppris
+119,47 öre/kWh och ekonomitröskel 102,75 öre/kWh. Båda
+laddlägena föreslog vid provtillfället **0 A**, med motiven
+`deadline: cheaper energy planned later` respektive
+`economy: solar opportunity cost below threshold`. Den sistnämnda
+producerade **inte** ett solstartsförslag eftersom ingen tillräcklig
+färsk/stabil solel var tillgänglig i beslutsvillkoren.
+I båda fallen var den strikta kontrollsessionen ogiltig,
+`charging_permitted_a=0` och `writes=0`. Ingenting driftsattes
+i Solintegs befintliga husbatteritjänst.
+
+Det nya gränssnittet verifierades separat i mobil Playwright med
+syntetiska statusfiler: det visar API-hämtning och senast ändrat-värde
+separat, gör tydligt att energin är hypotetisk och skiljer på osparade
+lägesändringar och den senast sparade skuggplanen. Previewservern
+stoppades efter provet.
+
+**Kvar före fysisk styrning:** verifierade OEM-sampletider (inte bara
+uppdaterad API-cache), kapacitet/AC-kalibrering, last/effektbeslut
+som inte laddar från husbatteriet, verifierad paus/readback via
+Waveshare och oberoende L3-RMS-säkerhet. Inga dessa krav får
+kringgås av ett framgångsrikt skuggtest.
 
 ## Statuskontroll utan skrivning
 
