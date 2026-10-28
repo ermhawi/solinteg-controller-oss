@@ -1,0 +1,25 @@
+[Unit]
+Description=Solinteg EVCC read-only solar surplus monitor (DISARMED)
+After=network-online.target solinteg-poller.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=solinteg
+WorkingDirectory=/opt/solinteg/app
+EnvironmentFile=/opt/solinteg/solinteg.env
+ExecStart=/opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/evcc_service.py --watch
+Restart=on-failure
+RestartSec=20
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/solinteg
+
+# Installation of this unit does NOT enable it. EV_ENABLED=0 (default)
+# does not even connect. --watch NEVER calls FC10, even if armed flags
+# are set elsewhere. No autonomous EVCC control has been implemented.
+
+[Install]
+WantedBy=multi-user.target

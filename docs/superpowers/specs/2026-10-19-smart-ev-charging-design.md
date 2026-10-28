@@ -609,6 +609,7 @@ Statusvärden: **Planerad**, **Pågår**, **Deployad – ej verifierad**, **Veri
 - **2026-10-24:** åttaetappsplan, acceptans/deploy/rollback och möjlighet till snabb Modbus-lastbalansering dokumenterades i `91c2802`; den senare kräver verifierad mätkedja och oberoende failsafe.
 - **2026-10-24–26:** senare inriktning prioriterar husbatteriets L3-anpassning och read-only Volvo/HA utan Waveshare/EVCC som första beroende. Shadowarbete har rapporterats separat; fullständiga acceptansprotokoll har **inte** verifierats i detta dokument.
 - **2026-10-26:** revision 4 återför etapperna, förtydligar det aktuella scope-beslutet och tar bort privat nätadress-/värdidentifiering. Enbart dokumentändring; inga kommandon, driftsättningar eller aktiveringar.
+- **2026-10-28:** isolerad EVCC2-drivrutin, gated manuell paus/återstart och ren solar-first-skuggpolicy implementerade på `Sundsvall`. 23 riktade offlinetester passerade, inklusive råtelegram från tidigare fältprov. Ingen produktionsdeploy eller FC10. Dell når inte Waveshare (No route to host); fasström, lokalt stoppskydd och fysisk 0x03E8-paus är ännu ej verifierade. **Etapp 7/8 förblir blockerade.** Se `docs/evcc-solar-shadow.md`.
 
 **Mall vid etappbeslut:** datum/tid (Europe/Stockholm), etapp, status, commit, miljö/deploy, tester med resultat, mät- och larmbevis, kvarstående hinder, rollbackutfall, stop/go-beslut och ansvarig verifierare.
 
