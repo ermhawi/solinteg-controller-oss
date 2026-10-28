@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "currency": "SEK",
+  "rate_unit": "ore_per_kwh",
+  "records": [
+    {
+      "id": "tibber_invoice_2026_06",
+      "role": "supplier",
+      "source_filename": "faktura-tibber.pdf",
+      "source_type": "user_uploaded_invoice",
+      "invoice_issued_on": "2026-07-03",
+      "period_start_local": "2026-06-01",
+      "period_end_local_exclusive": "2026-07-01",
+      "area": "SE2",
+      "import_kwh": "100.00",
+      "spot_weighted_average_ore_ex_vat": "36.61",
+      "fixed_surcharge_ore_ex_vat": "6.00",
+      "variable_purchase_ore_ex_vat": "3.28",
+      "monthly_fee_sek_ex_vat": "39.20",
+      "vat_rate": "0.25",
+      "note": "Historical consumption-weighted period averages; not per-15-minute October prices, tariff validity, or settlement."
+    },
+    {
+      "id": "sundsvall_elnat_invoice_2026_07",
+      "role": "grid",
+      "source_filename": "faktura-sundsvalls-elnät.pdf",
+      "source_type": "user_uploaded_invoice",
+      "invoice_issued_on": "2026-08-10",
+      "period_start_local": "2026-07-01",
+      "period_end_local_exclusive": "2026-08-01",
+      "area": "SE2",
+      "import_kwh": "100.00",
+      "transfer_ore_incl_vat": "26.38",
+      "electricity_tax_ore_incl_vat": "45.00",
+      "export_grid_credit_ore_incl_vat": "1.50",
+      "annual_fixed_grid_fee_sek_incl_vat": "8052.50",
+      "note": "Invoice unit rates for July only, not guaranteed effective through October. Fixed fee excluded from marginal energy cost."
+    }
+  ]
+}

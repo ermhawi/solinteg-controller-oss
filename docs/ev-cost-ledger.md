@@ -355,7 +355,8 @@ källpost med otillåten skrivindikering.
    `price_snapshots`: spotpris plus ett konfigurerat påslag
    inklusive moms; aktuell aktiv miljö anger
    `SUPPLIER_SURCHARGE_ORE=9.29` **före moms**.
-   Priset kan inte ännu jämställas med Tibbers fakturerade pris.
+   Modellen kan nu jämföras med kundens Tibberfaktura för juni,
+   men inte betraktas som oktober månads slutliga elhandelspris.
 2. **Sundsvall Elnäts publicerade privatkundstariff för 2026:**
    rörlig överföring **26,30 öre/kWh** och energiskatt
    **45,00 öre/kWh**, båda **inklusive moms**. Totalt
@@ -363,16 +364,21 @@ källpost med otillåten skrivindikering.
    **8 053 kr/år** ingår **inte** i marginalkostnad per kWh.
    Den befintliga driftskonfigurationen har
    `SKATT_OVERFORING_ORE=71.38`, alltså 0,08 öre/kWh
-   högre än dagens publicerade totalsats. Ingen automatisk
-   justering eller slutsats om fakturafelsättning görs.
+   högre än den tidigare publicerade totalsatsen.
+   **Kundens faktura för juli** visar däremot exakt
+   **26,38 + 45,00 = 71,38 öre/kWh**, vilket ger
+   direkt historiskt stöd för driftinställningen.
+   Ingen automatisk ändring eller extrapolering till oktober görs.
    Källa: https://sundsvallelnat.se/min-anslutning/priser-och-avtalsvillkor/2026-sakringsabonnemang-privat
 3. **Tibbers publicerade villkor**, gällande från
    2025-10-30, anger ett fast påslag **6,00 öre/kWh
    exklusive moms**, dessutom **rörliga inköpskostnader**
    samt **49 kr/månad inklusive moms**. En differens mot
    Solintegs 9,29 öre är därför inte i sig ett fel:
-   den dynamiska inköpskostnaden, eventuella rabatter
-   och kundens faktiska avtal är ännu inte avstämda.
+   junifakturans **3,28 öre/kWh** i rörliga inköpskostnader.
+   Kundens totala påslag var då **9,28 öre/kWh** före moms.
+   Oktobers rörliga påslag och faktiska kvartsvisa avräkning
+   är ännu inte avstämda.
    Källor: https://tibber.com/se/sammanfattning-avtalsvillkor
    och https://tibber.com/se/villkor/elavtalsvillkor
 
@@ -449,14 +455,98 @@ under fullständigt täckta laddperioder, hitta en verifierad
 användbar bilbatterikapacitet eller oberoende mätare,
 och hämta verkligt avtals-/fakturapris från
 Tibber samt faktiskt nätavtal och eventuella rabatter.
-Ingen kundspecifik Tibber-/elnätsfaktura med verifierade
-priskomponenter finns ännu i underlaget. En
-generell fakturaavisering räcker inte för
-individuell prisavstämning.
+Kundspecifika fakturor för **Tibber juni** och
+**Sundsvall Elnät juli** har återfunnits i ChatGPT:s
+filbibliotek. Detta korrigerar den tidigare slutsatsen
+att fakturaunderlag helt saknades. De dokumenterar
+sina respektive månader, men en faktura för **oktober**
+eller en kundverifierad exakt kvartskostnad saknas fortfarande.
 Allt som rör `actual_cost_ore`, `kr/mil`
 och `vehicle_battery_dc_kwh` förblir `null`.
 Inga fysiska skrivningar eller nya styrbehörigheter
 har introducerats.
+
+## Återfunna kundfakturor och daterade prisbevis (senare 2026-10-28)
+
+Tidigare uppladdade originalfakturor återfanns i ChatGPT:s filbibliotek
+(**uppladdade 2026-08-16**). PDF-innehåll, namn, adress, anläggnings-ID,
+OCR och betalningsuppgifter **kopieras inte till Git eller Dell**.
+`docs/ev-invoice-rate-evidence-2026.json` lagrar **enbart**
+förbrukningsperiod, fakturadatum, leverantörsroll och anonymiserade
+priskomponenter med originalfilnamn som proveniens:
+
+| Dokument och period | Prisrad | Historiskt fakturerad nivå |
+| --- | --- | --- |
+| `faktura-tibber.pdf`, juni | Fast påslag | 6,00 öre/kWh före moms |
+| Samma, juni | Rörliga inköpskostnader | 3,28 öre/kWh före moms |
+| Samma, juni | Summa elhandels-påslag | **9,28 öre/kWh före moms** |
+| Samma, juni | Förbrukningsvägt spotmedel | 36,61 öre/kWh före moms |
+| Samma, juni | Månadsavgift | 39,20 kr före moms (= 49 kr inkl moms) |
+| `faktura-sundsvalls-elnät.pdf`, juli | Överföring | 26,38 öre/kWh inkl moms |
+| Samma, juli | Energiskatt | 45,00 öre/kWh inkl moms |
+| Samma, juli | Summa rörlig nätkostnad | **71,38 öre/kWh inkl moms** |
+| Samma, juli | Nätnyttoersättning för export | 1,50 öre/kWh inkl moms |
+| Samma, juli | Fast säkringsavgift, 20 A | 8 052,50 kr/år inkl moms |
+
+**Reviderad slutsats:** den aktiva Solinteg-konfigurationen har
+`SUPPLIER_SURCHARGE_ORE=9.29` och skiljer **0,01 öre/kWh
+före moms** från Tibbers **juni**utfall. Både
+`SKATT_OVERFORING_ORE=71.38` och `EXPORT_BONUS_ORE=1.5`
+matchar kundens **juli**faktura exakt. Det är starkt stöd
+för att **inte** ändra de aktiva prisparametrarna bara med
+hänvisning till avvikande publicerade generella tarifflistor.
+Juni/juli gäller dock **inte automatiskt oktober**, framför
+allt inte Tibbers rörliga inköpskostnader; även fakturerad
+totalförbrukning och spotmedel är **månadsmedel**, inte
+tidsserier med en exakt observation för varje kvart.
+
+**Obs avrundning:** Tibber visar 211,16 kWh ×
+36,61 öre/kWh som 77,30 kr, medan produkten av
+de två *avrundade visningsvärdena* ger cirka
+77,31 kr. Detta är **inte** en ny avgift eller en
+betald prisdifferens, utan bekräftar att 2 decimalers
+fakturerat medel inte räcker för att reproducera
+varje bakomliggande kvart eller fakturarad på öret.
+Behåll de redan insamlade per-kvart-spotpriserna
+och märk totalpriset som beräknat.
+
+Den fristående **skrivskyddade** koden
+`scripts/services/ev_invoice_tariff.py` läser och
+validerar den anonymiserade JSON-filen (schema v1,
+positiva decimalsträngar, SE2, månadsgränser,
+källtäckning, unika identiteter och inga extra privata
+fält). Den ger separat proveniens för varje prisdel;
+**om ingen kundfaktura täcker efterfrågad svensk
+kalendermånad blir `current_combined_invoice_rate_verified=false`
+och `actual_charging_cost_ore=null`**.
+
+```bash
+sudo -n -u solinteg-evshadow python3 \
+  /opt/solinteg/ev-shadow-runtime/scripts/services/ev_invoice_tariff.py \
+  --on 2026-10-28 \
+  --model-supplier-markup 9.29 --model-grid-variable 71.38 \
+  --model-export-credit 1.50
+```
+
+Resultatet för **2026-10-28** är
+`rate_quality=historic_invoice_references_only`.
+Båda månadsposterna visas som historiska referenser,
+**inte** som ett godkänt oktoberavtal. Inga fakturor
+eller kundidentifikatorer laddas upp till Dell,
+inga käll-SQLite-databaser skrivs,
+ingen automatisk tariffändring, laddboxstyrning,
+Solinteg-optimizer, `kr/mil`-dashboard eller
+ny aktiv timer följer av detta.
+
+**Nästa ekonomiska steg:** När oktoberfakturan
+blir tillgänglig, lägg till **en separat ny daterad post**
+för oktober i evidensfilen (eller läs verkliga tariffposter
+från Tibber med tydlig proveniens), bekräfta prisernas
+kvartsgränser, och modellera hur laddenergi fördelas
+mellan nät, sol och husbatteri innan
+`actual_charging_cost_ore` kan ersätta `null`.
+Månadsavgifter och fasta säkringsavgifter är
+**inte** marginalkostnad för en extra laddad kWh.
 
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 

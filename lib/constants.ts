@@ -36,8 +36,11 @@ export const VAT_RATE = numEnv('VAT_RATE', 0.25);
  * the owner uses Tibber/SE2; live env overrides SUPPLIER_SURCHARGE_ORE=9.29
  * (ex VAT). Tibber's public 2025-10-30 terms say fixed 6 ore/kWh ex VAT
  * PLUS variable purchase costs, rebates and a separate subscription fee.
- * Therefore the 9.29 surcharge remains an UNRECONCILED scheduling model
- * until the owner's actual invoice/contract confirms its effective components.
+ * A customer-specific Tibber invoice for JUNE 2026 has since been recovered:
+ * 6.00 fixed + 3.28 variable = 9.28 ore/kWh ex VAT. The Oct environment
+ * value 9.29 differs by just 0.01 ore from that historical monthly average.
+ * The June invoice does NOT verify the variable purchase costs for October,
+ * nor quarter-by-quarter invoices. Keep this a provisional scheduling model.
  * Do not treat this constant as billable historical EV-cost evidence.
  * Any reconciliation needs date-effective tariff provenance and separate
  * grid transfer/tax; do not silently reprice old stored quarters.
@@ -49,8 +52,11 @@ export const SUPPLIER_SURCHARGE_ORE = numEnv('SUPPLIER_SURCHARGE_ORE', 11.5);
  * Per-kWh compensation received for exporting to the grid, ON TOP OF the raw spot price
  * (öre/kWh) — the grid-benefit / nätnytta payment. Folded into the sell price at fetch time, so
  * every consumer (optimizer, economics, chart) values an exported kWh at `spot + this`.
- * Measured by the owner at 5.10 öre/kWh net; env EXPORT_BONUS_ORE if the contract changes (some
- * grid companies pay 0 or a %-based bonus instead of a flat rate — this formula assumes flat).
+ * The legacy fallback 5.10 ore/kWh is not the current invoice value:
+ * the July 2026 Sundsvall Elnat invoice shows 1.50 ore/kWh including VAT,
+ * matching the active EXPORT_BONUS_ORE=1.5 env override. That document
+ * confirms July only; keep export tariffs date-scoped. A different DSO
+ * may use zero or proportional compensation instead of a flat credit.
  */
 export const EXPORT_BONUS_ORE = numEnv('EXPORT_BONUS_ORE', 5.1);
 
