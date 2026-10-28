@@ -5,9 +5,12 @@ Se även designspecifikationens avsnitt 8.5 i
 
 ## Status och gränser
 
-Koden är **implementerad och testbar lokalt men inte driftsatt**. Ingen aktiv
-kostnadspoller, ingen automatisk registrering från Volvo/HA/Tibber/EM111 och
-ingen liveändring i laddbox, Volvo, växelriktare eller Solintegs dispatch.
+Den verkliga kostnadsbokföringen (`kr/mil`) är **ännu inte driftsatt**.
+Däremot är två isolerade, read-only **bevisinsamlare** aktiverade på Dell:
+anonymiserad körjournal från Volvo/HA och oavstämda historiska
+elprismodeller. Inga bevis omvandlas automatiskt till debiterade
+laddsessioner eller körkostnader. Ingen liveändring har gjorts i laddbox,
+Volvo, växelriktare eller Solintegs dispatch.
 Dagens `ev_history.py` har 30-sekundersobservationsdata, men saknar
 verifierade kWh från EM111, exakt bilbatteri-DC-ökning och tillförlitligt
 tidsmatchade körintervall. Därför är en tom kostnadsbokföring **inte**
@@ -49,14 +52,17 @@ fullständiga eller tydligt märkta uppskattade dataposter kan produceras.
   Frånvaro av rätt konfiguration, fil, schema eller behörighet stänger
   API:t utan att visa resor. Ingen POST/PUT-rutt finns för bokföringen.
 
-## Nästa read-only källadapter: Volvo-körjournalens verkliga intervall
+## Driftsatt read-only källadapter: Volvo-körjournalens verkliga intervall
 
 En separat adapter i `scripts/services/ev_cost_capture.py` kan läsa
-`GET /api/volvo_trip_energy/cost_segments` från den befintliga
-`volvo_trip_energy`-integrationens **planerade, skyddade** HA-rutt.
-HA-repot har motsvarande nya vy i utvecklingsutcheckningen, **ej
-deployad**. Tills HA-konfigurationen har släppts via ordinarie GitOps
-kommer URL:en inte att finnas i den körande HA-instansen.
+`GET /api/volvo_trip_energy/cost_segments` från befintlig
+`volvo_trip_energy`. Den skyddade HA-vyn **driftsattes 2026-10-28**
+via GitOps `ermhawi/ha-kube@cb2fc0d` (ursprungsrevision
+`30a4086`). ArgoCD rapporterade Synced/Healthy och HA:s
+konfigurationskontroll passerade efter omstart. Anonym och ogiltig
+Bearer-token fick 401; korrekt server-till-server-token fick 200,
+`application/json`, `Cache-Control: private, no-store` och
+ett godkänt versionerat datakontrakt.
 
 Till skillnad från den befintliga dashboardens rullande `bins_30d`
 returnerar routen verkliga **anonymiserade tidsintervall** från Volvos
@@ -89,10 +95,12 @@ batteriet efter regenerering. Det vore fel att debetera denna skillnad
 som om den vore köpt energi. En separat avstämd DC-energimodell och
 registrerade AC-laddsessioner/priser återstår.
 
-Ingen EV-kostnadstjänst, HA-restart, GitOps-push eller ny automatisk
-fysisk kontroll är aktiverad av denna kod. Nästa driftgrind är en
-begränsad HA-endpointdeployeringsgranskning (inklusive HA-checksumma,
-API-autentisering och rollback), följt av en läs-/insamlingspilot.
+Efter genomförd HA-granskning är två **bevisinsamlings-timers**
+driftsatta; den faktiska DC-energi-/kostnadsledgern och
+`kr/mil`-API:t är fortfarande inte aktiverade. Inga fysiska
+laddningskommandon har tillåtits. Återställning av den nya
+HA-vyn kräver en ny GitOps-commit mot tidigare revision; separat
+Dell-rollback står nedan.
 
 ## Utförd read-only provinsamling och avgränsad prislogg, 2026-10-28
 
@@ -132,15 +140,47 @@ python3 scripts/services/ev_cost_price_capture.py --days 30
 EV_COST_PRICE_CAPTURE_ENABLED=1 python3 scripts/services/ev_cost_price_capture.py --days 30 --capture
 ```
 
-För framtida drift finns **ej installerade/ej aktiverade** systemd units
-`solinteg-ev-cost-capture.{service,timer}` (var 30:e minut efter
-godkänt HA-API) och
-`solinteg-ev-cost-price-capture.{service,timer}` (en gång per dygn).
-De två tjänsterna använder endast isolerad miljö, privata databaser och
-nätbegränsad eller helt nätförbjuden read-only inhämtning.
-Lokala source-filer för respektive collector kopierades till den
-befintliga isolerade runtime som `root:solinteg` mode `0440` och
-SHA256-jämfördes; det installerar/aktiverar **inte** systemd-enheter.
+## Kontrollerad Dell-aktivering 2026-10-28
+
+Efter HA-driftsättning installerades fyra systemd-enheter från
+`deploy/solinteg-ev-cost-{capture,price-capture}.{service,timer}`
+och både timers aktiverades som `enabled/active`.
+`solinteg-ev-cost-capture.timer` hämtar anonymiserat körunderlag
+var 30:e minut (första planerade körningen kl. 20:00 CET);
+`solinteg-ev-cost-price-capture.timer` sparar dagens
+historiska prismodell kl. 00:20 CET (nästa 29 oktober).
+Båda körs som `solinteg-evshadow`, har `EV_ENABLED=0`,
+`EVCC_CONTROL_ARMED=0` och saknar hårdvaruskrivfunktioner.
+De isolerade tjänsterna har egna explicita
+`EV_COST_CAPTURE_ENABLED=1` respektive
+`EV_COST_PRICE_CAPTURE_ENABLED=1` så att den ordinarie
+`ev-shadow.env` och alla gamla tjänster förblir oförändrade.
+Tjänsterna är åtkomstbegränsade via systemd; prisinsamlingen
+saknar helt IP-nätverk, medan HA-läsningen bara får ansluta till
+uttryckligen tillåtna privata HA-adresser.
+
+Källprogrammen installerades tidigare som `root:solinteg`
+mode `0440` med verifierad SHA256. Efter `systemctl daemon-reload`
+testkördes båda tjänsterna och gav `Result=success`,
+`ExecMainStatus=0`, `device_writes=0` och **0 nyinsatta
+dubbletter**. Privat SQLite-kontroll bekräftade 218 körsegment och
+2 884 prisplatser, `integrity_check=ok` och mode `0600`.
+Samtliga fyra befintliga EV-observatörer var fortsatt `active`.
+Endast evidenssamling körs: ingen laddkostnad, fysisk styrning eller
+ändring av XC40-dashboarden.
+
+**Avgränsad rollback, påverkar bara de två nya insamlarna:**
+
+```bash
+sudo systemctl disable --now solinteg-ev-cost-capture.timer solinteg-ev-cost-price-capture.timer
+systemctl is-active solinteg-ev-ha solinteg-ev-shadow solinteg-ev-observer solinteg-ev-history
+```
+
+Låt revisionsdatabaserna ligga kvar för granskning; stoppa inte
+`solinteg-dispatch`, `solinteg-poller` eller tidigare EV-läsare.
+HA-vyn kan separat återställas genom en GitOps-revert mot
+`ermhawi/ha-kube` före `cb2fc0d` och en ny konfigurationschecksumma.
+Enbart inaktivering av Dell-timers kräver **ingen** HA-rollback.
 
 **Kvarvarande GO-grind:** Ingen laddningssession kunde verifieras i
 EVCC-historiken (endast A1-vila eller misslyckade FC03-läsningar).

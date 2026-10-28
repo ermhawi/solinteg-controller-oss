@@ -12,6 +12,8 @@ Environment=EV_ENABLED=0
 Environment=EVCC_CONTROL_ARMED=0
 Environment=EVCC_MANUAL_TEST=0
 Environment=EVCC_START_APPROVED=0
+# This gate is enabled ONLY in this explicitly installed read-only service.
+Environment=EV_COST_PRICE_CAPTURE_ENABLED=1
 ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ev_cost_price_capture.py --days 30 --capture
 UMask=0077
 NoNewPrivileges=true
