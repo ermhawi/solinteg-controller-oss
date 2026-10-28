@@ -105,6 +105,24 @@ def _read_window(host: str, start: int, count: int, *, port: int, timeout: float
     return _parse_read_reply(bytes(reply), start=start, count=count)
 
 
+def _read_window_retry(host: str, start: int, count: int, *,
+                       port: int, timeout: float) -> tuple[int, ...]:
+    """At most two FC03 attempts, each on a NEW socket.
+
+    The Waveshare/EVCC occasionally accepts a TCP connection but does not
+    respond to the first read. The earlier manual FC03 driver already uses
+    two bounded read attempts. Retrying a read is allowed here; there is
+    deliberately NO support for retrying any Modbus write.
+    """
+    for attempt in range(2):
+        try:
+            return _read_window(host, start, count, port=port, timeout=timeout)
+        except EvccReadError:
+            if attempt:
+                raise
+    raise AssertionError("unreachable")
+
+
 def observe(*, host: str, port: int = 4196, timeout: float = 2.5,
             lock_file: str = "/tmp/solinteg-evcc-readonly.lock",
             now: datetime | None = None) -> dict:
@@ -112,8 +130,8 @@ def observe(*, host: str, port: int = 4196, timeout: float = 2.5,
         raise ValueError("explicit private Waveshare IP, port and bounded timeout required")
     # One pair of FC03 reads, no retrying or acting on ambiguous device state.
     with _local_serial_owner(lock_file):
-        config = _read_window(host, _CONFIG_START, 5, port=port, timeout=timeout)
-        status = _read_window(host, _STATUS_START, 5, port=port, timeout=timeout)
+        config = _read_window_retry(host, _CONFIG_START, 5, port=port, timeout=timeout)
+        status = _read_window_retry(host, _STATUS_START, 5, port=port, timeout=timeout)
     config_raw, pilot_raw = config[3] & 0x0FFF, status[1] & 0x0FFF
     channel_currents = tuple(
         None if raw == _PAUSE_SENTINEL else round(raw / 10, 2)

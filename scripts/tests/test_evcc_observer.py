@@ -51,7 +51,7 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(
             obs._parse_read_reply(STATUS_REPLY, start=0x002E, count=5),
             (0x2EC2, 0x90A6, 0x0001, 0x0060, 0x0001))
-        self.assertTrue(obs._read_frame(0x000F, 5).startswith(b":0103"))
+        self.assertEqual(obs._read_frame(0x000F, 5), b":0103000F0005E8\r\n")
         self.assertTrue(obs._read_frame(0x002E, 5).startswith(b":0103"))
         for start, count in ((0x0014, 5), (0x000F, 2), (0x002E, 9)):
             with self.subTest(start=start):
@@ -76,6 +76,27 @@ class ObserverTests(unittest.TestCase):
         self.assertFalse(value["metered_ev_energy_available"])
         self.assertEqual(value["modbus_function"], "FC03")
         self.assertEqual(value["writes"], 0)
+
+    def test_bounded_fc03_retry_when_first_tcp_connection_times_out(self):
+        # Confirmed live behavior: EVCC may not reply on the first socket,
+        # but the second bounded FC03 attempt succeeds within ~2.6s.
+        regs = (0x0F3F, 0x0215, 0x010B, 100, 100)
+        with mock.patch.object(obs, "_read_window", side_effect=[
+            obs.EvccReadError("EVCC network read failed"), regs
+        ]) as single:
+            result = obs._read_window_retry("192.168.0.20", 0x000F, 5,
+                                            port=4196, timeout=2.5)
+        self.assertEqual(result[3], 100)
+        self.assertEqual(single.call_count, 2)
+        self.assertEqual([call.args[1] for call in single.call_args_list], [0x000F, 0x000F])
+
+    def test_fc03_reader_does_not_retry_beyond_two_failed_connections(self):
+        with mock.patch.object(obs, "_read_window",
+                               side_effect=obs.EvccReadError("timeout")) as single:
+            with self.assertRaises(obs.EvccReadError):
+                obs._read_window_retry("192.168.0.20", 0x002E, 5,
+                                       port=4196, timeout=2.5)
+        self.assertEqual(single.call_count, 2)
 
     def test_status_checksum_corruption_disables_report(self):
         corrupted = STATUS_REPLY[:-4] + b"FF\r\n"

@@ -1,6 +1,6 @@
 # EVCC: två laddlägen, pris och solöverskott (skuggläge, 2026-10-28)
 
-**Status 2026-10-28:** isolerade HA-, Waveshare- och prisobservatörer är nu driftsatta på Dell. Den nya Next.js-sidan och fysisk bil-/inverterstyrning är fortfarande **inte driftsatta**; inga enheter har fått skrivkommandon.
+**Status 2026-10-28:** isolerade HA-, Waveshare- och prisobservatörer samt en historiktjänst kör nu på Dell. Next.js-sidan och **automatisk** bil-/inverterstyrning är inte driftsatta. På användarens uttryckliga godkännande har **ett manuellt Modbus FC10-kommando** sänkt EVCC:s fysiska PWM-strömtak från cirka 16 A till **6 A**; skrivningen kvitterades och dubbelverifierades med FC03. Alla automatiska tjänster är fortsatt skrivskyddade.
 Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-design.md`.
 
 ## Kod
@@ -55,7 +55,15 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   och tydligt märkta energiantaganden.
 - `scripts/services/evcc_observer.py`: en självständig observerare med
   en transport som **enbart konstruerar Modbus FC03**, för två kända
-  registerfönster. Rapporterad kanalström är inte L3:s RMS-skydd.
+  registerfönster. När första EVCC-läskopplingen inte svarar kan samma
+  FC03-registerblock läsas igen **en gång**, utan någon skrivfunktion.
+  Rapporterad kanalström är inte L3:s RMS-skydd.
+- `scripts/services/ev_history.py`: separat SQLite-historik med
+  30-sekundersprover och 30 dagars retention. L3, nätimport,
+  husbatteri, Volvo-API-tider och batteri-SoC, EVCC-ström/PWM och
+  föreslagna laddbeslut får gemensamma UTC-tider och egna
+  färskhetsflaggor. Felaktiga/saknade EVCC-svar lagras som **okänd**
+  ström, aldrig 0 A.
 - `scripts/services/ev_shadow_planner.py`: läser skuggsessionen,
   Solintegs prisplan, invertertelemetri och EVCC-observation.
   Föreslagen ström är endast en simulering; fysisk tillåtelse är 0 A.
@@ -68,8 +76,9 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   hemlig nyckel på minst 32 tecken, kontrollerad i konstant tid.
   Utan dessa går lägena att förhandsvisa men inte spara.
   Hemligheten exponeras aldrig från servern till webbsidan eller källkoden.
-- `deploy/solinteg-ev-ha.service`, `deploy/solinteg-ev-shadow.service`
-  och `deploy/solinteg-ev-observer.service` körs nu separat, som
+- `deploy/solinteg-ev-ha.service`, `deploy/solinteg-ev-shadow.service`,
+  `deploy/solinteg-ev-observer.service` och `deploy/solinteg-ev-history.service`
+  körs nu separat, som
   `solinteg-evshadow`, från `/opt/solinteg/ev-shadow-runtime`.
   Den äldre `solinteg-evcc.service` med manuella skrivmöjligheter
   är varken installerad eller aktiverad. Se rollout-dokumentet.
