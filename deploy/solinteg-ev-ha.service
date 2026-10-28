@@ -1,0 +1,26 @@
+[Unit]
+Description=Solinteg Volvo Home Assistant REST reader (READ ONLY, SHADOW)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=solinteg
+WorkingDirectory=/opt/solinteg/app
+EnvironmentFile=/opt/solinteg/solinteg.env
+ExecStart=/opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/ha_ev_session.py --watch
+Restart=on-failure
+RestartSec=20
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/solinteg
+UMask=0077
+
+# This unit only performs HA GET requests and writes local JSON snapshots.
+# It cannot dispatch EVCC, Volvo or inverter commands.
+# Installation does not enable/start the unit.
+
+[Install]
+WantedBy=multi-user.target

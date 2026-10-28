@@ -1,0 +1,320 @@
+"""Read-only HA/Volvo to Solinteg EV-session bridge.
+
+No vehicle, charger, Home Assistant or inverter commands. This process performs
+GETs against an explicitly configured HA REST URL. It writes only two local
+JSON snapshots: a status for the UI and a fail-closed planning session.
+
+NEVER treat the fresh Volvo coordinator health timestamp as a replacement for
+the actual battery/connection/target sensor's last_reported timestamps. A
+coordinator can report success while one sensor remains stale.
+"""
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import logging
+import math
+import os
+import re
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, time as dt_time, timedelta, timezone
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
+
+import common
+
+UTC = timezone.utc
+STOCKHOLM = ZoneInfo("Europe/Stockholm")
+BATTERY = "sensor.volvo_xc40_battery"
+CONNECTED = "sensor.volvo_xc40_charging_connection_status"
+TARGET = "sensor.volvo_xc40_target_battery_charge_level"
+CHARGING = "sensor.volvo_xc40_charging_status"
+MAX_SENSOR_AGE_SECONDS = 20 * 60
+REST_TIMEOUT_SECONDS = 6
+TARGET_SOC = 80
+DEFAULT_SETTINGS = {
+    "charge_mode": "deadline",
+    "departure_local_time": "07:00",
+    "max_buy_ore_per_kwh": None,
+}
+log = logging.getLogger("solinteg.ha_ev_session")
+
+
+class UnsafeSession(ValueError):
+    """Missing or untrustworthy source prevents generating a valid EV session."""
+
+
+def _number(value: object) -> float:
+    if isinstance(value, bool):
+        raise UnsafeSession("boolean sensor value")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise UnsafeSession("sensor has no numeric value") from exc
+    if not math.isfinite(parsed):
+        raise UnsafeSession("non-finite sensor value")
+    return parsed
+
+
+def _utc(value: object) -> datetime:
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError) as exc:
+        raise UnsafeSession("missing or invalid sensor timestamp") from exc
+    if stamp.tzinfo is None:
+        raise UnsafeSession("sensor timestamp missing timezone")
+    return stamp.astimezone(UTC)
+
+
+def _sensor_state(response: dict, *, name: str, now: datetime) -> tuple[str, datetime]:
+    if not isinstance(response, dict) or response.get("entity_id") != name:
+        raise UnsafeSession(f"{name}: missing or wrong entity")
+    value = response.get("state")
+    if not isinstance(value, str) or not value.strip() or value.lower() in (
+        "unknown", "unavailable", "none", "null"
+    ):
+        raise UnsafeSession(f"{name}: unavailable")
+    # HA last_updated only changes when the state/attributes change; last_reported
+    # reflects repeated reports. Neither a GET timestamp nor another sensor's
+    # fresh timestamp constitutes evidence of this reading's freshness.
+    stamp = _utc(response.get("last_reported"))
+    age = (now - stamp).total_seconds()
+    if not -5 <= age <= MAX_SENSOR_AGE_SECONDS:
+        raise UnsafeSession(f"{name}: stale")
+    return value, stamp
+
+
+def load_settings(path: str) -> dict:
+    """Fail-closed on malformed user intent; never guess a price ceiling."""
+    raw = DEFAULT_SETTINGS.copy()
+    try:
+        with open(path, encoding="utf-8") as source:
+            parsed = json.load(source)
+        if not isinstance(parsed, dict):
+            raise UnsafeSession("EV settings must be an object")
+        if set(parsed) - set(DEFAULT_SETTINGS):
+            raise UnsafeSession("unknown EV settings keys")
+        raw.update(parsed)
+    except FileNotFoundError:
+        pass  # declared defaults, not an error
+    except UnsafeSession:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise UnsafeSession("invalid EV settings file") from exc
+    if raw["charge_mode"] not in ("deadline", "economy"):
+        raise UnsafeSession("unknown charging mode")
+    if not isinstance(raw["departure_local_time"], str) or not re.fullmatch(
+        r"(?:[01]\d|2[0-3]):[0-5]\d", raw["departure_local_time"]
+    ):
+        raise UnsafeSession("invalid departure time")
+    limit = raw.get("max_buy_ore_per_kwh")
+    if limit is not None:
+        limit = _number(limit)
+        if not -200 <= limit <= 3000:
+            raise UnsafeSession("invalid maximum price")
+    return {"charge_mode": raw["charge_mode"],
+            "departure_local_time": raw["departure_local_time"],
+            "max_buy_ore_per_kwh": limit}
+
+
+def next_departure(local_time: str, *, now: datetime) -> datetime:
+    """Use absolute UTC departure; never manufacture an ambiguous DST time."""
+    if now.tzinfo is None:
+        raise UnsafeSession("naive current time")
+    hour, minute = (int(part) for part in local_time.split(":"))
+    here = now.astimezone(STOCKHOLM)
+    for offset in (0, 1, 2):
+        day = here.date() + timedelta(days=offset)
+        naive = datetime.combine(day, dt_time(hour, minute))
+        candidate0 = naive.replace(tzinfo=STOCKHOLM, fold=0)
+        candidate1 = naive.replace(tzinfo=STOCKHOLM, fold=1)
+        if candidate0.astimezone(UTC).astimezone(STOCKHOLM).replace(tzinfo=None) != naive:
+            raise UnsafeSession("nonexistent departure time on DST change")
+        if candidate0.utcoffset() != candidate1.utcoffset():
+            raise UnsafeSession("ambiguous departure time on DST change")
+        utc_value = candidate0.astimezone(UTC)
+        if utc_value > now:
+            if utc_value - now > timedelta(hours=48):
+                raise UnsafeSession("departure outside planning horizon")
+            return utc_value
+    raise UnsafeSession("no departure within 48 hours")
+
+
+def make_session(*, states: dict[str, dict], settings: dict, now: datetime,
+                 usable_capacity_kwh: float | None,
+                 ac_efficiency: float | None) -> tuple[dict, dict]:
+    """Return validated pricing session and display-only status.
+
+    usable_capacity_kwh and AC charge efficiency require independent verified
+    configuration. The HA battery_capacity sensor currently exposes 81.608 kWh
+    but is not independently proven to be usable capacity; never silently use
+    it for operational AC energy requirements.
+    """
+    soc_raw, soc_at = _sensor_state(states[BATTERY], name=BATTERY, now=now)
+    connection_raw, connection_at = _sensor_state(
+        states[CONNECTED], name=CONNECTED, now=now)
+    target_raw, target_at = _sensor_state(states[TARGET], name=TARGET, now=now)
+    soc = _number(soc_raw)
+    target = _number(target_raw)
+    if not 0 <= soc <= 100:
+        raise UnsafeSession("Volvo SoC outside 0-100")
+    if target != TARGET_SOC:
+        raise UnsafeSession("Volvo local charge target is not 80%")
+    connected = connection_raw.lower() in ("connected", "charging")
+    if not connected:
+        raise UnsafeSession("Volvo charging cable disconnected")
+    if usable_capacity_kwh is None or ac_efficiency is None:
+        raise UnsafeSession("usable battery capacity/AC efficiency not calibrated")
+    capacity = _number(usable_capacity_kwh)
+    efficiency = _number(ac_efficiency)
+    if not 45 <= capacity <= 100 or not 0.7 <= efficiency <= 1:
+        raise UnsafeSession("invalid calibrated battery capacity/efficiency")
+
+    remaining = round(max(0, target - soc) / 100 * capacity / efficiency, 3)
+    # A record remains as old as its oldest required source. Do NOT use the
+    # timestamp of our own polling invocation to refresh old Volvo values.
+    source_at = min(soc_at, connection_at, target_at)
+    session = {
+        "source": "home_assistant",
+        "connected": True,
+        "observed_at_utc": source_at.isoformat(),
+        "charge_mode": settings["charge_mode"],
+        "target_soc_pct": TARGET_SOC,
+        "vehicle_soc_pct": soc,
+        "remaining_ac_kwh": remaining,
+    }
+    if settings["charge_mode"] == "deadline":
+        session["departure_at_utc"] = next_departure(settings["departure_local_time"], now=now).isoformat()
+    if settings["max_buy_ore_per_kwh"] is not None:
+        session["max_buy_ore_per_kwh"] = settings["max_buy_ore_per_kwh"]
+    status = {
+        "battery_soc_pct": soc,
+        "battery_reported_at_utc": soc_at.isoformat(),
+        "connection_reported_at_utc": connection_at.isoformat(),
+        "target_reported_at_utc": target_at.isoformat(),
+        "connected": connected,
+        "remaining_ac_kwh": remaining,
+        "usable_capacity_kwh_calibrated": capacity,
+        "ac_efficiency_calibrated": efficiency,
+    }
+    return session, status
+
+
+def _ha_state(base: str, token: str, name: str) -> dict:
+    if not base or not token:
+        raise UnsafeSession("HA URL or token missing")
+    parts = urlsplit(base)
+    if (parts.scheme not in ("https", "http") or not parts.hostname
+            or parts.username or parts.password or parts.path not in ("", "/")
+            or parts.query or parts.fragment):
+        raise UnsafeSession("invalid HA API URL")
+    # Plain HTTP must never send a HA token outside a private cluster/LAN.
+    # Use Python's RFC1918 test, not a dangerous prefix such as 172.*.
+    if parts.scheme == "http":
+        try:
+            address = ipaddress.ip_address(parts.hostname)
+            allowed = address.version == 4 and any(
+                address in ipaddress.ip_network(net)
+                for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+            )
+        except ValueError:
+            allowed = False
+        if not allowed:
+            raise UnsafeSession("plain HTTP requires a private IP address")
+    req = urllib.request.Request(
+        base.rstrip("/") + "/api/states/" + name,
+        headers={"Authorization": "Bearer " + token,
+                 "Accept": "application/json"},
+        method="GET",
+    )
+    # Refuse redirects: never forward a sensitive HA Authorization header to
+    # another host, even if HA is accidentally configured with a redirect.
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, msg, headers, newurl):
+            raise UnsafeSession("HA API redirect refused")
+
+    # Direct private cluster connection, never a system-configured HTTP proxy
+    # that could receive the HA bearer token.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(req, timeout=REST_TIMEOUT_SECONDS) as response:
+        if response.status != 200:
+            raise UnsafeSession("HA response not OK")
+        data = response.read(16385)
+        if len(data) > 16384:
+            raise UnsafeSession("HA state payload too large")
+    result = json.loads(data)
+    if not isinstance(result, dict):
+        raise UnsafeSession("HA state payload invalid")
+    return result
+
+
+def _read_token() -> str:
+    path = os.environ.get("HA_READONLY_TOKEN_FILE")
+    if path:
+        with open(path, encoding="utf-8") as source:
+            return source.read().strip()
+    return os.environ.get("HA_READONLY_TOKEN", "").strip()
+
+
+def once(*, now: datetime | None = None) -> dict:
+    """One bounded read; local JSON snapshots only. Unknown -> invalidate."""
+    now = now or datetime.now(UTC)
+    session_path = os.environ.get("EV_SESSION_PATH", "/opt/solinteg/volvo-energy-session.json")
+    status_path = os.environ.get("EV_STATUS_PATH", "/opt/solinteg/ev-session-status.json")
+    settings_path = os.environ.get("EV_SETTINGS_PATH", "/opt/solinteg/ev-settings.json")
+    status: dict = {"checked_at_utc": now.isoformat(),
+                    "source": "home_assistant",
+                    "mode": "shadow",
+                    "valid_for_planning": False,
+                    "writes_to_devices": 0}
+    session: dict = {"source": "home_assistant", "connected": False,
+                     "invalid_reason": "not validated"}
+    try:
+        settings = load_settings(settings_path)
+        status.update(settings)
+        capacity_str = os.environ.get("EV_USABLE_BATTERY_KWH")
+        efficiency_str = os.environ.get("EV_AC_CHARGE_EFFICIENCY")
+        token = _read_token()
+        base = os.environ.get("HA_API_URL", "")
+        # The charging-status sensor is useful display data but cannot make
+        # stale battery percentage fresh. It must not gate the energy target.
+        required = (BATTERY, CONNECTED, TARGET)
+        states = {name: _ha_state(base, token, name) for name in required}
+        session, detail = make_session(
+            states=states, settings=settings, now=now,
+            usable_capacity_kwh=capacity_str,
+            ac_efficiency=efficiency_str,
+        )
+        status.update(detail)
+        status["valid_for_planning"] = True
+    except (UnsafeSession, KeyError, OSError, TypeError, ValueError,
+            urllib.error.URLError, json.JSONDecodeError) as exc:
+        # Never print URLs, bearer tokens, or raw HA payloads on failures.
+        status["reason"] = str(exc) if isinstance(exc, UnsafeSession) else type(exc).__name__
+        session["invalid_reason"] = status["reason"]
+        log.warning("Volvo HA session not usable: %s", status["reason"])
+    # Always replace a previously valid session immediately when a read fails,
+    # rather than leaving a 19-minute authorization window on stale data.
+    common.write_json_atomic(session_path, session, indent=2)
+    common.write_json_atomic(status_path, status, indent=2)
+    return status
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--watch", action="store_true", help="periodic read-only HA snapshots")
+    args = parser.parse_args()
+    interval = max(30, int(os.environ.get("EV_HA_POLL_SECONDS", "60")))
+    while True:
+        status = once()
+        print(json.dumps(status, ensure_ascii=False), flush=True)
+        if not args.watch:
+            return
+        time.sleep(interval)
+
+
+if __name__ == "__main__":
+    main()

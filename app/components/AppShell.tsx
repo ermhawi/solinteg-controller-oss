@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { stockholmDateOf } from '@/lib/economics';
 import AutoRefresh from '@/app/components/AutoRefresh';
 import LiveStatus from '@/app/components/LiveStatus';
@@ -31,6 +32,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <LiveStatus today={today} updatedTime={updatedTime} />
         </div>
+        <Link href="/ev" className="rounded-xl border px-3 py-2 text-[13px] font-semibold"
+          style={{ borderColor: 'var(--card-border)', color: 'var(--text)' }}>
+          Volvo · Laddplanering
+        </Link>
       </div>
 
       {children}

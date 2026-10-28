@@ -46,8 +46,28 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   Ingen FC10 på den vägen. `EV_ENABLED=0` (default) betyder **ingen
   EVCC-anslutning**, inga skrivningar och inga effekter på `optimizer_runs`
   eller befintlig batteridispatch.
-- `deploy/solinteg-evcc.service`: **inaktiv** systemd-unit; ingen automatisk
-  installation, start, deploy eller ändring av skarp Solinteg.
+- `scripts/services/ha_ev_session.py`: read-only HA REST GET (batteri-SoC,
+  kabelanslutning och Volvons **lokala** mål 80 %). Accepterar **enbart**
+  respektive sensors `last_reported` upp till 20 minuter gammal, aldrig
+  koordinatorsensorns nyare tidstämpel som ersättning. Kräver explicit
+  kalibrerad **användbar** kapacitet och AC-verkningsgrad; HA:s
+  `sensor.volvo_xc40_battery_capacity` (tidigare 81,608 kWh) används inte
+  automatiskt som verifierad användbar kapacitet. Sätter
+  `observed_at_utc` till **äldsta** källtidsstämpel; vid fel
+  ogiltigförklaras tidigare giltig sessionsfil **omedelbart**.
+- `app/ev/page.tsx`, `app/components/EvChargingPlanner.tsx` och
+  `app/api/ev/*`: Solintegs separata mobilanpassade
+  `/solinteg/ev`-sida (vid basväg `/solinteg`) med två laddlägen,
+  80 %-mål, avresetid/pristak och read-only sessions-/skuggstatus.
+  Sparning av **enbart skugginställningar** kräver
+  `EV_SHADOW_SETTINGS_WRITES_ENABLED=1` **och** en serverkonfigurerad
+  hemlig nyckel på minst 32 tecken, kontrollerad i konstant tid.
+  Utan dessa går lägena att förhandsvisa men inte spara.
+  Hemligheten exponeras aldrig från servern till webbsidan eller källkoden.
+- `deploy/solinteg-ev-ha.service` och
+  `deploy/solinteg-evcc.service`: **inaktiva** systemd-enheter;
+  ingen automatisk installation, start, deploy eller ändring
+  av skarp Solinteg.
 
 ## Delat elpris, men ännu inte gemensam verkställande plan
 
@@ -101,11 +121,14 @@ pristak**. I `deadline` byts `charge_mode` och man lägger till en
 fast `departure_at_utc` i UTC. I `economy` finns **ingen avresetid**,
 och `max_buy_ore_per_kwh` är **valfritt**. Oavsett läge ska
 `remaining_ac_kwh` härledas från verifierad användbar batterikapacitet,
-laddförluster och bilens *käll-tidsstämplade* SoC; sätt aldrig
-`observed_at_utc` till nu om källvärdet är gammalt.
+laddförluster och färska individuella HA-sensortidsstämplar;
+`observed_at_utc` är den äldsta tillförlitliga HA-rapporttiden,
+**inte** bevisligen Volvos interna mätdatum. Sätt aldrig den till nu
+om källvärdet är gammalt.
 
-**Producenten och UI-valet är inte byggda ännu.** Utan en färsk,
-validerad fil blir både nätandelen och det slutliga laddförslaget 0 A.
+**Läsaren och UI-valet finns nu som separat utvecklingskod men är
+inte driftsatta.** Utan en färsk, validerad HA-session blir både
+nätandelen och det slutliga laddförslaget 0 A.
 Det här är endast ett stopp i **planeringens förslag** vid 80 %, inte
 en fysisk stoppfunktion. För skarp drift måste bilens lokala
 80 %-gräns och EVCC:s paus/readback verifieras oberoende; HA:s
@@ -118,6 +141,48 @@ tvetydiga 02:xx-kvartar ger inget nätladdningsbeslut.
 verifierats. `solar_permitted_a` förblir 0 eftersom oberoende L3-skydd
 inte är verifierat. Befintliga säkerhetsspärrar, batterirecovery och
 stopp vid för gammal data har företräde framför båda energikällorna.
+
+## Säker HA-integration och två användarval
+
+1. Använd befintlig Home Assistant API med en **separat skyddad tokenfil**
+   som endast HA-läsaren får läsa. Ingen token, VIN eller lösenfras får
+   committas. De befintliga hemliga HA-värdena i
+   `ha-kube/.env` lästes enbart i minnet vid utvecklingsprovet.
+   Den gamla `HA_URL` pekade på ett certifikat med fel värdnamn;
+   **TLS-kontroll får inte inaktiveras**. I testet nåddes HA i stället
+   via dess privata Kubernetes ClusterIP med HTTP, inte via en offentlig
+   osäker transport. Slå upp aktuell ClusterIP i stället för att
+   förutsätta att testets adress alltid gäller.
+2. Ange `HA_API_URL`, `HA_READONLY_TOKEN_FILE`,
+   `EV_STATUS_PATH`, `EV_SESSION_PATH`, `EV_SETTINGS_PATH`,
+   och de **verifierade** parametrarna
+   `EV_USABLE_BATTERY_KWH` och `EV_AC_CHARGE_EFFICIENCY`.
+   Om någon kapacitetsparameter saknas blir sessionen ogiltig.
+   Exempel finns i `deploy/solinteg.env.example`.
+3. Den nya läsaren har egna tester, inklusive avvisande av gammal
+   SoC trots att Volvos laddstatus eller HA-koordinator uppdaterats
+   senare, tidsskillnaden vid svensk sommar-/vintertid och omedelbar
+   ogiltigförklaring av en tidigare giltig session vid databortfall.
+   Notera: HA:s `last_reported` visar när **HA-sensorn**
+   rapporterades, inte bevisligen när Volvons underliggande telematik
+   mätte värdet. Fullständig leverantörstidsstämpel och lokal
+   fysisk stoppsignal måste fortfarande utvärderas före skarp drift.
+4. När webben driftsätts visas kortet via `/solinteg/ev`.
+   Välj `Klar till avresa` eller `Ladda ekonomiskt`, med fast 80 %-mål.
+   **Att välja ett radiokort gör inget i bilen.** Om inställnings-API:t
+   ännu är låst kan valet bara förhandsvisas. Separat explicit
+   aktivering och en lång lokal skrivnyckel krävs för att
+   spara den atomiska konfigurationsfilen.
+5. **Ingen automatisk styrning är klar**: EVCC-länken,
+   20 A L3-fasskydd, batteriets faktiska marginalurladdning och
+   oberoende paus/återstart återstår.
+
+**Live read-only-resultat 2026-10-28:** Volvo-batterisensorns
+`last_reported` var flera timmar äldre än den nyare
+`sensor.volvo_xc40_charging_status`. Den nya läsaren returnerade
+`valid_for_planning=false`, orsak `sensor.volvo_xc40_battery: stale`,
+och sessionen avvisades. **Inga HA POST, bil-/EVCC- eller
+inverterskrivningar utfördes.**
 
 ## Statuskontroll utan skrivning
 
