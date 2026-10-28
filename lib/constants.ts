@@ -29,14 +29,19 @@ export const VAT_RATE = numEnv('VAT_RATE', 0.25);
 
 /**
  * Supplier surcharge added to the raw spot BEFORE VAT (öre/kWh) — Mölndal's påslag + elcertifikat.
- * Measured 2026-07-01 by fitting Mölndal's priceIncludingTaxAndSurcharge against Nord Pool SE3 spot:
- * `priceInclTax = (spot + 11.5) × 1.25`, exact to 0.00 öre across all 96 slots. The app fetches raw
- * spot from elprisetjustnu.se rather than Mölndal's own (unreliable) API, but this doesn't affect
- * the calibration: spot is a standardized Nord Pool SE3 value, identical regardless of which API
- * relays it, and the owner's actual supplier contract is still Mölndal Energi (confirmed 2026-07-02
- * — only the price-fetch source changed, not the contract). Re-measure only if the Mölndal contract
- * itself changes (different surcharge/elcertifikat terms), or set SUPPLIER_SURCHARGE_ORE for a
- * different supplier's own påslag+elcertifikat.
+ * Historical fallback only: fitted 2026-07-01 against the old Mölndal Energi
+ * SE3 price feed: priceInclTax = (spot + 11.5) × 1.25.
+ * This was valid for that historic supplier/contract comparison, NOT an
+ * authoritative Tibber price or current customer contract. As of 2026-10-28
+ * the owner uses Tibber/SE2; live env overrides SUPPLIER_SURCHARGE_ORE=9.29
+ * (ex VAT). Tibber's public 2025-10-30 terms say fixed 6 ore/kWh ex VAT
+ * PLUS variable purchase costs, rebates and a separate subscription fee.
+ * Therefore the 9.29 surcharge remains an UNRECONCILED scheduling model
+ * until the owner's actual invoice/contract confirms its effective components.
+ * Do not treat this constant as billable historical EV-cost evidence.
+ * Any reconciliation needs date-effective tariff provenance and separate
+ * grid transfer/tax; do not silently reprice old stored quarters.
+ * The functional fallback 11.5 is deliberately unchanged here.
  */
 export const SUPPLIER_SURCHARGE_ORE = numEnv('SUPPLIER_SURCHARGE_ORE', 11.5);
 

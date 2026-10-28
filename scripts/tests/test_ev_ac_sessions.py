@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from decimal import Decimal
 import sys
 import tempfile
 import unittest
@@ -67,8 +68,9 @@ class SessionTests(unittest.TestCase):
         for offset, kwargs in points:
             ac.store(self.ac, record(START, offset, **kwargs))
 
-    def report(self, days=1):
-        return sessions.analyze(self.ac, self.prices, now=self.now, days=days)
+    def report(self, days=1, **kwargs):
+        return sessions.analyze(self.ac, self.prices, now=self.now, days=days,
+                                **kwargs)
 
     def test_no_source_files_remains_unavailable_and_readonly(self):
         result = self.report()
@@ -141,6 +143,54 @@ class SessionTests(unittest.TestCase):
         self.assertIn("all_covered_AC_is_purchased_grid_energy",
                       result["hypothetical_pricing_assumption"])
         self.assertEqual(result["source_price_quality"],price_capture.QUALITY)
+
+    def test_explicit_public_2026_network_preview_remains_hypothetical(self):
+        self.put((0, {}), (30, {}))
+        day=datetime(2026,10,28,19,0,tzinfo=UTC)
+        price_capture.append(self.prices,[price_row(day,100),
+                                          price_row(day+timedelta(minutes=15),300)])
+        default=self.report()
+        self.assertNotIn("hypothetical_grid_only_public_2026_network_ore",default)
+        scenario=self.report(published_network_2026=True)
+        self.assertEqual(scenario["hypothetical_grid_only_public_2026_network_ore"],
+                         3.12) # 0.0115*71.30 + 2.30
+        self.assertEqual(scenario["published_network_2026_ore_per_kwh"],71.3)
+        self.assertFalse(scenario["published_network_2026_tariff_verified_for_account"])
+        self.assertFalse(scenario["supplier_variable_costs_verified"])
+        self.assertFalse(scenario["fixed_fees_allocated"])
+        self.assertIsNone(scenario["actual_cost_ore"])
+        self.assertIsNone(scenario["full_session_ac_kwh"])
+        self.assertEqual(scenario["observed_charging_fragments"][0][
+            "hypothetical_grid_only_public_2026_network_ore"],3.12)
+
+    def test_public_2026_network_scenario_forbids_other_year(self):
+        start=datetime(2025,10,28,19,14,45,tzinfo=UTC)
+        ac.store(self.ac,record(start))
+        ac.store(self.ac,record(start,30))
+        day=datetime(2025,10,28,19,0,tzinfo=UTC)
+        price_capture.append(self.prices,[price_row(day,100),
+                                          price_row(day+timedelta(minutes=15),300)])
+        scenario=sessions.analyze(
+            self.ac,self.prices,now=start+timedelta(hours=1),days=1,
+            published_network_2026=True)
+        self.assertIsNone(scenario["hypothetical_grid_only_public_2026_network_ore"])
+        self.assertIsNone(scenario["actual_cost_ore"])
+
+    def test_public_network_still_requires_complete_spot_model(self):
+        self.put((0, {}), (30, {}))
+        day=datetime(2026,10,28,19,0,tzinfo=UTC)
+        price_capture.append(self.prices,[price_row(day,100)])
+        scenario=self.report(published_network_2026=True)
+        self.assertIsNone(scenario["hypothetical_grid_only_public_2026_network_ore"])
+
+    def test_public_tariff_refuses_stockholm_new_year_boundary(self):
+        # 22:59:45 UTC is 23:59:45 CET on Dec 31, 2026.
+        # 23:00:15 UTC is 00:00:15 CET on Jan 1, 2027.
+        begin=datetime(2026,12,31,22,59,45,tzinfo=UTC)
+        end=begin+timedelta(seconds=30)
+        self.assertIsNone(sessions._public_network_2026_cost(
+            int(begin.timestamp()*1000),int(end.timestamp()*1000),
+            Decimal("0.0115"),Decimal("2.3"),complete_model_price=True))
 
     def test_price_integral_uses_linear_current_not_flat_split(self):
         self.put((0, {"current": 5.0}), (30, {"current": 6.0}))

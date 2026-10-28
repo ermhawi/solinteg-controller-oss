@@ -347,6 +347,117 @@ varierande ström, saknade/långsamma FC03-prover,
 halvöppna sessioner, förfalskade kWh och
 källpost med otillåten skrivindikering.
 
+## Verifiering av prisdelar och laddningens mätsäkerhet (2026-10-28)
+
+**Tre prisnivåer måste skiljas:**
+
+1. **Solintegs historiska elhandelsmodell**, från
+   `price_snapshots`: spotpris plus ett konfigurerat påslag
+   inklusive moms; aktuell aktiv miljö anger
+   `SUPPLIER_SURCHARGE_ORE=9.29` **före moms**.
+   Priset kan inte ännu jämställas med Tibbers fakturerade pris.
+2. **Sundsvall Elnäts publicerade privatkundstariff för 2026:**
+   rörlig överföring **26,30 öre/kWh** och energiskatt
+   **45,00 öre/kWh**, båda **inklusive moms**. Totalt
+   **71,30 öre/kWh**. Publicerad fast 20 A-avgift
+   **8 053 kr/år** ingår **inte** i marginalkostnad per kWh.
+   Den befintliga driftskonfigurationen har
+   `SKATT_OVERFORING_ORE=71.38`, alltså 0,08 öre/kWh
+   högre än dagens publicerade totalsats. Ingen automatisk
+   justering eller slutsats om fakturafelsättning görs.
+   Källa: https://sundsvallelnat.se/min-anslutning/priser-och-avtalsvillkor/2026-sakringsabonnemang-privat
+3. **Tibbers publicerade villkor**, gällande från
+   2025-10-30, anger ett fast påslag **6,00 öre/kWh
+   exklusive moms**, dessutom **rörliga inköpskostnader**
+   samt **49 kr/månad inklusive moms**. En differens mot
+   Solintegs 9,29 öre är därför inte i sig ett fel:
+   den dynamiska inköpskostnaden, eventuella rabatter
+   och kundens faktiska avtal är ännu inte avstämda.
+   Källor: https://tibber.com/se/sammanfattning-avtalsvillkor
+   och https://tibber.com/se/villkor/elavtalsvillkor
+
+**Ny explicit, alternativ räknevy**:
+
+```bash
+sudo -n -u solinteg-evshadow python3 \
+  /opt/solinteg/ev-shadow-runtime/scripts/services/ev_ac_sessions.py \
+  --days 1 --published-network-2026
+```
+
+`hypothetical_grid_only_public_2026_network_ore` summerar
+Solintegs oavstämda historiska **all-grid-modellpris** och
+**71,30 öre/kWh publicerad nätöverföring + skatt** på **endast
+täckta, verifierade EVCC-delintervall**. Det är ett
+**frivilligt kontrafaktiskt scenario**, *inte* faktiskt
+fakturerade ören, kundverifierad nätavgift, tillkommande
+elhandelsinköpskostnader, fastavgiftsallokering eller
+verifierad sol-/nätfördelning. Ingen tariff för andra år
+appliceras automatiskt; vid gränsöverskridning,
+saknat kvartpris eller tom laddserie är scenariot `null`.
+Ordinarie körning utan denna CLI-flagga ändras inte.
+
+**Ny oberoende kvalitetsdiagnostik**, installerad read-only:
+
+```bash
+sudo -n -u solinteg-evshadow python3 \
+  /opt/solinteg/ev-shadow-runtime/scripts/services/ev_ac_quality_audit.py \
+  --hours 24
+```
+
+`ev_ac_quality_audit.py` öppnar den redan körande
+`ev-history.sqlite` och EVCC:s `ev-ac-estimate.sqlite`
+i **SQLite mode=ro**. Ingen bakgrundstimer, privat token,
+styrkommandon, ny historikdatabas, HA-skrivning eller
+Solinteg-dispatchändring tillkommer. Den jämför
+**färskhetskvalificerade, bilrapporterade SoC-nivåer**
+med en **oberoende L3-före/efter-differens** från husets
+effektmätningar. Den *beräknar inte* DC-kWh eller
+AC/DC-verkningsgrad, eftersom batterikapacitet,
+källtid och avrundad procentnivå inte är verifierade
+som en exakt kWh-mätare.
+
+Första provet, omkring 20:47 CET:
+
+- **59** färskhetskvalificerade historikposter över EVCC:s
+  täckta fragment, med Volvo SoC **57 → 58 %**.
+  Ett enda helt procentsteg (avrundningsosäkerhet
+  i samma storleksordning) ger **inte** stöd för
+  laddförlust- eller batterikapacitetskalibrering.
+  `minimum_trend_resolution_met=false`.
+- L3:s observerade medianimport ändrades
+  **72 → 1 487,5 W**, alltså **+1 415,5 W**;
+  den tidigare jämförelsen med 6 A × antagna 230 V
+  ger **1 380 W**. Husbatteriets medianurladdning
+  var **233 → 213 W**, alltså ingen ökad urladdning
+  under just dessa fönster. PV var 0 W.
+- Tidigare EVCC-readback var **inte tillgänglig** i
+  referensperioden (innan första verifierade C2), så
+  exakt laddstart och andra samtidiga hushållslaster
+  är fortfarande osäkra. `quality=indicative_only`,
+  `source_allocation_verified=false`,
+  `independent_fuse_rms_verified=false`.
+- Vid denna kontroll gav **60** EVCC-källposter
+  **1 773,91 sekunder** sammanhängande observation
+  (**0,684700 kWh uppskattad täckt AC**).
+  Det opt-in publicerade nätprisscenariot var
+  **72,4027 öre**, medan all-grid-spotmodellen
+  före nätkostnad var **23,5837 öre**.
+  **Inget av dessa belopp är fakturauppgifter.**
+
+**Före ekonomisk aktivering:** samla flera SOC-steg
+under fullständigt täckta laddperioder, hitta en verifierad
+användbar bilbatterikapacitet eller oberoende mätare,
+och hämta verkligt avtals-/fakturapris från
+Tibber samt faktiskt nätavtal och eventuella rabatter.
+Ingen kundspecifik Tibber-/elnätsfaktura med verifierade
+priskomponenter finns ännu i underlaget. En
+generell fakturaavisering räcker inte för
+individuell prisavstämning.
+Allt som rör `actual_cost_ore`, `kr/mil`
+och `vehicle_battery_dc_kwh` förblir `null`.
+Inga fysiska skrivningar eller nya styrbehörigheter
+har introducerats.
+
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 
 Inmatning är avsiktligt **explicit** tills betrodda automationskällor finns.

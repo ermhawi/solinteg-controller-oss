@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import ev_ac_capture as ac
 
@@ -23,6 +24,14 @@ UTC = timezone.utc
 MAX_OBSERVATIONS = 120_000
 MODEL_PRICE_QUALITY = "modelled_day_ahead_excludes_grid_and_unreconciled"
 EPSILON = Decimal("0.000000001")
+STOCKHOLM = ZoneInfo("Europe/Stockholm")
+# Sundsvall Elnat's PUBLIC 2026 residential tariff (VAT included).
+# It has NOT been reconciled against this customer's invoices.
+PUBLIC_NETWORK_2026_ORE_KWH = Decimal("26.30") + Decimal("45.00")
+PUBLIC_NETWORK_2026_SOURCE = (
+    "https://sundsvallelnat.se/min-anslutning/priser-och-avtalsvillkor/"
+    "2026-sakringsabonnemang-privat"
+)
 
 
 class SessionEvidenceError(ValueError):
@@ -158,6 +167,24 @@ def _scenario_ore(start: int, end: int, a: Decimal, b: Decimal,
     return model_ore
 
 
+def _public_network_2026_cost(
+    start_ms: int, end_ms: int, energy_kwh: Decimal,
+    spot_model_ore: Decimal, *, complete_model_price: bool,
+) -> Decimal | None:
+    """Separate opt-in hypothetical *all-grid* cost using published 2026 grid rates.
+
+    Never invoices, actual sourcing, Tibber variable purchase costs or fixed fees.
+    If the fragment spans a different calendar year in Sweden, refuse.
+    """
+    if not complete_model_price or end_ms <= start_ms:
+        return None
+    first = datetime.fromtimestamp(start_ms / 1000, UTC).astimezone(STOCKHOLM)
+    last = datetime.fromtimestamp((end_ms - 1) / 1000, UTC).astimezone(STOCKHOLM)
+    if first.year != 2026 or last.year != 2026:
+        return None
+    return spot_model_ore + energy_kwh * PUBLIC_NETWORK_2026_ORE_KWH
+
+
 def _active(record: dict) -> Decimal | None:
     if (record.get("quality") != "estimated"
             or record.get("state") != "C2"
@@ -173,7 +200,8 @@ def _active(record: dict) -> Decimal | None:
 
 
 def analyze(ac_path: str, price_path: str | None = None, *,
-            now: datetime | None = None, days: int = 7) -> dict:
+            now: datetime | None = None, days: int = 7,
+            published_network_2026: bool = False) -> dict:
     """Report observed coverage fragments, NOT guaranteed entire charging sessions."""
     if not 1 <= days <= 30:
         raise ValueError("days must be 1..30")
@@ -194,6 +222,10 @@ def analyze(ac_path: str, price_path: str | None = None, *,
             "covered_seconds": 0,
             "estimated_ac_kwh_covered_only": None,
             "hypothetical_grid_only_spot_model_ore": None,
+            **({"hypothetical_grid_only_public_2026_network_ore": None,
+                "published_network_2026_ore_per_kwh": float(PUBLIC_NETWORK_2026_ORE_KWH),
+                "published_network_2026_tariff_verified_for_account": False}
+               if published_network_2026 else {}),
             "actual_cost_ore": None, "vehicle_battery_dc_kwh": None,
             "device_writes": 0,
         }
@@ -245,6 +277,12 @@ def analyze(ac_path: str, price_path: str | None = None, *,
                     and abs(neighbor[0] - boundary) <= ac.MAX_GAP_MS
                     and neighbor[1].get("quality") == "not_charging"
                     and neighbor[1].get("state") != "C2")
+        public_cost = (
+            _public_network_2026_cost(
+                f["start_ms"], f["end_ms"], f["energy"], f["price"],
+                complete_model_price=f["price_complete"])
+            if published_network_2026 else None
+        )
         rendered.append({
             "observed_start_utc": _time_ms(f["start_ms"]),
             "observed_end_utc": _time_ms(f["end_ms"]),
@@ -256,11 +294,21 @@ def analyze(ac_path: str, price_path: str | None = None, *,
             "full_session_energy_known": False,
             "hypothetical_grid_only_spot_model_ore": (
                 _round(f["price"], "0.0001") if f["price_complete"] else None),
+            **({"hypothetical_grid_only_public_2026_network_ore": (
+                _round(public_cost, "0.0001") if public_cost is not None else None)}
+               if published_network_2026 else {}),
             "cost_ore": None,
         })
     total_energy = sum((f["energy"] for f in fragments), Decimal("0"))
     full_price = bool(fragments) and all(f["price_complete"] for f in fragments)
     total_price = sum((f["price"] for f in fragments), Decimal("0"))
+    public_total = (
+        _public_network_2026_cost(
+            min(f["start_ms"] for f in fragments),
+            max(f["end_ms"] for f in fragments),
+            total_energy, total_price, complete_model_price=full_price)
+        if published_network_2026 and fragments else None
+    )
     last_t, last = observations[-1]
     return {
         "source": "evcc_ict2_readonly",
@@ -282,6 +330,15 @@ def analyze(ac_path: str, price_path: str | None = None, *,
         "estimated_ac_kwh_covered_only": _round(total_energy) if links else None,
         "hypothetical_grid_only_spot_model_ore": (
             _round(total_price, "0.0001") if full_price else None),
+        **({
+            "hypothetical_grid_only_public_2026_network_ore": (
+                _round(public_total, "0.0001") if public_total is not None else None),
+            "published_network_2026_ore_per_kwh": float(PUBLIC_NETWORK_2026_ORE_KWH),
+            "published_network_2026_source": PUBLIC_NETWORK_2026_SOURCE,
+            "published_network_2026_tariff_verified_for_account": False,
+            "fixed_fees_allocated": False,
+            "supplier_variable_costs_verified": False,
+        } if published_network_2026 else {}),
         "actual_cost_ore": None,
         "vehicle_battery_dc_kwh": None,
         "full_session_ac_kwh": None,
@@ -298,9 +355,12 @@ def main() -> None:
     parser.add_argument("--ac-db", default="/opt/solinteg/ev-shadow-runtime/var/ev-ac-estimate.sqlite")
     parser.add_argument("--price-db", default="/opt/solinteg/ev-shadow-runtime/var/ev-cost-price-evidence.sqlite")
     parser.add_argument("--days", type=int, default=7)
+    parser.add_argument("--published-network-2026", action="store_true",
+                        help="public 2026 network rate only: unverified hypothetical grid scenario")
     args = parser.parse_args()
     try:
-        result = analyze(args.ac_db, args.price_db, days=args.days)
+        result = analyze(args.ac_db, args.price_db, days=args.days,
+                         published_network_2026=args.published_network_2026)
         print(json.dumps(result, ensure_ascii=False))
     except (SessionEvidenceError, sqlite3.Error, OSError) as exc:
         print(json.dumps({"quality": "unavailable",
