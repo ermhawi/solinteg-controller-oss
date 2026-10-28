@@ -11,10 +11,12 @@ anonymiserad körjournal från Volvo/HA och oavstämda historiska
 elprismodeller. Inga bevis omvandlas automatiskt till debiterade
 laddsessioner eller körkostnader. Ingen liveändring har gjorts i laddbox,
 Volvo, växelriktare eller Solintegs dispatch.
-Dagens `ev_history.py` har 30-sekundersobservationsdata, men saknar
-verifierade kWh från EM111, exakt bilbatteri-DC-ökning och tillförlitligt
-tidsmatchade körintervall. Därför är en tom kostnadsbokföring **inte**
-en uppgift om `0 kr/mil`. Låt befintlig XC40-graf vara oförändrad tills
+Dagens `ev_history.py` har 30-sekundersobservationsdata men saknar
+verifierade kWh från EM111 och exakt bilbatteri-DC-ökning.
+Tidsmatchade, anonymiserade körintervall finns numera i en **separat
+bevisdatabas**, men deras bilrapporterade förbrukning är ännu inte
+verifierad nettourladdning av DC-energilagret. Därför är en tom
+kostnadsbokföring **inte** en uppgift om `0 kr/mil`. Låt befintlig XC40-graf vara oförändrad tills
 fullständiga eller tydligt märkta uppskattade dataposter kan produceras.
 
 ## Implementerad avgränsad modell
@@ -184,6 +186,15 @@ Enbart inaktivering av Dell-timers kräver **ingen** HA-rollback.
 
 **Kvarvarande GO-grind:** Ingen laddningssession kunde verifieras i
 EVCC-historiken (endast A1-vila eller misslyckade FC03-läsningar).
+Vid read-only-felsökning senare samma kväll svarade Waveshare TCP
+med `No route to host`; `solinteg-ev-observer` och
+`solinteg-ev-history` var aktiva, men senaste
+`evcc-readonly.json` hade `read_ok=false` och saknade aktuell ström.
+Det tidigare verifierade 6 A-taket får **inte** tolkas som aktuellt
+readback när källan är otillgänglig. Ingen anslutnings-/säkrings- eller
+laddboxändring gjordes. `EVCC/RFID` och `METER` är olika fysiska
+bussar enligt installationsdesignen; EM111 går inte att läsa via
+ytterligare en EVCC-slavadress.
 AC-kWh per laddning, faktisk andel köpt/sol efter husbatteriprioritet,
 avstämd tariff och nettourladdning/DC-verkningsgrad efter regenerering
 måste tillkomma. Därför är `kr/mil=null` och `cost_quality=unavailable`
