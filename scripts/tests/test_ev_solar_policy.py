@@ -90,6 +90,34 @@ class SolarTests(unittest.TestCase):
                 self.assertEqual(decide(reading, ev=6, running=True).suggested_amps, 0)
         self.assertEqual(decide(None, ev=None, running=True).suggested_amps, 0)
 
+    def test_low_price_grid_can_charge_without_solar_surplus(self):
+        result = decide(live(grid_w=-200, pv_w=0), grid_topup_a=6, stable=0)
+        self.assertEqual(result.suggested_amps, 6)
+        self.assertEqual(result.permitted_amps, 0)  # Phase protection still unverified.
+        self.assertIn("price-scheduled grid", result.reason)
+
+    def test_solar_and_low_price_grid_combine_within_current_cap(self):
+        result = decide(live(grid_w=900), grid_topup_a=3, stable=3,
+                        max_current_a=10)
+        # (900-200)/230 gives 3 A solar, plus 3 A economically bought.
+        self.assertEqual(result.suggested_amps, 6)
+        self.assertIn("solar and price-scheduled grid", result.reason)
+
+    def test_expensive_grid_never_subsidizes_missing_solar(self):
+        self.assertEqual(decide(live(grid_w=100), grid_topup_a=0).suggested_amps, 0)
+        self.assertEqual(decide(live(grid_w=900), grid_topup_a=3,
+                                stable=0, max_current_a=10).suggested_amps, 0)
+
+    def test_house_battery_priority_and_protection_also_apply_to_cheap_grid(self):
+        self.assertEqual(decide(live(soc_pct=97, grid_w=-100),
+                                grid_topup_a=6).suggested_amps, 0)
+        self.assertEqual(decide(live(battery_w=220, grid_w=-100),
+                                grid_topup_a=6).suggested_amps, 0)
+        self.assertEqual(decide(live(timestamp=(NOW - timedelta(minutes=3)).isoformat()),
+                                grid_topup_a=6).suggested_amps, 0)
+        self.assertEqual(decide(live(grid_w=-100), grid_topup_a=6,
+                                phase=True, headroom=5).permitted_amps, 0)
+
     def test_headroom_is_always_capped(self):
         self.assertEqual(decide(phase=True, headroom=16,
                                 max_current_a=16).permitted_amps, 6)

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import common
 from ev_solar_policy import decide_solar
+from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan
 from evcc_ascii import EvccAscii, EvccError, RAW_PAUSE, amps_to_raw
 
 log = logging.getLogger("solinteg.evcc")
@@ -26,10 +27,20 @@ def monitor_once(client: EvccAscii, streak: int) -> tuple[dict, int]:
     status = client.status()
     live = common.read_json(os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json"))
     running = status.measured_current_a is not None and status.measured_current_a > 1
+    max_current_a = int(os.environ.get("EVCC_MAX_CURRENT_A", "6"))
+    session = read_ev_session(os.environ.get("EV_SESSION_PATH"), now=now)
+    price = decide_grid_price(
+        read_house_price_plan(os.environ.get("TELEMETRY_DB_PATH", "/opt/solinteg/telemetry.db"))
+        if session else None, now=now, session=session, max_current_a=max_current_a,
+        forecast_risk_ore=float(os.environ.get("SOLINTEG_FORECAST_RISK_PREMIUM_ORE", "10")),
+    )
     params = dict(live=live, now=now, ev_measured_a=status.measured_current_a,
-                  ev_running=running, phase_guard_verified=False)
-    ready = decide_solar(**params, stable_surplus_samples=3)
-    streak = streak + 1 if ready.suggested_amps >= 6 else 0
+                  ev_running=running, phase_guard_verified=False,
+                  max_current_a=max_current_a, grid_topup_a=price.grid_budget_a)
+    solar_params = {**params, "grid_topup_a": 0}
+    solar_ready = decide_solar(**solar_params, stable_surplus_samples=3)
+    streak = streak + 1 if solar_ready.suggested_amps >= 6 else 0
+    solar_only = decide_solar(**solar_params, stable_surplus_samples=streak)
     decision = decide_solar(**params, stable_surplus_samples=streak)
     return {
         "timestamp": now.isoformat(),
@@ -38,9 +49,16 @@ def monitor_once(client: EvccAscii, streak: int) -> tuple[dict, int]:
         "configured_pwm_raw": status.configured_raw,
         "pilot_pwm_raw": status.pilot_raw,
         "measured_current_a": status.measured_current_a,
-        "solar_suggested_a": decision.suggested_amps,
-        "solar_permitted_a": decision.permitted_amps,
+        "solar_suggested_a": solar_only.suggested_amps,
+        "solar_permitted_a": solar_only.permitted_amps,
+        "charging_suggested_a": decision.suggested_amps,
+        "charging_permitted_a": decision.permitted_amps,
         "solar_surplus_w": decision.surplus_w,
+        "price_buy_ore_kwh": price.buy_ore,
+        "price_sell_ore_kwh": price.sell_ore,
+        "grid_topup_suggested_a": price.grid_budget_a,
+        "grid_topup_planned_kwh": price.planned_grid_kwh,
+        "price_reason": price.reason,
         "reason": decision.reason,
         "writes": 0,
     }, streak

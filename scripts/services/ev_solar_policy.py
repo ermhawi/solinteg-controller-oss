@@ -1,4 +1,4 @@
-"""Pure solar-surplus EV charging recommendations, never hardware commands.
+"""Pure solar-surplus and price-aware EV recommendations, never hardware commands.
 
 Assumes Solinteg's grid_w is POSITIVE for export and battery_w is
 POSITIVE for discharge. Grid export already includes any ongoing EV load:
@@ -47,6 +47,7 @@ def decide_solar(
     phase_guard_verified: bool = False,
     phase_headroom_a: float | None = None,
     max_current_a: int = DEFAULT_MAX_AMPS,
+    grid_topup_a: int = 0,
     voltage_v: int = 230,
     max_age_seconds: int = 90,
 ) -> SolarDecision:
@@ -80,9 +81,11 @@ def decide_solar(
         pv_w = _number(live["pv_w"])
         house_load_w = _number(live["house_load_w"])
         measured_ev = _number(ev_measured_a)
+        grid_topup = _number(grid_topup_a)
         if not (0 <= soc <= 100 and pv_w >= 0 and house_load_w >= 0 and
                 measured_ev >= 0 and voltage_v > 0 and
-                6 <= max_current_a <= 16 and stable_surplus_samples >= 0):
+                6 <= max_current_a <= 16 and 0 <= grid_topup <= max_current_a and
+                stable_surplus_samples >= 0):
             return result(0, "invalid telemetry or limits")
     except (KeyError, ValueError, TypeError, OverflowError):
         return result(0, "invalid telemetry")
@@ -94,9 +97,13 @@ def decide_solar(
     # started EV destroys the measured export and oscillates to zero.
     available_w = grid_w + (measured_ev * voltage_v) - GRID_MARGIN_W
     available_a = max(0, math.floor(available_w / voltage_v))
-    suggested = min(max_current_a, available_a)
+    # Grid top-up is chosen against the house optimizer's SAME buy/sell prices,
+    # but may not consume more than its separate price-scheduled allocation.
+    suggested = min(max_current_a, available_a + int(grid_topup))
     if suggested < MIN_AMPS:
-        return result(0, "insufficient solar surplus", round(available_w))
-    if not ev_running and stable_surplus_samples < 3:
+        return result(0, "insufficient solar surplus and cheap grid budget", round(available_w))
+    if not ev_running and stable_surplus_samples < 3 and grid_topup < MIN_AMPS:
         return result(0, "waiting for stable solar surplus", round(available_w))
-    return result(suggested, "house full; solar surplus available", round(available_w))
+    funding = ("solar and price-scheduled grid" if grid_topup > 0 and available_a > 0
+               else "price-scheduled grid" if grid_topup > 0 else "solar surplus")
+    return result(suggested, "house full; " + funding + " available", round(available_w))
