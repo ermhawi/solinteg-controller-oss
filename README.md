@@ -79,6 +79,16 @@ This gets you the dashboard running locally against real price/weather APIs, in 
 (systemd services, the Python poller/dispatch loop, alerting), see **`deploy/README.md`** —
 that's the actual step-by-step guide for standing this up on a dedicated box.
 
+## Dell development checkout
+
+For the Sundsvall installation, use **one canonical Git checkout**:
+`~/dev/github.com/ermhawi/solinteg-controller-oss` on branch `Sundsvall`.
+The GitHub repository `hspolander/solinteg-controller-oss` remains an **upstream
+remote**, not the active local development checkout. The running Solinteg app
+and isolated EV observers under `/opt/solinteg/` are deployments, not Git
+worktrees. See [repository layout and migration safeguards](docs/repository-layout.md)
+before opening another clone, deploying, or moving local environment files.
+
 ## Configuration
 
 Every site-specific constant (electricity contract terms, GPS coordinates, solar array specs,

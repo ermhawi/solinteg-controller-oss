@@ -1,6 +1,17 @@
 @AGENTS.md
 @DOMAIN.md
 
+## Canonical checkout for Sundsvall
+
+Use `~/dev/github.com/ermhawi/solinteg-controller-oss` on branch `Sundsvall`
+for all further development. `hspolander/solinteg-controller-oss` is still the
+**upstream GitHub repository**, not the active local clone. The old local
+`~/dev/github.com/hspolander/solinteg-controller-oss` is being retired once
+active shell/Claude sessions leave it. Do not create a second checkout or
+worktree by default, and do not copy the old `.env.local` (it contains live
+configuration) into this checkout without a security review. Read
+[docs/repository-layout.md](docs/repository-layout.md) for the full decision.
+
 ## Architecture
 
 ### Data flow
