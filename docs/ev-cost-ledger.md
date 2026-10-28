@@ -548,6 +548,93 @@ mellan nät, sol och husbatteri innan
 Månadsavgifter och fasta säkringsavgifter är
 **inte** marginalkostnad för en extra laddad kWh.
 
+## Read-only preliminär nätladdningskostnad (2026-10-28, etapp 4.1)
+
+`scripts/services/ev_ac_cost_preview.py` är driftsatt som en fristående
+**manuellt anropad** rapport på Dell, utan ny timer. Den kombinerar tre
+separata redan existerande datakällor: privata
+`ev-ac-estimate.sqlite`, `ev-cost-price-evidence.sqlite` och
+**anonymiserade**, fakturabundna
+`docs/ev-invoice-rate-evidence-2026.json`. Alla källor läses
+skrivskyddat; koden har varken egen Modbus-/HA-/Volvoanslutning,
+enhetsskrivningar, nätsessioner, fakturaimport från PDF eller
+muterande SQLite-anslutningar.
+
+```bash
+sudo -n -u solinteg-evshadow python3 \
+  /opt/solinteg/ev-shadow-runtime/scripts/services/ev_ac_cost_preview.py \
+  --days 1 --model-supplier-markup 9.29
+```
+
+Rapporten räknar per **täckt, giltigt C2-fragment**:
+
+`estimated_AC_kWh = trapezoid(Ict2_A) × antagna 230 V × PF 1,0`;
+
+`elhandel_öre = sum(AC_kWh_per_UTC-kvart × historiskt priceIncludingTaxAndSurcharge)`;
+
+`antagen_elnät_och_skatt_öre = AC_kWh × 71,38 öre/kWh`
+(**kundens faktiska JULI-faktura som explicit antagande, INTE
+verifierad för oktober**);
+
+`scenario_öre = elhandel_öre + antagen_elnät_och_skatt_öre`.
+
+**Viktigt:** `priceIncludingTaxAndSurcharge` innehåller
+redan Solintegs modellpåslag och moms. Tibbers historiska
+6,00 + 3,28 = 9,28 öre/kWh före moms används **bara för
+jämförelse**, aldrig som ännu ett påslag.
+Månadsavgift, fast 20 A-abonnemang, solens alternativkostnad,
+eventuell inmatning, batteriets uppladdningskostnad, AC/DC-
+förluster, framtida/tomma tidsintervall och fakturaavräkning
+ingår **inte**. Scenariot antar att **all** observerad
+laddenergi importerats från nätet; faktisk fördelning mellan
+sol, nät och lagrat husbatteri är inte verifierad.
+
+Julifakturan får användas som en **historisk referens**
+inom samma kalenderår, och högst **120 dagar efter juli
+månads slut**; annars blir beloppet `null`.
+Fakturans `invoice_issued_on` kontrolleras mot rapportdagen
+så att en ännu inte utfärdad faktura inte ger falsk täckning.
+Om en laddningsperiod korsar fakturamånadens gräns utan
+daterad taxa eller en kvart saknar modellpris blir den
+periodens kostnad `null`, och totalen räknas **inte**
+som om saknad energi vore 0 kr. Fragment äldre än de
+100 som källanalysen kan redovisa avvisas för att
+undvika ofullständig totalsummering.
+
+Fält att använda i framtida skrivskyddade XC40-dashboarden:
+
+- `estimated_ac_kwh_covered_only`: observerad,
+  uppskattad AC-energi, **inte** full laddsession
+- `electricity_model_ore_for_covered_energy`:
+  redan påslagsinkluderad elhandelsmodell för täckta kvart
+- `grid_tax_and_transfer_assumed_ore_for_covered_energy`:
+  elnät/skatt **under antagandet att juli gäller**
+- `estimated_all_grid_marginal_cost_kr_for_covered_energy`:
+  **preliminärt all-grid-scenario**, inte faktura
+- `quality`, `grid_rate_source`, `grid_provenance`,
+  `fragments_all_priced`, `observed_charging_fragments`:
+  läsbar kvalitet, fakturaperiod och luckor
+- `actual_cost_ore=null`, `total_charge_session_cost_ore=null`,
+  `actual_cost_per_mil_kr=null`, `verified_vehicle_net_dc_kwh=null`:
+  **avsiktligt fortfarande okänt**.
+
+**Fältverifiering kl. 21:19 CET:** **123 giltiga intervall**
+och **3 703,26 sekunder** täckning utan observerade luckor
+gav **1,417948 kWh uppskattad AC**. Elhandelsmodell
+**52,2399 öre**, historiskt antagen nät/skatt
+**101,2131 öre**, totalt **153,4530 öre = 1,53453 kr**.
+`quality=estimated_all_grid_historical_invoice_assumption_partial_coverage`,
+`actual_cost_ore=null`, `device_writes=0`.
+Ingen energi före första avläsningen estimerades.
+
+Avgränsad avaktivering är att **sluta använda/ta bort**
+`ev_ac_cost_preview.py`; den har ingen systemd-timer,
+ingen tillståndsdatabas och ingen produktionskodväg.
+Alla tidigare read-only-insamlare och 6 A-gränsen
+lämnas i fred. Etapp 4.1 betyder **inte**
+GO för `kr/mil`, skrivning till energiledger,
+automatisk styrning eller presentation som fakturerad kostnad.
+
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 
 Inmatning är avsiktligt **explicit** tills betrodda automationskällor finns.
