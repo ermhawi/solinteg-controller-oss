@@ -1,0 +1,39 @@
+[Unit]
+Description=Solinteg XC40 journal evidence capture (READ ONLY; no battery or EVCC control)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=solinteg-evshadow
+Group=solinteg
+WorkingDirectory=/opt/solinteg/ev-shadow-runtime
+EnvironmentFile=/opt/solinteg/ev-shadow-runtime/ev-shadow.env
+Environment=EV_ENABLED=0
+Environment=EVCC_CONTROL_ARMED=0
+Environment=EVCC_MANUAL_TEST=0
+Environment=EVCC_START_APPROVED=0
+ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ev_cost_capture.py --ha --capture
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
+MemoryMax=128M
+TimeoutStartSec=45
+IPAddressDeny=any
+IPAddressAllow=10.0.0.20/32
+IPAddressAllow=192.168.0.10/32
+RestrictAddressFamilies=AF_UNIX AF_INET
+
+[Install]
+WantedBy=multi-user.target

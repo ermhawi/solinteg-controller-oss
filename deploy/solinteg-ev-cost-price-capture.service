@@ -1,0 +1,36 @@
+[Unit]
+Description=Solinteg historical spot-price evidence capture (READ ONLY)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=solinteg-evshadow
+Group=solinteg
+WorkingDirectory=/opt/solinteg/ev-shadow-runtime
+EnvironmentFile=/opt/solinteg/ev-shadow-runtime/ev-shadow.env
+Environment=EV_ENABLED=0
+Environment=EVCC_CONTROL_ARMED=0
+Environment=EVCC_MANUAL_TEST=0
+Environment=EVCC_START_APPROVED=0
+ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ev_cost_price_capture.py --days 30 --capture
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
+MemoryMax=128M
+TimeoutStartSec=40
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -49,6 +49,107 @@ fullständiga eller tydligt märkta uppskattade dataposter kan produceras.
   Frånvaro av rätt konfiguration, fil, schema eller behörighet stänger
   API:t utan att visa resor. Ingen POST/PUT-rutt finns för bokföringen.
 
+## Nästa read-only källadapter: Volvo-körjournalens verkliga intervall
+
+En separat adapter i `scripts/services/ev_cost_capture.py` kan läsa
+`GET /api/volvo_trip_energy/cost_segments` från den befintliga
+`volvo_trip_energy`-integrationens **planerade, skyddade** HA-rutt.
+HA-repot har motsvarande nya vy i utvecklingsutcheckningen, **ej
+deployad**. Tills HA-konfigurationen har släppts via ordinarie GitOps
+kommer URL:en inte att finnas i den körande HA-instansen.
+
+Till skillnad från den befintliga dashboardens rullande `bins_30d`
+returnerar routen verkliga **anonymiserade tidsintervall** från Volvos
+privata körjournal, utan VIN, GPS, trip-ID eller kilometerställning.
+Adapter och HA-källa delar ett versionsmärkt kontrakt. Den avvisar
+stale/partial-källa, felaktiga tidsstämplar, omöjliga energivärden,
+överlappande intervall och nya persondatafält. Med samma
+`HA_API_URL` och `HA_READONLY_TOKEN_FILE` som befintlig säker
+HA-läsare utförs endast ett begränsat `GET` till privat HA IP,
+utan omdirigering eller systemproxy.
+
+```bash
+# Utan --capture: verifierar kvalitet och räknar underlag, skriver INTE till disk.
+python3 scripts/services/ev_cost_capture.py --ha
+
+# Separat explicit aktivering för att *enbart* spara anonymiserat
+# körunderlag i egen SQLite efter att skyddad HA-rutt har driftsatts:
+EV_COST_CAPTURE_ENABLED=1 python3 scripts/services/ev_cost_capture.py --ha --capture
+```
+
+`--capture` skriver endast till en separat privat SQLite
+(`EV_COST_EVIDENCE_DB_PATH`, default `var/ev-cost-evidence.sqlite`)
+och är idempotent mellan avläsningar. En ändrad eller överlappande
+historisk rapport avvisas utan att tyst uppdatera gammal mätning.
+Allt rapporteras som `reported_consumption_kwh` och
+`cost_quality=unavailable`; **inga `drive`-händelser överförs ännu till
+kostnadslagret**, eftersom Volvo-data enligt integrationens källtolkning
+är rapporterad bruttoförbrukning, inte verifierad nettourladdning ur
+batteriet efter regenerering. Det vore fel att debetera denna skillnad
+som om den vore köpt energi. En separat avstämd DC-energimodell och
+registrerade AC-laddsessioner/priser återstår.
+
+Ingen EV-kostnadstjänst, HA-restart, GitOps-push eller ny automatisk
+fysisk kontroll är aktiverad av denna kod. Nästa driftgrind är en
+begränsad HA-endpointdeployeringsgranskning (inklusive HA-checksumma,
+API-autentisering och rollback), följt av en läs-/insamlingspilot.
+
+## Utförd read-only provinsamling och avgränsad prislogg, 2026-10-28
+
+Utan HA-koddeploy/routestart kunde den befintliga privata HA-cachen
+`.storage/volvo_trip_energy_snapshot` läsas **en gång** via Kubernetes
+read-only, och dess uppmätta `last_success` bekräftades mot HA:s
+`sensor.volvo_xc40_measured_kwh_per_mile` under samma körning.
+Med `--file - --capture` importerades **218** validerade anonyma intervall
+(304,392 km och 81,4996 kWh bilrapporterad energi, 18–28 oktober) till
+`/opt/solinteg/ev-shadow-runtime/var/ev-cost-evidence.sqlite`. Ingen
+källa/ID/GPS/OAuth-token eller råsvar sparades. Databasen skapades av
+`solinteg-evshadow`, mode `0600`; `PRAGMA integrity_check=ok`.
+
+En andra, helt separat `scripts/services/ev_cost_price_capture.py` läser
+den redan existerande `price_snapshots` via SQLite **mode=ro** och kräver
+ett helt dagsdygn med `source=actual` per 15-minutersplats. Lokal svensk
+klocktid mappas till **entydiga UTC-intervall**, inklusive dubbla
+02:xx den 25 oktober (100 platser) och vårens 92 platser.
+Ett begränsat engångsprov importerade **2 884** platser för **30/30**
+fullständiga dagar, 29 september–28 oktober, till
+`var/ev-cost-price-evidence.sqlite` (mode `0600`,
+`integrity_check=ok`). Varje pris är oföränderligt versionsanknutet
+till ursprunglig snapshot-hash och UTC-tid; ändring ger explicit fel.
+
+**Prisernas kvalitet är `modelled_day_ahead_excludes_grid_and_unreconciled`,
+inte fakturakostnad**: `buy_before_grid_ore` är Solintegs
+historiska inköpsmodell före skatt/överföring, `sell_model_ore` dess
+modellerade exportvärde. Ingen verifiering mot verkligt Tibber-avtal,
+faktura, faktisk nätöverföring eller effekt-/abonnemangsavgift har
+skett. Dessa prisbevis får inte automatiskt skapa `charge`-events.
+
+```bash
+# Förhandsgranskning: ingen databas skapas/ändras.
+python3 scripts/services/ev_cost_price_capture.py --days 30
+
+# Enbart avsiktlig, privat prisbevisimport; aldrig produktionstelemetri-DB:
+EV_COST_PRICE_CAPTURE_ENABLED=1 python3 scripts/services/ev_cost_price_capture.py --days 30 --capture
+```
+
+För framtida drift finns **ej installerade/ej aktiverade** systemd units
+`solinteg-ev-cost-capture.{service,timer}` (var 30:e minut efter
+godkänt HA-API) och
+`solinteg-ev-cost-price-capture.{service,timer}` (en gång per dygn).
+De två tjänsterna använder endast isolerad miljö, privata databaser och
+nätbegränsad eller helt nätförbjuden read-only inhämtning.
+Lokala source-filer för respektive collector kopierades till den
+befintliga isolerade runtime som `root:solinteg` mode `0440` och
+SHA256-jämfördes; det installerar/aktiverar **inte** systemd-enheter.
+
+**Kvarvarande GO-grind:** Ingen laddningssession kunde verifieras i
+EVCC-historiken (endast A1-vila eller misslyckade FC03-läsningar).
+AC-kWh per laddning, faktisk andel köpt/sol efter husbatteriprioritet,
+avstämd tariff och nettourladdning/DC-verkningsgrad efter regenerering
+måste tillkomma. Därför är `kr/mil=null` och `cost_quality=unavailable`
+fortfarande **korrekt**, även med 30 dagars kör- och prisbevis.
+Husets livereglering, bilens 6 A-gräns och HA-dashboarden ändrades inte.
+
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 
 Inmatning är avsiktligt **explicit** tills betrodda automationskällor finns.

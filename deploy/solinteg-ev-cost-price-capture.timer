@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh immutable model-price evidence once per day (READ ONLY)
+
+[Timer]
+OnCalendar=*-*-* 00:20:00
+RandomizedDelaySec=30s
+Persistent=false
+Unit=solinteg-ev-cost-price-capture.service
+
+[Install]
+WantedBy=timers.target

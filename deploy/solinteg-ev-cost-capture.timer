@@ -1,0 +1,11 @@
+[Unit]
+Description=Capture anonymized Volvo journal evidence every 30 minutes (READ ONLY)
+
+[Timer]
+OnCalendar=*:00,30
+RandomizedDelaySec=30s
+Persistent=false
+Unit=solinteg-ev-cost-capture.service
+
+[Install]
+WantedBy=timers.target
