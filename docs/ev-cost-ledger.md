@@ -635,6 +635,87 @@ lämnas i fred. Etapp 4.1 betyder **inte**
 GO för `kr/mil`, skrivning till energiledger,
 automatisk styrning eller presentation som fakturerad kostnad.
 
+## XC40-dashboardens automatiska schablonpris för total elkostnad per mil
+
+**2026-10-28 – användaren har godkänt ungefärlig elkostnad.** Det
+krävs inte löpande avstämning av varje Tibber- eller nätfaktura för
+grafen; det är viktigt att resultatet fortfarande märks som
+`estimated` och **aldrig** som fakturerad `kr/mil`.
+
+`scripts/services/ev_cost_rate_publish.py` återanvänder den
+**read-only** rapporten `ev_ac_cost_preview.py` över **30 dagar**
+och publicerar en enda anonym, atomiskt ersatt JSON:
+
+```text
+/opt/solinteg/ev-shadow-runtime/public/xc40-cost-rate.json
+```
+
+Den innehåller inte VIN, GPS, konton, åtkomsttoken, körjournal,
+kundfakturor eller privata käll-SQLite-databaser. Bara
+`price_kr_per_ac_kwh`, `price_kr_per_reported_vehicle_kwh`,
+`assumed_charging_efficiency`, senaste källtid,
+täckta AC-kWh, kvalitet, källa och metodvillkor publiceras.
+Minimigrinden är **0,5 kWh och 20 min** giltig AC-täckning,
+komplett pris för varje godkänt laddfragment och max 30 dagar
+gammal källavläsning. Fakturans historiska juli-nättariff
+används fortfarande bara som scenario; äldre/korsår
+avvisas av kostnadsrapporten. Ofullständig/ogiltig
+källkvalitet skriver **inte över** det senaste giltiga
+prisvärdet med falska 0 kr.
+
+**Förlustantagande:** 90 % laddverkningsgrad. Prisfaktorn
+för *bilrapporterad* använd kWh är
+`estimerat_kr_per_kWh_bil = estimerat_kr_per_AC_kWh / 0,90`.
+Det är en osäker schablon, särskilt vid **6 A**
+enfasladdning, ingen uppmätt verkningsgrad.
+Home Assistant använder sen samma prisfaktor
+för historiska `kWh/mil`-intervall och ett sträckvägt
+totalmedel; det är inte faktisk laddkostnad för
+resans ursprungliga datum eller en batterilagerbokföring.
+Bilens direkta klimat-/framdriftsandelar är fortfarande
+okända och summeras **inte** som extra kostnad ovanpå
+rapporterad total elförbrukning.
+
+```bash
+# Kör manuellt via samma skyddade tjänst, ingen nätåtkomst.
+sudo systemctl start solinteg-ev-cost-rate-publish.service
+
+# Kontroll: se endast anonym prisfaktor och källkvalitet.
+sudo -u solinteg-evshadow cat \
+  /opt/solinteg/ev-shadow-runtime/public/xc40-cost-rate.json
+
+# Automatisk uppdatering var 10:e minut:
+systemctl status solinteg-ev-cost-rate-publish.timer
+
+# Avgränsad rollback (behåll det redan insamlade underlaget):
+sudo systemctl disable --now solinteg-ev-cost-rate-publish.timer
+```
+
+`solinteg-ev-cost-rate-publish.service` använder
+`User=solinteg-evshadow`, `EV_ENABLED=0`,
+`EVCC_CONTROL_ARMED=0`, `IPAddressDeny=any`
+och `RestrictAddressFamilies=AF_UNIX`.
+Den kan bara publicera det sanerade JSON-dokumentet
+i sin `public`-katalog; SQLite har `mode=ro`
+och får enligt samma enhetssystemd-sandbox skapa
+eventuell SQLite WAL-`-shm`-sidofil i `var`.
+**Ingen** FC03/FC10, Volvo-, inverterskrivning,
+laddplanändring, nytt API eller ändrad 6 A-gräns
+ingår. Home Assistant får enbart
+`/opt/solinteg/ev-shadow-runtime/public`
+som **read-only** hostPath-mount, inte den
+privata `var`-katalogen.
+
+**Fältprov:** ca 21:30 CET hade ca **1,697 kWh**
+godkänd EVCC-AC-täckning gett **1,0879 kr/kWh AC**
+och, med antagna 90 %, **1,2088 kr/kWh**
+bilrapporterad energi. Det senare värdet ska
+användas som schablonfaktor för kostnad/mil
+i XC40-dashboardens tre perioder.
+Källans senaste observationstid bevaras; om
+den blir äldre än 30 dagar blir HA:s
+sifferenhet `unavailable`, inte 0 kr.
+
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 
 Inmatning är avsiktligt **explicit** tills betrodda automationskällor finns.

@@ -1,0 +1,39 @@
+[Unit]
+Description=Publish sanitized read-only XC40 electricity rate for HA cost/mil
+After=solinteg-ev-ac-capture.service
+Wants=solinteg-ev-ac-capture.timer
+
+[Service]
+Type=oneshot
+User=solinteg-evshadow
+Group=solinteg
+WorkingDirectory=/opt/solinteg/ev-shadow-runtime
+Environment=EV_ENABLED=0
+Environment=EVCC_CONTROL_ARMED=0
+Environment=EVCC_MANUAL_TEST=0
+Environment=EVCC_START_APPROVED=0
+Environment=EV_COST_RATE_PUBLISH_ENABLED=1
+ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ev_cost_rate_publish.py --days 30
+UMask=0022
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# SQLite mode=ro may need to create WAL -shm sidecars in the source directory.
+# Application code opens both evidence DBs with SQLite mode=ro and SELECT only.
+ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var /opt/solinteg/ev-shadow-runtime/public
+MemoryMax=128M
+TimeoutStartSec=20
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

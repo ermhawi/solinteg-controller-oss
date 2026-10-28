@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh XC40 estimated charge unit rate every 10 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00,10,20,30,40,50:00
+AccuracySec=5s
+RandomizedDelaySec=0
+Persistent=false
+Unit=solinteg-ev-cost-rate-publish.service
+
+[Install]
+WantedBy=timers.target
