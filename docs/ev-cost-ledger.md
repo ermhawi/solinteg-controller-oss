@@ -277,6 +277,76 @@ något `charge`-event med `kr` läggs i kostnadsbokföringen.
 EM111 vore en precisionsförbättring men är **inte ett krav** för
 att logga tydligt märkt uppskattad AC-energi genom EVCC.
 
+## Sammanhängande laddningsperioder och modellpris (skrivskyddad analys)
+
+`scripts/services/ev_ac_sessions.py` läser nu privat
+`ev-ac-estimate.sqlite` och `ev-cost-price-evidence.sqlite` med
+SQLite `mode=ro` och utan något API- eller hårdvaruanrop.
+Den läser inte Solintegs livereglering och uppdaterar inte någon
+källa, enhet, databas eller API. Scriptet finns på Dell i samma
+isolerade runtime; **ingen ny timer** behövs eftersom
+`ev-ac-capture.timer` redan samlar källdata.
+
+```bash
+sudo -n -u solinteg-evshadow python3 \
+  /opt/solinteg/ev-shadow-runtime/scripts/services/ev_ac_sessions.py --days 1
+```
+
+Analysen identifierar `observed_charging_fragments` från
+**sammanhängande verifierade C2-mätpar**. Ett giltigt par kräver
+Ict2, 6 A PWM-råavläsning, ingen onormal Ict1/Ict3-last,
+högst 45 sekunders lucka och att den privata databasens lagrade
+kWh går att återskapa exakt från råströmmen. En lucka eller
+misslyckad avläsning **bryter täckningen**. Om ett färskt
+bekräftat icke-laddande tillstånd angränsar får fragmentet markering
+för observerad gräns, men den exakta övergångstidens energi är
+fortfarande okänd. `full_session_ac_kwh` sätts därför alltid till
+`null` i denna version. De före och efter observerad tid
+saknade kWh extrapoleras inte.
+
+För varje täckt intervall matchas historiska kvartstimmar **via
+UTC**. En gräns mellan två prisperioder hanteras genom
+trapetsintegrerad ström på **båda sidor** om gränsen.
+`hypothetical_grid_only_spot_model_ore` är **endast ett
+kontrafaktiskt räkneexempel** under antagandet att all täckt
+AC-energi köpts från nätet till Solintegs oavstämda
+inköpsprismodell, utan överföringsavgift och korrekt slutavräkning.
+Räkneexemplet är inte en verifikation av faktisk nätandel,
+pris på solel, betald laddkostnad, DC-batteriinnehåll eller
+`kr/mil`. Om någon kvart eller källmätning saknas blir
+pris- eller energivärdet `null`; okänt blir aldrig gratis.
+
+**Första fältprov med prisöverlagring:** kl. 20:29 CET hade
+25 källobservationer gett 24 sammanhängande giltiga delintervall
+(721,69 s, **0,277319 kWh uppskattad täckt AC**).
+Den hypotetiska modellkostnaden för **enbart denna delmängd**
+var **9,1737 öre före nät-/fakturakostnader**.
+`actual_cost_ore=null`, `full_session_ac_kwh=null` och
+`vehicle_battery_dc_kwh=null` är avsiktliga och måste
+bestå tills separata mätkedjor/tariffavstämning finns.
+Den körande Solinteg-telemetrin exponerar inte RMS L3-spänning
+eller effektfaktor, så 230 V/PF1 är inte direkt kalibrerade.
+L3-effektens tidigare före/efter-ökning cirka 1,41 kW
+stämmer med cirka 1,38 kW från EVCC, men den
+jämförelsen kan påverkas av samtidig huslast och får inte
+användas som exakt spännings- eller kWh-kalibrering.
+Som ytterligare kontroll visade HA:s `sensor.volvo_xc40_charging_power`
+**1 380 W**, exakt samma nominella effekt som 6,0 A × 230 V,
+samt `charging` och batteri-SoC **58 %** efter tidigare 57 %.
+HA:s `last_reported` är ett återrapporterat HA-klockslag:
+det bevisar inte en ny, oberoende OEM-effektmätning.
+Originalvärdets `last_changed` var äldre än avläsningen.
+Volvos tal kan ha samma nominella spänningsantagande och
+är därför **inte** en oberoende mätarkalibrering.
+Utan verifierat RMS-värde, effektfaktor eller separat kWh-mätare
+får uppskattningen fortsätta märkas `estimated`.
+
+Pythonregressioner täcker klockomställningen, prismatchning
+vid 15-minutersgränser, saknat pris, negativt modellpris,
+varierande ström, saknade/långsamma FC03-prover,
+halvöppna sessioner, förfalskade kWh och
+källpost med otillåten skrivindikering.
+
 ## Manuellt lokalt verifieringsflöde (syntetiskt exempel)
 
 Inmatning är avsiktligt **explicit** tills betrodda automationskällor finns.
