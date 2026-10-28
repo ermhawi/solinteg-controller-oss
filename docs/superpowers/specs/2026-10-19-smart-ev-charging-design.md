@@ -1,12 +1,12 @@
 # Smart elbilsladdning i Solinteg — designspecifikation
 
-Status: **Designspecifikation, revision 4, 2026-10-26**, med komplettering om två laddlägen och prisbaserad EV-skuggsimulering 2026-10-28. Bygger vidare på revision 3 (2026-10-21) och tidigare underlag på `Sundsvall`. Den separata skuggkoden har uppdaterats men **ingen produktionsdrift, driftskonfiguration, aktivering eller fysisk hårdvarustyrning ändras**.
+Status: **Designspecifikation, revision 4, 2026-10-26**, med kompletteringar 2026-10-28 om två laddlägen, prisbaserad EV-skuggsimulering och en ny read-only kostnadsmodell för XC40-dashboardens kronor per mil (avsnitt 8.5). Bygger vidare på revision 3 (2026-10-21) och tidigare underlag på `Sundsvall`. Den separata skuggkoden har uppdaterats men **ingen produktionsdrift, driftskonfiguration, aktivering eller fysisk hårdvarustyrning ändras**.
 
 Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff46f056eb2a8823b9bf817955d8e`, ABL:s dokumenterade register, **separat godkända Modbus-läs- och skrivprov 2026-10-21** samt etapp-/L3-planen i `91c2802` (2026-10-24). Datum, råtelegram och bevisnivå skiljs åt i avsnitt 13. Fältproven gjordes före dokumentrevisionen; inga nya laddkommandon utförs här.
 
 ## 0. Nytt huvudspår: L3-samordning av husbatteriet, utan Waveshare
 
-**Bekräftat användarkrav 2026-10-24:** Volvon styr själv när den laddar och sin amperegräns (för närvarande 18 A). Solinteg-appen ska med växelriktarens befintliga Modbus-data minska **husbatteriets** laddning när L3 blir kraftigt belastad. Om bilen börjar ladda när huset går på husbatteri ska Solinteg minska batteriets urladdning så att **elnätet försörjer bilens tillkommande last** och lagrad batterienergi bevaras. Det kräver inte att husbatteriet laddas från nätet samtidigt som det laddas ur. Ingen ny bil-/EVCC-integration, och ingen säkerhetsgaranti för andra apparaters belastning på L3.
+**Bekräftat användarkrav 2026-10-24:** Volvon styr själv när den laddar och sin amperegräns (18 A vid kravbeslutet; EVCC:s separata pilotgräns sänktes manuellt och verifierades till 6 A 2026-10-28, se `docs/evcc-readonly-rollout-2026-10-28.md`). Solinteg-appen ska med växelriktarens befintliga Modbus-data minska **husbatteriets** laddning när L3 blir kraftigt belastad. Om bilen börjar ladda när huset går på husbatteri ska Solinteg minska batteriets urladdning så att **elnätet försörjer bilens tillkommande last** och lagrad batterienergi bevaras. Det kräver inte att husbatteriet laddas från nätet samtidigt som det laddas ur. Ingen ny bil-/EVCC-integration, och ingen säkerhetsgaranti för andra apparaters belastning på L3.
 
 **Avkänning och fysisk modell:** På aktuell enhet gav en read-only läsning av Modbus 50006 (Grid Unbalanced Output) värdet **0 = av** den 24 oktober. Under antagandet att invertereffekten därför fördelas jämnt kan husets L3-last skattas som `-meter_l3_w + inverter_ac_w/3`. Det är viktigare än `meter_l3_w` ensam, eftersom redan pågående batteriurladdning kan maskera bilens effekt i nätmätaren. I historiska prover 2026-10-23 ökade härledd L3-last från cirka 700 till 4250 W när bilen började ladda. Volvo HA-entiteten `sensor.volvo_xc40_charging_status` bytte till `charging` omkring 14:00 UTC, i linje med fassteg omkring 13:59 UTC. **Detta är ett klassificeringsantagande**, inte en exakt separat mätning av bilens ström; en stor annan L3-last kan också matcha. Beräkningen ska aldrig användas som säkringsskydd.
 
@@ -45,7 +45,7 @@ Användarbeslut, oförändrade:
   Relativt billiga fönster är inte automatiskt billiga i absoluta kronor.
 - **Pausad**, och eventuella avancerade manuella lägen, får inte
   kringgå laddmålet eller elektriska skydd.
-- Husbatteriet ska normalt inte användas för att finansiera bilens laddning. Husets grundlast och elektriska gränser har företräde.
+- Husbatteriet ska inte avsiktligt leverera energi till bilens laddning, men får fortfarande täcka husets icke-EV-grundlast under pågående bil-laddning. Egen solel prioriteras till husets samtidiga last, därefter husbatteriets planerade laddning och först därefter bilens laddning; kvarvarande överskott exporteras. Dessa solprioriteter hindrar inte separat pris-/deadlineplanerad **nätladdning** av bilen enligt de två lägena. Elektriska gränser har alltid företräde.
 - **Reservläge A:** laddningen ska kunna fortsätta automatiskt när bilens batteriprocent saknas. Bilens egen laddgräns används som lokal begränsning; osäker målstatus visas öppet.
 - Laddsessioner, levererad energi, kostnadsunderlag och orsaker till styrbeslut ska loggas.
 
@@ -365,6 +365,8 @@ Verifiera befintligt åtkomstskydd och återanvänd autentisering vid reverse pr
 | `ev_energy_intervals` | Entydigt UTC-intervall, levererad energi och mätkälla, täckningsgrad, pris-/tariffversion samt allokeringskvalitet. Kan materialiseras som vy initialt om råproven räcker. |
 | `ev_actions` | Begärd, kvitterad, återläst och fysiskt observerad ström/effekt som **olika fält**, råbörvärde, FC10-ACK/LRC, båda FC03-readbacks, generation, armed, retries, uppmätt responsfördröjning, återställningsresultat och stopporsak. |
 | `ev_price_snapshots` | Oföränderligt normaliserat pris-/tariffunderlag med absoluta UTC-intervall, giltighet, publiceringstid och hash. Planer och energiposter refererar till dess version; befintlig dags-upsert får inte ersätta ett historiskt sessionsunderlag. |
+| `ev_cost_events` (utvecklingskod) | Separat versionsmärkt append-only SQLite-tabell med UTC-tid, unikt händelse-ID och validerat JSON-innehåll för `opening/charge/drive/aux/adjust`. Spårar DC-energi, kostnad i öre, källfördelning och okänt värde utan livsstyrning; råobservationer och faktiska priser behöver tillföras av framtida validerade adaptrar. |
+| `ev_driving_intervals` (framtida materialisering) | Härleds tills vidare från `drive`-händelserna i `ev_cost_events`; UTC-start/slut, körd km, faktisk/uppskattad batteriförbrukning, allokerad kostnad och proveniens exponeras read-only i JSON/API. Separat tabell krävs först om prestanda eller revisionsbehov motiverar den. |
 
 Aktiv kopplad plan har en transaktionellt uppdaterad pekare/generation; shadow-rader får inte väljas av verkställare. Energiposter dedupliceras med session, källa och tidsintervall så att omstart inte dubbelräknar. Lång historik aggregeras till intervall för UI men bevarar revisionsunderlag för kostnader och provtäckning. Nya tabeller får inte växa med identiska omplaneringar vid varje sidvisning.
 
@@ -400,6 +402,25 @@ Lagra pris- och tariffversion med giltighetsdatum, inte bara aktuell env-konstan
 
 `EV-kWh * inköpspris` kan visas som en enkel **nätprisequivalent**, men är inte faktisk sessionskostnad när egen sol eller husbatteri bidragit. Varken solens uteblivna försäljning eller batterislitage får läggas till en gång till ovanpå en helfastighetsmodell som redan omfattar dem. Visa energitäckning, pristäckning och allokeringskvalitet separat; EM111 gör inte alla tre automatiskt exakta.
 
+### 8.5 Bilbatteriets anskaffningsvärde och kostnad per mil (design 2026-10-28)
+
+**Syfte:** XC40-dashboardens `kWh/mil` ska kompletteras med `kr/mil` (kronor och ören), `kr/resa` och månadskostnad. Detta är **historisk energikostnad för förbrukad batterienergi**, inte spotpriset vid körningen, besparingen i 8.4 eller bilens totala ägandekostnad. Börja med separat, persistent **read-only bokföring** utan EVCC-, Volvo-, HA- eller inverterskrivningar och utan påverkan på husets optimizer/dispatch.
+
+**Energikällor per faktiskt laddat UTC-intervall:**
+- Fördela levererad AC-energi mellan `grid_ac_kwh`, `solar_ac_kwh`, eventuell `public_ac_kwh` och `unknown_ac_kwh`. Summan måste stämma med intervallets EV-AC-energi inom mätosäkerheten; inget okänt blir 0. Dela vid varje pris-/tariffgräns. EM111 är framtida förstahandsmätare; EVCC-ström × antagen spänning/PF är tills dess en **uppskattning**, inte uppmätta kWh.
+- **Nät:** använd historiskt avtalsenligt rörligt totalpris (el, påslag, moms, energiskatt, överföring) med tariff-/prisversion och eventuell senare fakturaavstämning enligt 8.3, aldrig dagens pris retroaktivt.
+- **Sol:** bokför endast samtidiga marginalöverskott efter husets grundlast och **husbatteriets planerade prioriterade laddning**, till utebliven **nettointäkt vid möjlig export**. Ingen generell nollkostnad eller uppfunnen PV-begränsning; negativ nettoexportersättning kan innebära negativ alternativkostnad. Blandad nät- och solel under samma laddning är tillåten.
+- **Husbatteri:** ska inte avsiktligt mata bilen i `protect`-läget. Samtidig urladdning till husets icke-EV-last är däremot tillåten enligt 5.2; `battery_w > 0` är inte bevis för EV-orsakad urladdning. Om EV-orsakat batteribidrag inte kan uteslutas märks allokeringen **avvikande/okänd**, inte gratis solel. På en gemensam AC-skena är källfördelningen en dokumenterad modell, inte en fysisk elektronspårning.
+- **Publik laddning:** använd separat extern laddhändelse och faktiskt kvitto/avtal inklusive relevant sessionsavgift; om energi eller pris saknas ska värdet förbli okänt, inte ärva Tibbers hempris.
+
+**Rullande vägt anskaffningspris:** Håll `stored_dc_kwh` och `inventory_value_ore` via append-only bokföringshändelser. En laddning får `charge_cost_ore = grid_ac_kwh * buy_ore_per_kwh + solar_ac_kwh * net_export_ore_per_kwh + public_charge_cost_ore`, med okända andelar separat. Endast energi som faktiskt/uppskattat lagras i batteriet (`stored_dc_kwh_delta`) ökar lagersaldot. Full kostnad för den lagrade energins AC-tillförsel inklusive **laddförluster** följer med värdet; identifierbar **direkt** klimatisering/hjälpförbrukning under laddning kostnadsförs separat, inte i lagret. Vid kända värden: `average_ore_per_dc_kwh = (old_inventory_value_ore + stored_charge_cost_ore) / (old_stored_dc_kwh + stored_dc_kwh_delta)`. Lägg aldrig på samma laddförlust en gång till vid förbrukning. Använd verifierad användbar kapacitet, SoC och kalibrerad AC/DC-verkningsgrad; om direkt hjälpförbrukning inte kan separeras ska fördelningen märkas `estimated`.
+
+Vid körning dras förbrukade DC-kWh och deras **vid förbrukningstillfället gällande** genomsnittskostnad från lagret. Klimatenergi under körningen ingår om den verkligen omfattas av den använda förbrukningskällan. Förvärmning före körning, parkerad hjälpförbrukning, energiförluster och korrigeringar bokförs separat och fördelas inte tyst på körda mil. Ett ursprungligt batteri-SoC säger inte vad energin kostade: registrera en **okänd ingående inventering** eller ett uttryckligen valt provisoriskt anskaffningspris som `estimated`, aldrig 0 kr. Saknade sessioner, SoC-korrigeringar, regenerering, kapacitetsändring och mätarbyten måste hanteras med spårbara revisionshändelser utan att originalproven skrivs om.
+
+**Körkostnad:** Per tidsanknutet körintervall: `drive_cost_ore = sum(consumed_dc_kwh_i * inventory_ore_per_dc_kwh_at_i)` och `kr_per_mil = (sum(drive_cost_ore) / 100) / (sum(driven_km) / 10)`. Matcha distans och energianvändning i verifierad Volvo-/HA-data. En glidande `kWh/mil`-indikator utan pålitligt energi- och distansdelta får endast ligga till grund för en märkt uppskattning, inte exakt kostnad. Flera observationer per mil aggregeras med **summa förbrukning, kostnad och distans**, inte ett oviktat snitt av kr/mil-kvoter. Noll/okänd distans, mätluckor eller okänd inköpskostnad ger `null` eller tydligt märkt delvis/uppskattat värde, aldrig falskt `0,00 kr/mil`.
+
+**API och kvalitet:** Föreslagna read-only rutter `GET /api/ev/cost/summary` och `GET /api/ev/cost/driving?from=...&to=...` returnerar `ore`, `kr/mil`, UTC-intervall, distans/energitäckning, källallokering, kostnadskvalitet (`metered/estimated/partial/unavailable`), proveniens och modell-/tariffrevision. HA:s XC40-dashboard läser dessa sammanställningar utan att själv rekonstruera lagret från momentana sensorer. Lagring sker transaktionellt, deduplicerat och genom additiv migration; historiska rättningar versionshanteras. Behåll decimalprecision i öre och kWh och avrunda först i UI till två decimaler. **Addera inte** denna körkostnad ytterligare ovanpå samma sessionskostnad eller helfastighetskostnad i 8.4.
+
 ## 9. GUI
 
 `EvChargingCard` integreras i befintlig huvuddashboard, med automatisk Smart-profil 80 %/07:00. Visa fysisk status, bil-SoC och dess källtid, valt läge, låst avresetid, annonserad respektive uppmätt ström, uppskattad effekt, sessionens kWh, kostnad och kvalitet. Planen visas tillsammans med pris och husbatteri utan att förväxla planerade och utförda värden.
@@ -407,6 +428,8 @@ Lagra pris- och tariffversion med giltighetsdatum, inte bara aktuell env-konstan
 Förklara varför bilen väntar: billigare intervall, fasbudget, husbatteriskydd, bilens egen paus, nått mål, reserv A eller kommunikationsfel. Ett ogiltigt mätvärde blir ”saknas”, inte 0 A/0 kr/0 %. Visa exempelvis ”SoC saknas – reservladdning, lokal bilgräns antagen 80 %” i stället för falsk exakt sluttid. Om mål inte ryms visas förväntat underskott eller osäkerhet före avresan.
 
 Historik: per session och 24 h/7 d/30 d, med pris-/energifördelning, bekräftade styrhändelser och pausorsaker. UI behöver inte vara öppet för att planering och laddning ska fortsätta. Läsrendering får inte skapa ytterligare styrägare. Nya laddmål som inte matchar bilens lokala gräns ger en tydlig varning i samma flöde, inte ett dolt löfte om att appen redan ändrat bilen.
+
+**Separat XC40-dashboard i Home Assistant (planerad read-only komplettering):** Visa både befintlig `kWh/mil` och historisk **`kr/mil`** på samma körd-sträcka-X-axel, plus `kr/resa`, månadsvis energikostnad och aktuellt vägt inköpspris i `öre/kWh`. Vid flera observationer inom samma mil används distans- och energivägda värden från 8.5. Visa kronor och ören med två decimaler, och tydlig etikett för `uppmätt`, `uppskattat`, `delvis känt` eller `saknas`; okända delkostnader får inte visas som `0,00 kr`. Visa nät/sol/publik andel, laddförluster och separat parkerad/förvärmd energi där underlaget räcker. Håll kostnad för förbrukad lagrad energi skild från nyss betald laddsessionskostnad och från ekonomisk besparing.
 
 ## 10. Verifiering och leveransgränser
 
@@ -435,6 +458,14 @@ Historik: per session och 24 h/7 d/30 d, med pris-/energifördelning, bekräftad
 | Elektriskt fel jämfört med rent kommunikationsfel | Ingen blind elektrisk reset; endast verifierad kommunikationsåterhämtning får automatiseras. |
 | Effektprov över prisgräns och lång datalucka | Rätt tidsfördelning och tydlig täckning, ingen extrapolering till påhittad faktura. |
 | Byte av tariff/mätkälla och jämförelse mot direktladdning | Historik versionsbevaras; samma energi/terminalvärde jämförs, även negativ besparing visas. |
+| Solöverskott med huslast och husbatteri på väg mot sitt mål | Ingen EV-solel bokförs före verkligt tillgängligt överskott efter husets planerade laddning; blandad nät/sol summerar korrekt och exportalternativkostnaden används. |
+| Husbatteri försörjer husets baslast samtidigt som EV laddas från nät | Positivt `battery_w` ger varken gratis solel eller falskt EV-batteribidrag; verkligt EV-orsakat extra uttag flaggas/avvisas. |
+| AC-laddning, DC-SoC och direkt klimatisering | AC-kostnad för laddförlust ingår exakt en gång i energilagret; direkt klimatkostnad under laddning kan särredovisas utan dubbelräkning. |
+| Start-SoC med okänd kostnad, omstart och extern laddning utan kvitto | Okänt ingående värde och okända priser blir inte 0 kr; idempotenta ledger-händelser och kvalitet `partial/estimated/unavailable` bevaras. |
+| Laddning över prisgräns, ändrad tariff och negativ nettoexportersättning | Rätt historiska UTC-priser och revisionsreferenser, även negativ solkostnad; inga retroaktiva tysta omräkningar. |
+| Viktat lager och avrundning: 30 kWh DC à 150 öre och 20 kWh DC à 200 öre | Genomsnitt 170 öre/kWh DC; 2,2 kWh/mil ger **3,74 kr/mil**. Intern precision bevaras till UI-avrundning. |
+| Två resor med mellanliggande laddning, flera mätningar per mil och förvärmning parkerad | Resorna belastas med respektive lagers aktuella pris; `kr/mil` är summa kostnad / summa mil och separat parkeringsenergi blandas inte in. |
+| Noll/okänd distans, partiell energimätning och förlorad kostnadskälla | Kostnad och `kr/mil` är tydligt uppskattade eller `null`, aldrig falskt exakt `0,00 kr`; inga summerade kostnader dubbelräknas mot 8.4. |
 | A1 utan bil, >10 s vilande RS485 (tidigare observerat) | Första läsningen kan saknas; en begränsad **identisk read-only retry** ger giltig ny FC03-respons. Ingen dold ändring av laddstatus vid läsning. |
 | C2 aktiv laddning efter 20/40/60 s utan förfrågningar (observerat 2026-10-21) | Första förfrågan var giltig i varje fältprov. Testa om beteendet upprepas; avsaknad av timeout är **inte** ett stopp-/watchdogbevis. |
 | FC03 `0x0014` ger timeout men FC03 `0x000F` och `0x002E` fungerar | Drivrutinen verifierar börvärde genom de båda bekräftade blocken; okända/långsamma svar leder inte till falsk återställning eller höjning. |
@@ -450,7 +481,7 @@ Automatiserade tester ska täcka TypeScript- och Pythonkontrakt samt tillstånds
 ### 10.2 Leveranser och tydliga aktiveringsvillkor
 
 1. **Read-only telemetri och sessioner:** lokal EVCC-avläsning, verkliga HA-entiteter, beständig session och diagnos av mätkvalitet. Ingen kontroll, ingen påverkan på exekverbara batteriplaner.
-2. **Energi och prislogg:** uppskattade AC-kWh med täckning, avtalsversionsmodell och sessionshistorik. Full kontrafaktisk besparingsanalys kan vänta; enkel nätprisequivalent måste märkas korrekt.
+2. **Energi och prislogg:** uppskattade AC-kWh med täckning, avtalsversionsmodell och sessionshistorik. Utöka läs-/historikspåret med den **separata, versionsmärkta energilagerbokföringen i 8.5** när källdata finns; då kan XC40-dashboarden visa märkt `kr/mil` utan att vänta på autonom laddstyrning eller EM111. Full kontrafaktisk besparingsanalys kan vänta; enkel nätprisequivalent måste märkas korrekt.
 3. **Samordnad simulering:** separerade laster, batteriskydd, UTC/delintervall och jämförbara kandidatplaner; replay på verklig historik. Verifiera särskilt att dagens redan aktiva batteristyrning inte påverkas av simuleringen.
 4. **Kontrollerad driftsättning:** tre avgränsade förmågor: (a) **börvärdesskrivning/readback och fysisk respons är nu fältverifierade i C2**, men stopp/paus, kommunikationsförlust, enhetslokal timeout och uppstart på denna firmware återstår; (b) verklig 20 A-fasbudget och samordnat batteriskydd; (c) datakällor/lokal bilgräns och omstarts-/publiceringskontrakt. Tidigare godkända delprov ska inte göras om bara för att dokumentationen utökas; osäkra eller nya driftlägen kräver ett eget prov.
 5. **Automatisk drift:** en explicit lokal aktivering efter godkända förmågor; därefter helt automatisk Smart-laddning enligt beslutade standarder. Tydlig paus och verifierad återgång, inte upprepade godkännanden per session.
@@ -552,6 +583,7 @@ Kvarstående fysiska osäkerheter är **konkreta aktiveringsvillkor** snarare ä
 2. Anslutning, laddstart/-stopp, återanslutning och mätluckor bildar begripliga sessioner; `measured/estimated/stale/unavailable` hålls isär.
 3. PWM, molnrapporterad effekt och uppskattad kWh blandas inte ihop med energimätare. Okänd L3-ström redovisas som okänd.
 4. Inga GUI- eller API-åtgärder kan styra laddbox eller inverter i etappen.
+5. När kostnadsdelen i 8.5 införs exponeras read-only `kr/mil`, `kr/resa`, energikälla och kvalitetsflaggor via HA:s XC40-dashboard, med korrekta viktade intervall och utan nya styrberoenden.
 
 **Deploy:** read-only dashboard; rollback av panelen påverkar inte styrningen.
 
@@ -607,12 +639,12 @@ Kvarstående fysiska osäkerheter är **konkreta aktiveringsvillkor** snarare ä
 
 Statusvärden: **Planerad**, **Pågår**, **Deployad – ej verifierad**, **Verifierad**, **Blockerad**, **Återställd**. Extern aktivitet eller fältunderlag är inte automatiskt en genomförd etapp; kräver acceptansbevis i detta spår.
 
-| Etapp | Status 2026-10-26 | Kända belägg / hinder | Nästa verifiering |
+| Etapp | Status 2026-10-28 | Kända belägg / hinder | Nästa verifiering |
 |---|---|---|---|
 | 1. Grundstruktur | Planerad | Inga godkända etapp-1-migrationer/flags redovisade | Schema, flaggor, regression, rollback |
 | 2. Fas/EV-telemetri | Pågår – ej verifierad | Tidigare Solinteg-fasprover och EVCC-fältprov; mätfärskhet/RMS ännu inte kvalificerad | Färsk L3 + `battery_w`, CT-bortfall, källa/fas |
 | 3. Volvo/HA | Pågår – ej verifierad | Read-only HA/Volvo-spår rapporterat separat; ej accepterat här | `charging_status/power/last_reported`, färskhet och bortfall |
-| 4. Panel/historik | Planerad | Read-only panel och sessionskontrakt ej accepterade | Mobil, proveniens och inga mutationer |
+| 4. Panel/historik | Pågår – ej driftsatt | Lokal EV-kostnadsbokföring och skyddade read-only API:er finns i utvecklingsutcheckningen; körkällor/kalibrering, HA-anslutning och mobilvisning återstår | Pristäckning, AC/DC-kalibrering, sträckdata, HA API-autentisering och regression |
 | 5. EV-prisskugga | Planerad | Simulerad prisplan ej accepterad | DST, 07:00, reserv A och isolering |
 | 6. Gemensam skugga | Planerad | L3-batteriidé och separat shadow-arbete är inte verifiering av denna etapp | Batteriskydd och isolerad kandidat-replay |
 | 7. Fysiska prov | Blockerad | Delprov 2026-10-21 utfört; stoppskydd och ny skrivbehörighet saknas | Separat godkännande och oberoende failsafe |
@@ -625,6 +657,9 @@ Statusvärden: **Planerad**, **Pågår**, **Deployad – ej verifierad**, **Veri
 - **2026-10-24–26:** senare inriktning prioriterar husbatteriets L3-anpassning och read-only Volvo/HA utan Waveshare/EVCC som första beroende. Shadowarbete har rapporterats separat; fullständiga acceptansprotokoll har **inte** verifierats i detta dokument.
 - **2026-10-26:** revision 4 återför etapperna, förtydligar det aktuella scope-beslutet och tar bort privat nätadress-/värdidentifiering. Enbart dokumentändring; inga kommandon, driftsättningar eller aktiveringar.
 - **2026-10-28:** isolerad EVCC2-drivrutin, gated manuell paus/återstart och ren solar-first-skuggpolicy implementerade på `Sundsvall`. 23 riktade offlinetester passerade, inklusive råtelegram från tidigare fältprov. Ingen produktionsdeploy eller FC10. Dell når inte Waveshare (No route to host); fasström, lokalt stoppskydd och fysisk 0x03E8-paus är ännu ej verifierade. **Etapp 7/8 förblir blockerade.** Se `docs/evcc-solar-shadow.md`.
+- **2026-10-28 (senare):** Waveshare-länken återställd; separat read-only observerare och EV-historik körs på Dell. Ett separat användargodkänt manuellt FC10-prov sänkte EVCC:s PWM-tak från cirka 16 A till **6 A**, verifierat med två FC03-statusblock; ingen automatisk strömstyrning aktiverades. Äldre uppgift om förlorad kontakt ovan är historik, inte aktuell status. Se `docs/evcc-readonly-rollout-2026-10-28.md`; etapp 7/8 förblir blockerade.
+- **2026-10-28 (kostnadsdesign):** energikällornas prioritet och read-only modell för bilbatteriets vägda anskaffningspris, körkostnad i kronor och ören samt testkrav specificerade i 8.5, 9 och 10. **Endast dokumentation vid detta tillfälle**, ingen ny hårdvaruskrivning eller deploy.
+- **2026-10-28 (kostnadskod):** separat `scripts/services/ev_cost_ledger.py` för append-only SQLite-energilager, `lib/ev-cost.ts` och två skyddade GET-rutter för summarisk körkostnad/resa. Inmatning är explicit och källmärkt; okänt ingående pris är inte 0. Python/API-tester samt typkontroll redovisas i arbetsrapport, inte fältmätningar. **Ingen automatisk insamling, ingen HA-dashboardändring, ingen deploy eller fysisk skrivning.** Se `docs/ev-cost-ledger.md`.
 
 **Mall vid etappbeslut:** datum/tid (Europe/Stockholm), etapp, status, commit, miljö/deploy, tester med resultat, mät- och larmbevis, kvarstående hinder, rollbackutfall, stop/go-beslut och ansvarig verifierare.
 
