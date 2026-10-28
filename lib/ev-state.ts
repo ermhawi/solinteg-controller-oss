@@ -60,6 +60,7 @@ export async function readEvOverview(): Promise<EvOverview> {
       reason: stringValue(statusRecord.reason),
       battery_soc_pct: numberValue(statusRecord.battery_soc_pct),
       battery_reported_at_utc: stringValue(statusRecord.battery_reported_at_utc),
+      timestamp_origin: stringValue(statusRecord.timestamp_origin),
       connected: typeof statusRecord.connected === 'boolean' ? statusRecord.connected : null,
       remaining_ac_kwh: numberValue(statusRecord.remaining_ac_kwh),
     };

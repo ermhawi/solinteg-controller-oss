@@ -271,7 +271,7 @@ export default function EvChargingPlanner({ initialOverview }: {
               </div>
               <p className="mt-2 text-sm" style={muted}>
                 {actual.connected ? 'Laddkabel ansluten' : 'Kabelstatus osäker'}
-                {' · '}Senast rapporterad {timeInSweden(actual.battery_reported_at_utc)}
+                {' · '}Volvos tidsstämpel: {timeInSweden(actual.battery_reported_at_utc)}
               </p>
               <p className="mt-2 text-sm" style={muted}>
                 Återstående beräknat AC-behov: {actual.remaining_ac_kwh === null

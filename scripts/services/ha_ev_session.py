@@ -4,9 +4,10 @@ No vehicle, charger, Home Assistant or inverter commands. This process performs
 GETs against an explicitly configured HA REST URL. It writes only two local
 JSON snapshots: a status for the UI and a fail-closed planning session.
 
-NEVER treat the fresh Volvo coordinator health timestamp as a replacement for
-the actual battery/connection/target sensor's last_reported timestamps. A
-coordinator can report success while one sensor remains stale.
+Use the original Volvo Energy State field timestamp for battery level,
+connection and target. A fresh Home Assistant coordinator callback or HTTP
+request does not refresh an old OEM measurement. Legacy HA sensor
+last_reported remains a diagnostic but is NOT accepted for this bridge.
 """
 from __future__ import annotations
 
@@ -31,8 +32,9 @@ STOCKHOLM = ZoneInfo("Europe/Stockholm")
 BATTERY = "sensor.volvo_xc40_battery"
 CONNECTED = "sensor.volvo_xc40_charging_connection_status"
 TARGET = "sensor.volvo_xc40_target_battery_charge_level"
-CHARGING = "sensor.volvo_xc40_charging_status"
+OEM_SNAPSHOT = "sensor.volvo_charge_priority_volvo_energy_snapshot"
 MAX_SENSOR_AGE_SECONDS = 20 * 60
+MAX_COORDINATOR_AGE_SECONDS = 5 * 60
 REST_TIMEOUT_SECONDS = 6
 TARGET_SOC = 80
 DEFAULT_SETTINGS = {
@@ -77,14 +79,64 @@ def _sensor_state(response: dict, *, name: str, now: datetime) -> tuple[str, dat
         "unknown", "unavailable", "none", "null"
     ):
         raise UnsafeSession(f"{name}: unavailable")
-    # HA last_updated only changes when the state/attributes change; last_reported
-    # reflects repeated reports. Neither a GET timestamp nor another sensor's
-    # fresh timestamp constitutes evidence of this reading's freshness.
+    # Called with an internal source snapshot mapped into this shape; its
+    # last_reported field here is the OEM timestamp, NOT HA's own state time.
     stamp = _utc(response.get("last_reported"))
     age = (now - stamp).total_seconds()
     if not -5 <= age <= MAX_SENSOR_AGE_SECONDS:
         raise UnsafeSession(f"{name}: stale")
     return value, stamp
+
+
+def _oem_snapshot_states(snapshot: dict, *, now: datetime) -> dict[str, dict]:
+    """Validate an atomic OEM energy response published by our HA component.
+
+    All values and their individual upstream timestamps come from one Volvo
+    medium-coordinator result. A fresh HA GET, another Volvo sensor or a new
+    coordinator callback cannot reset the age of a cached OEM measurement.
+    """
+    if now.tzinfo is None:
+        raise UnsafeSession("current time lacks timezone")
+    if not isinstance(snapshot, dict) or snapshot.get("entity_id") != OEM_SNAPSHOT:
+        raise UnsafeSession("Volvo OEM snapshot missing")
+    attrs = snapshot.get("attributes")
+    if not isinstance(attrs, dict):
+        raise UnsafeSession("Volvo OEM snapshot attributes missing")
+    if (snapshot.get("state") != "ready" or
+            type(attrs.get("schema_version")) is not int or
+            attrs["schema_version"] != 1 or
+            attrs.get("timestamp_origin") != "volvo_energy_state_field" or
+            attrs.get("oem_timestamps_complete") is not True or
+            type(attrs.get("physical_writes")) is not int or
+            attrs["physical_writes"] != 0):
+        # OEM source may omit timestamps, or have outdated values. The
+        # diagnostic sensor reports details, but only "ready" is usable.
+        raise UnsafeSession("Volvo OEM snapshot unavailable: " +
+                            str(attrs.get("reason", "invalid_source"))[:180])
+    received = _utc(attrs.get("api_received_at_utc"))
+    age = (now - received).total_seconds()
+    if not -5 <= age <= MAX_COORDINATOR_AGE_SECONDS:
+        raise UnsafeSession("Volvo OEM energy API response stale")
+    mapping = {
+        BATTERY: ("battery_soc_pct", "battery_oem_at_utc"),
+        CONNECTED: ("connection", "connection_oem_at_utc"),
+        TARGET: ("target_soc_pct", "target_oem_at_utc"),
+    }
+    states: dict[str, dict] = {}
+    for entity, (value_key, timestamp_key) in mapping.items():
+        if value_key not in attrs or timestamp_key not in attrs:
+            raise UnsafeSession("Volvo OEM snapshot incomplete")
+        stamp = _utc(attrs[timestamp_key])
+        if stamp > received + timedelta(seconds=5):
+            raise UnsafeSession("Volvo OEM timestamp after its API response")
+        # Internal conversion only: last_reported carries the OEM field
+        # timestamp, NOT the Home Assistant state last_reported.
+        states[entity] = {
+            "entity_id": entity,
+            "state": str(attrs[value_key]),
+            "last_reported": stamp.isoformat(),
+        }
+    return states
 
 
 def load_settings(path: str) -> dict:
@@ -279,16 +331,18 @@ def once(*, now: datetime | None = None) -> dict:
         efficiency_str = os.environ.get("EV_AC_CHARGE_EFFICIENCY")
         token = _read_token()
         base = os.environ.get("HA_API_URL", "")
-        # The charging-status sensor is useful display data but cannot make
-        # stale battery percentage fresh. It must not gate the energy target.
-        required = (BATTERY, CONNECTED, TARGET)
-        states = {name: _ha_state(base, token, name) for name in required}
+        # Exactly ONE HA GET: the read-only custom integration's atomic
+        # per-field OEM source snapshot. No fallback to raw HA sensor states.
+        raw_snapshot = _ha_state(base, token, OEM_SNAPSHOT)
+        states = _oem_snapshot_states(raw_snapshot, now=now)
         session, detail = make_session(
             states=states, settings=settings, now=now,
             usable_capacity_kwh=capacity_str,
             ac_efficiency=efficiency_str,
         )
         status.update(detail)
+        status["timestamp_origin"] = "volvo_energy_state_field"
+        status["energy_api_received_at_utc"] = raw_snapshot["attributes"]["api_received_at_utc"]
         status["valid_for_planning"] = True
     except (UnsafeSession, KeyError, OSError, TypeError, ValueError,
             urllib.error.URLError, json.JSONDecodeError) as exc:

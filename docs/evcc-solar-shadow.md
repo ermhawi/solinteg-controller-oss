@@ -46,10 +46,15 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   Ingen FC10 på den vägen. `EV_ENABLED=0` (default) betyder **ingen
   EVCC-anslutning**, inga skrivningar och inga effekter på `optimizer_runs`
   eller befintlig batteridispatch.
-- `scripts/services/ha_ev_session.py`: read-only HA REST GET (batteri-SoC,
-  kabelanslutning och Volvons **lokala** mål 80 %). Accepterar **enbart**
-  respektive sensors `last_reported` upp till 20 minuter gammal, aldrig
-  koordinatorsensorns nyare tidstämpel som ersättning. Kräver explicit
+- `scripts/services/ha_ev_session.py`: **ett** read-only HA REST GET mot
+  `sensor.volvo_charge_priority_volvo_energy_snapshot`, som publiceras
+  av vår befintliga HA-integration vid uppdatering av Volvos API-data.
+  Snapshoten innehåller batteri-SoC, laddkabelstatus och bilens lokala 80 %-mål,
+  **med Volvos fältspecifika ursprungstidsstämplar**. Kräver
+  `schema_version=1`, `timestamp_origin=volvo_energy_state_field`,
+  fullständiga färska (max 20 min) OEM-tider och högst 5 min gammal
+  faktisk API-uppdatering. Varken senaste HA GET, HA `last_reported`
+  eller koordinatorsensorns nyare tidstämpel är tillåten fallback. Kräver explicit
   kalibrerad **användbar** kapacitet och AC-verkningsgrad; HA:s
   `sensor.volvo_xc40_battery_capacity` (tidigare 81,608 kWh) används inte
   automatiskt som verifierad användbar kapacitet. Sätter
@@ -121,10 +126,11 @@ pristak**. I `deadline` byts `charge_mode` och man lägger till en
 fast `departure_at_utc` i UTC. I `economy` finns **ingen avresetid**,
 och `max_buy_ore_per_kwh` är **valfritt**. Oavsett läge ska
 `remaining_ac_kwh` härledas från verifierad användbar batterikapacitet,
-laddförluster och färska individuella HA-sensortidsstämplar;
-`observed_at_utc` är den äldsta tillförlitliga HA-rapporttiden,
-**inte** bevisligen Volvos interna mätdatum. Sätt aldrig den till nu
-om källvärdet är gammalt.
+laddförluster och färska fältspecifika **Volvo Energy State-tidsstämplar**;
+`observed_at_utc` är äldsta verifierade OEM-`timestamp`, aldrig tidpunkten
+för HA:s senaste poll eller Solintegs senaste GET. Även Volvos `timestamp`
+kan avse när ett fält uppdaterades snarare än när BMS fysiskt mätte det.
+Sätt aldrig tiden till nu om källvärdet är gammalt.
 
 **Läsaren och UI-valet finns nu som separat utvecklingskod men är
 inte driftsatta.** Utan en färsk, validerad HA-session blir både
@@ -163,10 +169,11 @@ stopp vid för gammal data har företräde framför båda energikällorna.
    SoC trots att Volvos laddstatus eller HA-koordinator uppdaterats
    senare, tidsskillnaden vid svensk sommar-/vintertid och omedelbar
    ogiltigförklaring av en tidigare giltig session vid databortfall.
-   Notera: HA:s `last_reported` visar när **HA-sensorn**
-   rapporterades, inte bevisligen när Volvons underliggande telematik
-   mätte värdet. Fullständig leverantörstidsstämpel och lokal
-   fysisk stoppsignal måste fortfarande utvärderas före skarp drift.
+   `volvo_charge_priority` publicerar bara en komplett
+   `volvo_energy_snapshot` om **alla tre fält** har egna OEM-tider.
+   Solinteg-förbindelsen accepterar inte de äldre HA-sensorernas
+   `last_reported` som fallback. Fortsatt måste vi verifiera Volvos
+   faktiska timestamp-semantik under laddning innan fysisk styrning.
 4. När webben driftsätts visas kortet via `/solinteg/ev`.
    Välj `Klar till avresa` eller `Ladda ekonomiskt`, med fast 80 %-mål.
    **Att välja ett radiokort gör inget i bilen.** Om inställnings-API:t
@@ -177,12 +184,44 @@ stopp vid för gammal data har företräde framför båda energikällorna.
    20 A L3-fasskydd, batteriets faktiska marginalurladdning och
    oberoende paus/återstart återstår.
 
-**Live read-only-resultat 2026-10-28:** Volvo-batterisensorns
-`last_reported` var flera timmar äldre än den nyare
-`sensor.volvo_xc40_charging_status`. Den nya läsaren returnerade
-`valid_for_planning=false`, orsak `sensor.volvo_xc40_battery: stale`,
-och sessionen avvisades. **Inga HA POST, bil-/EVCC- eller
-inverterskrivningar utfördes.**
+**Tidigare live read-only-resultat 2026-10-28 (före OEM-förbättringen):**
+HA:s batterisensor hade flera timmar gammal `last_reported` medan
+laddstatus uppdaterades oftare. Den tidigare Solinteg-läsaren gav därför
+`valid_for_planning=false`. Nya läsaren kräver Volvos ursprungliga
+fälttider i `sensor.volvo_charge_priority_volvo_energy_snapshot` och
+avvisar gamla, saknade eller tvetydiga sådana. **Inga HA-, Volvo-,
+EVCC- eller inverterskrivningar utfördes i diagnostiken.**
+
+## Fälttidsstämplar verifierade mot live Volvo 2026-10-28
+
+En fristående, read-only HA-diagnos har nu driftsatts från
+`ermhawi/ha-kube` på `main`, commits `2a27e9b` och `3bd4b30`.
+Home Assistant rapporterar `Synced/Healthy`. Den officiella
+`volvocarsapi`-parsern flyttar JSON-fältet `updatedAt` till
+`extra_data.updated_at`; därför var `field.timestamp` tidigare
+`None`. Vår HA-kod hämtar nu det faktiska `updated_at`-värdet
+utan att ändra upstream-koden eller göra nya fordonsanrop.
+
+Ett verkligt snapshot visade vid cirka 12:51 UTC:
+- `batteryChargeLevel`: `updatedAt=2026-10-28T12:05:06Z`, 63 %.
+- `chargerConnectionStatus`: samma `updatedAt`, ansluten.
+- `targetBatteryChargeLevel`: `updatedAt=2026-10-18T10:04:37Z`, 80 %.
+- Ny HA-uppdatering med `api_received_at_utc` omkring 12:51 UTC.
+
+**Viktig datatolkning:** `updatedAt` kan avse **senast ändrat värde**,
+inte senast mätt. Att laddmålet är oförändrat i tio dagar betyder inte
+att den nya hämtningen misslyckats. Den nuvarande HA-snapshoten är
+medvetet `unavailable` vid så gamla fälttider, och Solinteg-läsaren
+avvisar den. Det är en säker men för konservativ policy för ett
+framtida skarpt laddschema.
+
+**Nästa nödvändiga förbättring:** en tvådelad kvalitetsmodell med
+`api_received_at_utc` (faktiskt färsk energihämtning) och
+`field_updated_at_utc` (senaste ändring). Detta kan användas för
+markerade **skuggförslag**, men får **aldrig** räknas som verifierat
+fysiskt SoC-prov utan oberoende stöd från Volvo/EVCC. Så länge
+källans mättid inte kan fastställas, oberoende L3-skydd saknas och
+EVCC-paus/readback inte verifierats är fysisk EV-styrning avstängd.
 
 ## Statuskontroll utan skrivning
 

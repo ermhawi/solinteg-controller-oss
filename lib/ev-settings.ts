@@ -49,6 +49,7 @@ export interface EvStatus {
   reason: string | null;
   battery_soc_pct: number | null;
   battery_reported_at_utc: string | null;
+  timestamp_origin: string | null;
   connected: boolean | null;
   remaining_ac_kwh: number | null;
   source: 'home_assistant';

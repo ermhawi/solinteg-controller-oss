@@ -117,6 +117,8 @@ describe('shared EV mode configuration', () => {
       await writeFile(process.env.EV_STATUS_PATH, JSON.stringify({
         source: 'home_assistant', checked_at_utc: now,
         valid_for_planning: false, reason: 'stale sensor',
+        timestamp_origin: 'volvo_energy_state_field',
+        battery_reported_at_utc: now,
       }));
       await writeFile(process.env.EVCC_SHADOW_PATH, JSON.stringify({
         mode: 'shadow', timestamp: now, charge_mode: 'economy',
@@ -126,6 +128,7 @@ describe('shared EV mode configuration', () => {
       const result = await readEvOverview();
       expect(result.statusFresh).toBe(true);
       expect(result.status?.valid_for_planning).toBe(false);
+      expect(result.status?.timestamp_origin).toBe('volvo_energy_state_field');
       expect(result.shadowFresh).toBe(true);
       expect(result.shadow?.charging_permitted_a).toBe(0);
       expect(result.shadow?.writes).toBe(0);

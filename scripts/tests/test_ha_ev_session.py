@@ -31,6 +31,29 @@ def states(*, soc=63, connection="connected", target=80, soc_at=NOW):
     }
 
 
+def oem_snapshot(*, soc=63, connection="connected", target=80,
+                 soc_at=NOW, connection_at=NOW, target_at=NOW, poll_at=NOW,
+                 ready=True):
+    return {
+        "entity_id": reader.OEM_SNAPSHOT,
+        "state": "ready" if ready else "unavailable",
+        "attributes": {
+            "schema_version": 1,
+            "timestamp_origin": "volvo_energy_state_field",
+            "api_received_at_utc": poll_at.isoformat(),
+            "oem_timestamps_complete": ready,
+            "physical_writes": 0,
+            "battery_soc_pct": soc,
+            "battery_oem_at_utc": soc_at.isoformat(),
+            "connection": connection,
+            "connection_oem_at_utc": connection_at.isoformat(),
+            "target_soc_pct": target,
+            "target_oem_at_utc": target_at.isoformat(),
+            "reason": "all_oem_fields_recent" if ready else "missing_oem_timestamp",
+        },
+    }
+
+
 def settings(*, mode="deadline", time="07:00", cap=None):
     return {"charge_mode": mode, "departure_local_time": time,
             "max_buy_ore_per_kwh": cap}
@@ -161,14 +184,16 @@ class HaEnergyTests(unittest.TestCase):
                    "EV_SETTINGS_PATH": str(preferences), "HA_READONLY_TOKEN": "test-only",
                    "HA_API_URL": "http://10.43.1.2:8123",
                    "EV_USABLE_BATTERY_KWH": "78", "EV_AC_CHARGE_EFFICIENCY": "0.9"}
-            results = states()
+            result = oem_snapshot()
             with mock.patch.dict(os.environ, env), \
-                 mock.patch.object(reader, "_ha_state", side_effect=lambda b, t, n: results[n]) as getter:
+                 mock.patch.object(reader, "_ha_state", return_value=result) as getter:
                 valid = reader.once(now=NOW)
                 self.assertTrue(valid["valid_for_planning"])
                 self.assertEqual(read_ev_session(str(output), now=NOW)["charge_mode"], "economy")
-                self.assertEqual(getter.call_count, 3)
-                results[reader.BATTERY]["last_reported"] = (
+                self.assertEqual(getter.call_count, 1)
+                self.assertEqual(getter.call_args.args[-1], reader.OEM_SNAPSHOT)
+                self.assertEqual(valid["timestamp_origin"], "volvo_energy_state_field")
+                result["attributes"]["battery_oem_at_utc"] = (
                     NOW - timedelta(minutes=30)).isoformat()
                 invalid = reader.once(now=NOW)
                 self.assertFalse(invalid["valid_for_planning"])
@@ -186,8 +211,7 @@ class HaEnergyTests(unittest.TestCase):
                    "HA_API_URL": "http://10.43.1.2:8123",
                    "EV_USABLE_BATTERY_KWH": "78", "EV_AC_CHARGE_EFFICIENCY": "0.9"}
             with mock.patch.dict(os.environ, env), \
-                 mock.patch.object(reader, "_ha_state",
-                                   side_effect=lambda b, t, n: states()[n]):
+                 mock.patch.object(reader, "_ha_state", return_value=oem_snapshot()):
                 reader.once(now=NOW)
             self.assertNotIn("TOPSECRET", output.read_text())
             self.assertNotIn("TOPSECRET", status.read_text())
@@ -227,6 +251,71 @@ class HaEnergyTests(unittest.TestCase):
                          "http://10.0.0.20:8123/api/states/" + reader.BATTERY)
         self.assertEqual(request.get_header("Authorization"), "Bearer TOPSECRET")
         self.assertEqual(len(build.call_args.args), 2)  # no proxies + no redirects
+
+    def test_oem_snapshot_uses_upstream_timestamps_not_ha_poll_time(self):
+        snapshot = oem_snapshot(soc_at=NOW - timedelta(minutes=8))
+        snapshot["last_reported"] = NOW.isoformat()
+        result = reader._oem_snapshot_states(snapshot, now=NOW)
+        self.assertEqual(result[reader.BATTERY]["state"], "63")
+        self.assertEqual(
+            reader._utc(result[reader.BATTERY]["last_reported"]),
+            NOW - timedelta(minutes=8))
+        session, status = reader.make_session(
+            states=result, settings=settings(mode="economy"),
+            now=NOW, usable_capacity_kwh=78, ac_efficiency=0.9)
+        self.assertEqual(reader._utc(session["observed_at_utc"]),
+                         NOW - timedelta(minutes=8))
+        self.assertEqual(status["battery_reported_at_utc"],
+                         (NOW - timedelta(minutes=8)).isoformat())
+
+    def test_snapshot_refuses_stale_source_even_on_fresh_ha_get(self):
+        snapshot = oem_snapshot(soc_at=NOW - timedelta(minutes=21))
+        states_read = reader._oem_snapshot_states(snapshot, now=NOW)
+        with self.assertRaisesRegex(reader.UnsafeSession, "battery: stale"):
+            reader.make_session(states=states_read, settings=settings(),
+                                now=NOW, usable_capacity_kwh=78,
+                                ac_efficiency=0.9)
+        snapshot["attributes"]["api_received_at_utc"] = (
+            NOW - timedelta(minutes=6)).isoformat()
+        with self.assertRaisesRegex(reader.UnsafeSession, "API response stale"):
+            reader._oem_snapshot_states(snapshot, now=NOW)
+
+    def test_snapshot_does_not_allow_fallback_to_original_ha_sensor(self):
+        # Former normal HA sensor requests are no longer sufficient to create
+        # an EV session because HA last_reported lacks OEM provenance.
+        original_sensor = states()[reader.BATTERY]
+        with self.assertRaisesRegex(reader.UnsafeSession, "snapshot missing"):
+            reader._oem_snapshot_states(original_sensor, now=NOW)
+        partial = oem_snapshot()
+        partial["attributes"].pop("battery_oem_at_utc")
+        with self.assertRaisesRegex(reader.UnsafeSession, "incomplete"):
+            reader._oem_snapshot_states(partial, now=NOW)
+
+    def test_snapshot_fail_closed_on_unknown_metadata(self):
+        for key, value in [
+            ("schema_version", 2),
+            ("timestamp_origin", "ha_poll"),
+            ("oem_timestamps_complete", False),
+            ("physical_writes", 1),
+            ("physical_writes", False),
+        ]:
+            with self.subTest(key=key):
+                snapshot = oem_snapshot()
+                snapshot["attributes"][key] = value
+                with self.assertRaisesRegex(reader.UnsafeSession, "unavailable"):
+                    reader._oem_snapshot_states(snapshot, now=NOW)
+        snapshot = oem_snapshot(ready=False)
+        with self.assertRaisesRegex(reader.UnsafeSession, "missing_oem_timestamp"):
+            reader._oem_snapshot_states(snapshot, now=NOW)
+
+    def test_snapshot_prevents_source_timestamp_newer_than_api_reply(self):
+        snapshot = oem_snapshot(soc_at=NOW + timedelta(seconds=20))
+        with self.assertRaisesRegex(reader.UnsafeSession, "after its API"):
+            reader._oem_snapshot_states(snapshot, now=NOW)
+        snapshot = oem_snapshot()
+        snapshot["attributes"]["connection_oem_at_utc"] = "invalid-time"
+        with self.assertRaises(reader.UnsafeSession):
+            reader._oem_snapshot_states(snapshot, now=NOW)
 
     def test_unknown_ev_settings_field_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
