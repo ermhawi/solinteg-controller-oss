@@ -109,14 +109,41 @@ class SolarTests(unittest.TestCase):
                                 stable=0, max_current_a=10).suggested_amps, 0)
 
     def test_house_battery_priority_and_protection_also_apply_to_cheap_grid(self):
+        # Cheap grid power can charge the car before the HOUSE is full;
+        # solar surplus must still go to the house battery first.
         self.assertEqual(decide(live(soc_pct=97, grid_w=-100),
-                                grid_topup_a=6).suggested_amps, 0)
+                                grid_topup_a=6).suggested_amps, 6)
+        self.assertEqual(decide(live(soc_pct=97, grid_w=1700),
+                                grid_topup_a=0).suggested_amps, 0)
         self.assertEqual(decide(live(battery_w=220, grid_w=-100),
                                 grid_topup_a=6).suggested_amps, 0)
         self.assertEqual(decide(live(timestamp=(NOW - timedelta(minutes=3)).isoformat()),
                                 grid_topup_a=6).suggested_amps, 0)
         self.assertEqual(decide(live(grid_w=-100), grid_topup_a=6,
                                 phase=True, headroom=5).permitted_amps, 0)
+
+    def test_both_modes_stop_at_80_even_with_solar_and_cheap_grid(self):
+        self.assertEqual(decide(live(grid_w=2500), grid_topup_a=6,
+                                target_charge_allowed=False).suggested_amps, 0)
+        self.assertEqual(decide(live(grid_w=2500), target_charge_allowed=False,
+                                phase=True, headroom=16).permitted_amps, 0)
+
+    def test_economy_blocks_valuable_solar_export_and_expensive_grid(self):
+        result = decide(live(grid_w=2500), solar_allowed=False, grid_topup_a=0)
+        self.assertEqual(result.suggested_amps, 0)
+        # If the shared optimizer allowed cheap grid, solar disallowance
+        # must not accidentally discard that separately funded grid window.
+        result = decide(live(grid_w=2500), solar_allowed=False,
+                        grid_topup_a=6, stable=0)
+        self.assertEqual(result.suggested_amps, 6)
+
+    def test_solar_has_house_priority_below_100_even_at_cheap_prices(self):
+        result = decide(live(soc_pct=98, grid_w=2000),
+                        grid_topup_a=3, max_current_a=10, stable=3)
+        self.assertEqual(result.suggested_amps, 0)
+        result = decide(live(soc_pct=98, grid_w=2000),
+                        grid_topup_a=6, max_current_a=10, stable=3)
+        self.assertEqual(result.suggested_amps, 6)
 
     def test_headroom_is_always_capped(self):
         self.assertEqual(decide(phase=True, headroom=16,

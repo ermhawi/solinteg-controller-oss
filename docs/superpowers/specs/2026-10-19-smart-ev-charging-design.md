@@ -1,6 +1,6 @@
 # Smart elbilsladdning i Solinteg — designspecifikation
 
-Status: **Designspecifikation, revision 4, 2026-10-26**, med återinförd åttaetappsplan från 2026-10-24 och uppdaterade säkerhets-/leveransgränser. Bygger vidare på revision 3 (2026-10-21) och tidigare underlag på `Sundsvall`. **Endast dokumentation**; ingen produktionskod, driftskonfiguration, aktivering eller hårdvarustyrning ändras.
+Status: **Designspecifikation, revision 4, 2026-10-26**, med komplettering om två laddlägen och prisbaserad EV-skuggsimulering 2026-10-28. Bygger vidare på revision 3 (2026-10-21) och tidigare underlag på `Sundsvall`. Den separata skuggkoden har uppdaterats men **ingen produktionsdrift, driftskonfiguration, aktivering eller fysisk hårdvarustyrning ändras**.
 
 Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff46f056eb2a8823b9bf817955d8e`, ABL:s dokumenterade register, **separat godkända Modbus-läs- och skrivprov 2026-10-21** samt etapp-/L3-planen i `91c2802` (2026-10-24). Datum, råtelegram och bevisnivå skiljs åt i avsnitt 13. Fältproven gjordes före dokumentrevisionen; inga nya laddkommandon utförs här.
 
@@ -33,14 +33,23 @@ Solinteg ska automatiskt planera laddningen när Volvo XC40 Recharge Twin Plus a
 Solinteg-appen ska automatiskt planera och styra laddningen när användarens Volvo XC40 Recharge Twin Plus ansluts till DEFA eRange Uno / ABL eMH1. Målet är låg gemensam kostnad för hushåll och bil, ett genomförbart laddmål och bevarade installationsgränser. Automatisk planering vid anslutning betyder inte att ström omedelbart måste slås på.
 
 Användarbeslut, oförändrade:
-- **Smart** som standard, utan godkännande per laddsession.
-- **80 % senast 07:00**, Europe/Stockholm, ändringsbart i appen.
-- **Solöverskott**, **Snabb** och **Pausad** som alternativa beteenden.
+- **Klar till avresa** (`deadline`, tidigare Smart) som standard,
+  utan godkännande per laddsession: prioritera **80 % senast en vald
+  avresetid**, initialt 07:00 Europe/Stockholm, även när sista
+  nödvändiga elen är dyr. Prisoptimering sker inom den fysiskt
+  genomförbara tid som återstår.
+- **Ladda ekonomiskt** (`economy`) som alternativ: **inget krav på
+  avresetid**, endast billiga prisfönster och ekonomiskt rimlig
+  solöverskottsladdning, med stopp vid 80 %. Ett valfritt explicit
+  högsta *totalpris för nätköp* kan sättas i användarinställningen.
+  Relativt billiga fönster är inte automatiskt billiga i absoluta kronor.
+- **Pausad**, och eventuella avancerade manuella lägen, får inte
+  kringgå laddmålet eller elektriska skydd.
 - Husbatteriet ska normalt inte användas för att finansiera bilens laddning. Husets grundlast och elektriska gränser har företräde.
 - **Reservläge A:** laddningen ska kunna fortsätta automatiskt när bilens batteriprocent saknas. Bilens egen laddgräns används som lokal begränsning; osäker målstatus visas öppet.
 - Laddsessioner, levererad energi, kostnadsunderlag och orsaker till styrbeslut ska loggas.
 
-Prioritetsordning: elektrisk säkerhet och manuell paus; verifierad batteriskyddspolicy; därefter minimalt energibortfall till avresetiden; därefter ekonomi och få omkopplingar. Snabb eller en nära avresetid får inte kringgå de två första nivåerna. Om målet inte ryms ska appen visa det, inte lova 80 % eller tömma husbatteriet i smyg.
+Prioritetsordning: elektrisk säkerhet och manuell paus; verifierad batteriskyddspolicy; därefter **lägesberoende mål**: `deadline` minimerar underskottet vid avresa före ekonomi, medan `economy` saknar avresetidskrav och hellre väntar på billig el. Därefter prioriteras lägre kostnad och färre omkopplingar. Ingen tidspress får kringgå säkerhet eller husbatteriskydd. Om `deadline` inte ryms ska appen visa det, inte lova 80 % eller tömma husbatteriet i smyg.
 
 Den långsiktiga EV-målbilden stöder en laddpunkt och en konfigurerad bil. **Aktuell leverans är read-only HA/Volvo och batterisidig L3-analys i skuggläge; inte autonom EVCC- eller bilstyrning.** Ingen V2G, ingen generell laddboxplattform, inga nya kontroller av bilens laddfunktioner genom Volvo-API och ingen omskrivning av hela Solinteg-systemet. EM111 är en separat senare mätintegration, inte ett krav för att leverera läsning och tydligt märkta uppskattningar. Första versionens schemaval är en begränsad sökning efter bra genomförbara planer, **inte ett bevis på globalt lägsta möjliga kostnad**.
 
@@ -244,9 +253,9 @@ Rangordna först säkerhet/batteripolicy och minsta återstående energiundersko
 
 `C = sum(importKwh * buyOre - exportKwh * sellOre + batteryWearOre) - terminalEnergyCreditOre`
 
-**Förtydligande 2026-10-28, delad ekonomisk princip:** prisreglerna ska gälla **båda** batterierna, inte en egen godtycklig billig-el-tröskel för Volvon. EV-planeraren använder exakt samma fullständiga `OptimizerSlot.buyPrice` (spot, leverantörspåslag, moms, skatt/överföring), `sellPrice` (alternativkostnad för solel), prisprognos och riskpremie som husets optimerare. Vid höga köppriser används bara faktiskt tillgängligt solöverskott efter husets prioriterade lagring; när billig nätel gör ett avresetidsmål ekonomiskt genomförbart får nätet täcka bilens resterande laddbehov. För batterierna gemensamt måste lägsta **systemkostnad** och husets reserverade batteri/överlastskydd bevaras även när elbilens last påverkar husoptimerarens plan.
+**Förtydligande 2026-10-28, delad ekonomisk princip:** prisreglerna ska gälla **båda** batterierna, inte en egen godtycklig billig-el-tröskel för Volvon. EV-planeraren använder exakt samma fullständiga `OptimizerSlot.buyPrice` (spot, leverantörspåslag, moms, skatt/överföring), `sellPrice` (alternativkostnad för solel), prisprognos och riskpremie som husets optimerare. Vid höga köppriser väntar `economy` eller använder enbart ekonomiskt lämpligt överskott efter husets prioriterade lagring; `deadline` får däremot använda även dyr nätel när 80 %-målet annars missas. När nätel är relativt billig får nätet täcka återstående bilenergi i båda lägena. För batterierna gemensamt måste lägsta **systemkostnad** och husets reserverade batteri/överlastskydd bevaras även när elbilens last påverkar husoptimerarens plan.
 
-**Kodstatus:** `scripts/services/ev_price_policy.py` läser i ett första steg enbart den publicerade husplanens fullständiga priser, sol-exportflöden och bilens verifierade återstående AC-energibehov. Den beräknar en read-only marginalkostnadsordning utan att ompublicera/ändra `optimizer_runs` eller skicka laddkommandon. Denna approximation **är ännu inte en gemensam optimering av båda batterierna**; samordnad EV-/husplanpublicering, korrekt skydd mot husbatteriurladdning för bilens last och fysisk säkerhet återstår. Se `docs/evcc-solar-shadow.md`.
+**Kodstatus 2026-10-28, två laddlägen:** `scripts/services/ev_price_policy.py` läser husets redan publicerade fullständiga priser och prognosflöden. `deadline` prioriterar 80 % vid en fast avresetid, väljer billigast genomförbara kvart och kan vid akut tidsbrist föreslå laddning utan prisdata, men aldrig förbi elsäkerhets- eller batteriskyddsgränser. `economy` har ingen avresetid och laddar bara under de relativt billigaste prisfönstren (initialt 25 % av upp till 48 h, strikt under positiv median) samt med ekonomiskt lämpligt solöverskott; en konfigurerbar absolut köpprisgräns får begränsa detta ytterligare. Båda stoppar förslaget vid 80 %. Planeraren läser `optimizer_runs` men varken ompublicerar det eller skickar laddkommandon. Denna approximation **är ännu inte en gemensam optimering av båda batterierna**; samordnad EV-/husplanpublicering, korrekt skydd mot husbatteriurladdning för bilens last, en betrodd producerad HA-session och fysisk säkerhet återstår. Se `docs/evcc-solar-shadow.md`.
 
 Därefter välj färre onödiga start/stopp vid i praktiken likvärdig kostnad. Riskmarginaler och eventuell omkopplingsstraffkostnad är planeringspolicy, inte poster på elräkningen. Behåll befintlig riskhantering och använd samma `loadFactor`, hushållsreserv och terminalvärde vid jämförelse. Dra inte ett nytt fullständigt slitagebelopp för bilbatteriet utan en motiverad modell.
 
@@ -266,7 +275,7 @@ Första pågående prisintervallet och ett eventuellt delintervall före deadlin
 
 För delintervallen behöver även SoC-kvantiseringen kontrolleras. Nuvarande `dpCore` använder `Math.max(1, floor(...))` för tillåten SoC-förflyttning: att bara skala kvartens kWh med kvarvarande tid kan därför ändå tillåta ett för stort minimisteg. Den nya genomförbarhetskontrollen får aldrig överskrida det verkliga effekt-tids-utrymmet för att nå närmaste SoC-nivå; använd en konservativ representerbar övergång eller redovisa begränsningen. Testa detta uttryckligen vid 06:59.
 
-Smart fyller genomförbara billiga fönster och tidigarelägger nödvändig laddning om återstående marginal minskar. Solöverskott använder verkligt överskott och hysteresis utan att maskera husbatteriurladdning som sol; det lovar inte 80 % vid 07:00 när solelen inte räcker. Överskottsregulatorn måste inkludera redan pågående EV-effekt och reserverad batteriladdning i sin balans, annars förbrukar dess eget påslag exporten och skapar en start-/stopp-loop. Snabb använder högsta just nu godkända ström inom samma fas- och batterigränser. Paus tillåter inga nya laddstarter. Snabba säkerhetsminskningar får alltid bryta en minsta laddtid; ekonomiska småändringar får inte orsaka kontinuerliga kontaktoromkopplingar.
+Klar till avresa (`deadline`) fyller genomförbara billiga fönster men tidigarelägger laddning om tidsmarginalen minskar; när det krävs för 80 %-målet får nätköpspriset bli hur högt som helst. Ladda ekonomiskt (`economy`) har **ingen tidsdeadline**, väljer bara relativa billiga fönster (eventuellt med ett explicit absolut köppristak) och kan vänta på obestämd tid. Solel använder verkligt överskott efter husets batteriprioritet och hysteresis, utan att maskera husbatteriurladdning som sol. Överskottsregulatorn måste inkludera redan pågående EV-effekt och reserverad batteriladdning i sin balans, annars skapas en start-/stopp-loop. Bilen har samma 80 %-mål i båda lägena; skuggkoden stoppar förslag men ingen fysisk laddning; ett avancerat manuellt läge får inte kringgå säkerhetsgränserna. Paus tillåter inga nya laddstarter. Snabba säkerhetsminskningar får alltid bryta minsta laddtid; ekonomiska småändringar får inte orsaka kontinuerliga kontaktoromkopplingar.
 
 ## 6. Reservbeteende A — saknad Volvo-SoC
 

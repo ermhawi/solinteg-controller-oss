@@ -48,6 +48,8 @@ def decide_solar(
     phase_headroom_a: float | None = None,
     max_current_a: int = DEFAULT_MAX_AMPS,
     grid_topup_a: int = 0,
+    solar_allowed: bool = True,
+    target_charge_allowed: bool = True,
     voltage_v: int = 230,
     max_age_seconds: int = 90,
 ) -> SolarDecision:
@@ -70,6 +72,10 @@ def decide_solar(
 
     if live is None or now.tzinfo is None:
         return result(0, "missing inverter telemetry")
+    if not isinstance(solar_allowed, bool) or not isinstance(target_charge_allowed, bool):
+        return result(0, "invalid EV charging permissions")
+    if not target_charge_allowed:
+        return result(0, "EV target reached or fresh charging need missing")
     try:
         stamp = datetime.fromisoformat(str(live["timestamp"]).replace("Z", "+00:00"))
         age = (now - stamp).total_seconds()
@@ -91,19 +97,25 @@ def decide_solar(
         return result(0, "invalid telemetry")
     if battery_w > STOP_BATTERY_DISCHARGE_W:
         return result(0, "house battery discharging")
-    if soc < (99.0 if ev_running else 99.5):
-        return result(0, "house battery not yet full")
+    # Only solar needs the house-full gate. Cheap GRID power may also fill
+    # the car while the house battery is below 100%, provided house discharge
+    # and independent phase protection remain blocked/verified separately.
+    house_full = soc >= (99.0 if ev_running else 99.5)
     # EV load is INCLUDED in house_load_w and grid_w. Without this term a
     # started EV destroys the measured export and oscillates to zero.
     available_w = grid_w + (measured_ev * voltage_v) - GRID_MARGIN_W
     available_a = max(0, math.floor(available_w / voltage_v))
-    # Grid top-up is chosen against the house optimizer's SAME buy/sell prices,
-    # but may not consume more than its separate price-scheduled allocation.
-    suggested = min(max_current_a, available_a + int(grid_topup))
+    solar_a = (available_a if house_full and solar_allowed and
+               (ev_running or stable_surplus_samples >= 3) else 0)
+    # The grid share is NEVER inferred from surplus; it is allocated only by
+    # the price/deadline planner. Neither source overrides battery safety.
+    suggested = min(max_current_a, solar_a + int(grid_topup))
     if suggested < MIN_AMPS:
-        return result(0, "insufficient solar surplus and cheap grid budget", round(available_w))
-    if not ev_running and stable_surplus_samples < 3 and grid_topup < MIN_AMPS:
-        return result(0, "waiting for stable solar surplus", round(available_w))
-    funding = ("solar and price-scheduled grid" if grid_topup > 0 and available_a > 0
+        if not house_full and grid_topup < MIN_AMPS:
+            return result(0, "house battery has solar priority", round(available_w))
+        if house_full and solar_allowed and not ev_running and stable_surplus_samples < 3:
+            return result(0, "waiting for stable solar surplus", round(available_w))
+        return result(0, "no permitted cheap energy for minimum 6 A", round(available_w))
+    funding = ("solar and price-scheduled grid" if grid_topup > 0 and solar_a > 0
                else "price-scheduled grid" if grid_topup > 0 else "solar surplus")
-    return result(suggested, "house full; " + funding + " available", round(available_w))
+    return result(suggested, funding + " available; no house battery discharge", round(available_w))

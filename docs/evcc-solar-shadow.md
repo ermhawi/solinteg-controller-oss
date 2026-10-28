@@ -1,4 +1,4 @@
-# EVCC-solöverskott: isolerad implementation (2026-10-28)
+# EVCC: två laddlägen, pris och solöverskott (skuggläge, 2026-10-28)
 
 **Status: kod och offlinetester klara, INTE driftsatt eller hårdvaruverifierad.**
 Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-design.md`.
@@ -11,32 +11,38 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
   förväntat råbörvärde och efterföljande läsback. Paus är `0x03E8` (100 %
   PWM, ingen laddström), **inte** 0 A. Start/återupptagning kräver en extra
   manuell startsignal. Ingen automatisk upprepning efter tvetydigt ACK.
-- `scripts/services/ev_solar_policy.py`: rent skuggbeslut. Start vid minst
-  99,5 % SoC, tre stabila observationer och tillräckligt nettoöverskott
-  för minst 6 A + 200 W marginal. Tillåter fortsatt drift ned till 99 %;
-  föreslår stopp vid för liten solel, urladdning >150 W eller gamla data.
-  Överskottet beräknas med `grid_w + EVCC-uppmätt EV-effekt` för att inte
-  skapa en reglerloop där bilens egen effekt trollar bort exporten.
-- `scripts/services/ev_price_policy.py`: prisplanering i skuggläge utifrån
+- `scripts/services/ev_solar_policy.py`: rent skuggbeslut med separata
+  bidrag från solel och pris/tidsplanerad nätel. Solöverskott får användas
+  först vid minst 99,5 % SoC i husbatteriet (99 % vid pågående laddning)
+  och tre stabila observationer. Planerad **billig nätel eller nödvändig
+  deadlinesladdning** kan däremot föreslås även innan huset nått 100 %.
+  Husbatteriets urladdning >150 W, gamla mätvärden och saknat eller
+  uppnått bilbatterimål stoppar ändå varje bil-laddningsförslag.
+  Överskottet räknas med `grid_w + EVCC-uppmätt EV-effekt - 200 W`
+  så att bilen inte skapar sin egen start/stopp-pendling.
+  Det befintliga 150 W-skyddet är fortfarande för konservativt när
+  batteriet legitimt försörjer husets grundlast: ett EV-medvetet
+  batteriskydd måste ersätta det före automatisk drift.
+- `scripts/services/ev_price_policy.py`: två laddlägen som båda läser
   husbatteriets redan publicerade `optimizer_runs.inputs_json` (`buyPrice`
-  inklusive skatt, moms, nätavgift och påslag samt `sellPrice` för export).
-  Denna kod uppfinner **ingen separat gräns för billig el**. Den värderar
-  tillgänglig framtida solel med utebliven exportintäkt och nätköp med samma
-  fullständiga köppris som husets optimerare. Billigaste genomförbara
-  intervall väljs för det kända återstående AC-energibehovet före avresan.
-  Projektets redan publicerade `solarExportKwh` skyddar solel som husets
-  batteriplan avsett att lagra. Prognospriser hanteras med husets befintliga
-  `SOLINTEG_FORECAST_RISK_PREMIUM_ORE`.
-- `scripts/services/ev_solar_policy.py`: föreslår solöverskott plus endast
-  den nätandel som valts av prisplaneringen. Husbatteriet prioriteras vid
-  minst 99,5 % SoC inför start (99 % under laddning), och batteriurladdning
-  >150 W blockerar fortsatt EV-laddning. Solöverskott kontrolleras fortfarande
-  fysiskt med `grid_w + uppmätt EV-effekt - 200 W`; historiska prognoser
-  får inte påstå att nätimport är solel. Ingen ampere under 6 A skickas som
-  förslag; en eventuell delkvart kräver ett särskilt tidsbegränsat stopp.
+  med skatt, moms, nätavgift och påslag, samt `sellPrice` för export).
+  **`deadline`:** prioritera 80 % vid avresa, fördela energibehovet på
+  billigaste möjliga kvartarna; om tidsmarginalen tar slut rekommenderas
+  laddning oavsett köppris, även vid prisbortfall. **`economy`:** ingen
+  avresetid, använd bara relativt billiga elpriser – lägsta 25 % av upp
+  till 48 h framtida köppriser och strikt under medianen när medianen är
+  positiv. Valfri **absolut prisgräns** `max_buy_ore_per_kwh` ger användaren
+  kontroll vid genomgående höga elpriser. Värdera sol med utebliven
+  exportintäkt; ladda aldrig med solel som husets plan avsatt till
+  husbatteriet. Båda stoppar laddningsförslag vid bilens 80 %-mål.
+  Prisprognosernas riskpåslag återanvänder
+  `SOLINTEG_FORECAST_RISK_PREMIUM_ORE`. Vid okända eller tvetydiga
+  priser avstår `economy` från nya laddstarter.
 - `scripts/services/evcc_service.py`: `--watch` sparar endast skuggbeslut
-  i separat `evcc-shadow.json`, inklusive `price_buy_ore_kwh`,
-  `price_sell_ore_kwh`, `grid_topup_suggested_a` och `price_reason`.
+  i separat `evcc-shadow.json`, inklusive `charge_mode`,
+  `target_soc_pct`, `departure_at_utc` (null i `economy`),
+  `remaining_ev_ac_kwh`, `price_buy_ore_kwh`, `price_sell_ore_kwh`,
+  `price_cheap_threshold_ore_kwh`, `grid_topup_suggested_a` och `price_reason`.
   Ingen FC10 på den vägen. `EV_ENABLED=0` (default) betyder **ingen
   EVCC-anslutning**, inga skrivningar och inga effekter på `optimizer_runs`
   eller befintlig batteridispatch.
@@ -48,11 +54,24 @@ Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-des
 Prisbesluten kommer från samma optimerarkörning som husbatteriet:
 `buyPrice = (spot + leverantörspåslag) × (1 + moms) + skatt/överföring` och
 `sellPrice = faktiskt exportvärde`. Till skillnad från husbatteriet kan
-Volvon inte sälja tillbaka den köpta elen; den måste nå sitt energimål
-senast avresa. Nätet kan därför komplettera solelen när de billigaste
-genomförbara kvartarna före avresa valts. Vid dyra kvartar används
-enbart uppmätt solöverskott. Om dagens kvart är dyr men flera framtida
-kvartar är billigare väntar bilen, så länge tillräcklig laddtid återstår.
+Volvon inte sälja tillbaka den köpta elen. De två laddlägena uttrycker
+**olika mål** med **samma ekonomi och säkerhet**:
+
+1. **`deadline` / Klar till avresa:** 80 % vid fast UTC-avresetid är
+   förstahandsmålet. Välj billigaste möjliga tidsfönster men använd även
+   dyr el när det annars inte går att hinna. För kort laddfönster eller
+   otillräcklig fasbudget ska visas som ett olösbart mål, inte påstås vara
+   en garanti. Om prisinformationen saknas kan enbart tidskritisk laddning
+   föreslås; felaktiga/tvetydiga snapshots används aldrig.
+2. **`economy` / Ladda ekonomiskt:** **ingen avresetid** och inget
+   åtagande om när bilen blir klar. Ladda när dagens uppmätta importpris
+   är inom relativt billigaste kvartilen av tillgänglig 48 h-prognos,
+   eller när det faktiska exportvärdet av solelen är lika lågt. En
+   valfri, explicit totalpristaksgräns i öre/kWh kan vara striktare.
+   Relativt billig är **inte** alltid billigt i absoluta kronor; ett
+   användarvalt tak behövs om det är viktigt. Om prisunderlaget inte
+   räcker för minst 6 h jämförelse avstår läget från laddstart.
+   Målet är fortfarande 80 %, därefter stannar alla förslag.
 
 **Begränsad första leverans:** laddplanen är en marginalkostnadsordning
 med *husets publicerade plan fixerad*. Den är **inte** ännu en gemensam
@@ -61,16 +80,39 @@ samordnad planering måste ta hänsyn till att bilens last förändrar husets
 batteriplan och dess intäkter; den får inte aktiveras bara för att denna
 skuggberäkning klarar offlinetester.
 
-Före nätbaserade prisförslag krävs en **separat producerad** färsk
-`EV_SESSION_PATH`-JSON från en betrodd read-only HA-läsare med:
-`source="home_assistant"`, `connected=true`, `observed_at_utc`,
-`departure_at_utc` och `remaining_ac_kwh` (beräknat från verifierad
-kapacitet, laddförluster och bilens *käll-tidsstämplade* SoC).
-Producenten är **inte byggd ännu**; utan filen blir nätandelen 0 A
-och skuggbeslutet använder bara solöverskott. `EV_SESSION_PATH` ska
-inte fyllas med manuellt gissad SoC eller återställas vid varje poll.
-Unika UTC-tider behövs vid sommartidsbyte; gamla tvetydiga 02:xx-kvartar
-ger inget nätladdningsbeslut.
+Före laddningsförslag krävs en **separat producerad** färsk
+`EV_SESSION_PATH`-JSON från en betrodd read-only HA-läsare:
+
+```json
+{
+  "source": "home_assistant",
+  "connected": true,
+  "observed_at_utc": "2026-10-28T10:00:00Z",
+  "charge_mode": "economy",
+  "target_soc_pct": 80,
+  "vehicle_soc_pct": 67,
+  "remaining_ac_kwh": 10.2,
+  "max_buy_ore_per_kwh": 120
+}
+```
+
+Exemplet är **schemaillustration, inte en mätning eller rekommenderat
+pristak**. I `deadline` byts `charge_mode` och man lägger till en
+fast `departure_at_utc` i UTC. I `economy` finns **ingen avresetid**,
+och `max_buy_ore_per_kwh` är **valfritt**. Oavsett läge ska
+`remaining_ac_kwh` härledas från verifierad användbar batterikapacitet,
+laddförluster och bilens *käll-tidsstämplade* SoC; sätt aldrig
+`observed_at_utc` till nu om källvärdet är gammalt.
+
+**Producenten och UI-valet är inte byggda ännu.** Utan en färsk,
+validerad fil blir både nätandelen och det slutliga laddförslaget 0 A.
+Det här är endast ett stopp i **planeringens förslag** vid 80 %, inte
+en fysisk stoppfunktion. För skarp drift måste bilens lokala
+80 %-gräns och EVCC:s paus/readback verifieras oberoende; HA:s
+molnfördröjning räcker inte som säker sista stoppåtgärd.
+`EV_SESSION_PATH` ska inte fyllas med gissad SoC eller nollställas vid
+varje poll. Unika UTC-tider behövs vid sommartidsbyte; gamla
+tvetydiga 02:xx-kvartar ger inget nätladdningsbeslut.
 
 `EVCC_MAX_CURRENT_A` är högst 6 som standard tills fas- och EVCC-skydd
 verifierats. `solar_permitted_a` förblir 0 eftersom oberoende L3-skydd

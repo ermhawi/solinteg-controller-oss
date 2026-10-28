@@ -62,7 +62,8 @@ class GridPriceTests(unittest.TestCase):
         result = decide(plan((220, 80, 90, 95), exports=(0.34, 0, 0, 0), sell=5))
         self.assertEqual(result.grid_budget_a, 0)
         self.assertEqual(result.buy_ore, 220)
-        self.assertIn("solar scheduled", result.reason)
+        self.assertIn("solar allocated", result.reason)
+        self.assertTrue(result.solar_allowed)
 
     def test_cheap_grid_tops_up_behind_planned_solar(self):
         # Required energy exceeds the current solar kWh and all future power
@@ -161,6 +162,114 @@ class GridPriceTests(unittest.TestCase):
             path.write_text(json.dumps(record))
             self.assertIsNone(read_ev_session(str(path), now=NOW))
             self.assertIsNone(read_ev_session(None, now=NOW))
+
+    def test_deadline_prioritizes_80_even_when_price_is_very_high(self):
+        urgent = session(0.3, NOW + timedelta(minutes=10))
+        p = plan((2900, 20, 20, 20))
+        result = decide(p, s=urgent)
+        self.assertEqual(result.charge_mode, "deadline")
+        self.assertEqual(result.grid_budget_a, 6)
+        self.assertTrue(result.solar_allowed)
+        self.assertIn("deadline urgent", result.reason)
+
+    def test_deadline_urgent_uses_grid_with_missing_prices_but_not_invalid_inputs(self):
+        urgent = session(0.3, NOW + timedelta(minutes=10))
+        self.assertEqual(decide_grid_price(
+            None, now=NOW, session=urgent).grid_budget_a, 6)
+        self.assertEqual(decide(
+            plan(logged_at=NOW - timedelta(hours=3)), s=urgent).grid_budget_a, 6)
+        # Corrupt/malformed price data must NOT be treated as a mere outage.
+        p = plan((20, 200, 200, 200))
+        p["inputs"][0]["buyPrice"] = float("nan")
+        self.assertEqual(decide(p, s=urgent).grid_budget_a, 0)
+        self.assertEqual(decide_grid_price(
+            None, now=NOW, session=session(0.1)).grid_budget_a, 0)
+
+    def test_economy_without_departure_charges_in_cheap_hours_only(self):
+        s = dict(charge_mode="economy", remaining_ac_kwh=1.2,
+                 departure_at_utc=None)
+        cheap_now = plan((40,) + (160,) * 31, sell=10)
+        result = decide(cheap_now, s=s)
+        self.assertEqual(result.charge_mode, "economy")
+        self.assertEqual(result.grid_budget_a, 6)
+        self.assertEqual(result.buy_ore, 40)
+        self.assertIsNotNone(result.cheap_threshold_ore)
+        high_now = plan((160,) + (40,) * 31, sell=10)
+        result = decide(high_now, s=s)
+        self.assertEqual(result.grid_budget_a, 0)
+        self.assertTrue(result.solar_allowed)
+        self.assertIn("economy:", result.reason)
+
+    def test_economy_does_not_arbitrarily_call_flat_expensive_power_cheap(self):
+        s = dict(charge_mode="economy", remaining_ac_kwh=0.7)
+        self.assertEqual(decide(plan((175,) * 32), s=s).grid_budget_a, 0)
+        # Free/negative energy is fine even if all slots have the same price.
+        self.assertEqual(decide(plan((0,) * 32), s=s).grid_budget_a, 6)
+
+    def test_economy_absolute_ceiling_is_optional_and_has_priority(self):
+        p = plan((40,) + (160,) * 31, sell=10)
+        s = dict(charge_mode="economy", remaining_ac_kwh=1.2,
+                 max_buy_ore_per_kwh=30)
+        result = decide(p, s=s)
+        self.assertEqual(result.grid_budget_a, 0)
+        self.assertTrue(result.solar_allowed)
+        self.assertEqual(result.cheap_threshold_ore, 30)
+        s["max_buy_ore_per_kwh"] = -5
+        result = decide(p, s=s)
+        self.assertEqual(result.grid_budget_a, 0)
+        self.assertFalse(result.solar_allowed)
+        s["max_buy_ore_per_kwh"] = 50
+        self.assertEqual(decide(p, s=s).grid_budget_a, 6)
+
+    def test_economy_waits_for_enough_price_forecast_and_fresh_data(self):
+        s = dict(charge_mode="economy", remaining_ac_kwh=1.0)
+        self.assertEqual(decide(plan((40,) * 8), s=s).grid_budget_a, 0)
+        self.assertEqual(decide_grid_price(None, now=NOW, session=s).grid_budget_a, 0)
+        self.assertEqual(decide(plan((40,) + (160,) * 31,
+                                      logged_at=NOW - timedelta(hours=2)),
+                                s=s).grid_budget_a, 0)
+        # Economy NEVER invents a deadline to justify expensive grid charging.
+        self.assertEqual(decide(plan((160,) + (40,) * 31), s=s).grid_budget_a, 0)
+
+    def test_both_modes_stop_when_80_percent_target_reached(self):
+        for mode in ("deadline", "economy"):
+            with self.subTest(mode=mode):
+                s = dict(charge_mode=mode, remaining_ac_kwh=0,
+                         departure_at_utc=DEPARTURE if mode == "deadline" else None)
+                decision = decide(plan((0,) * 32), s=s)
+                self.assertEqual(decision.grid_budget_a, 0)
+                self.assertFalse(decision.solar_allowed)
+                self.assertIn("target reached", decision.reason)
+
+    def test_read_ev_session_accepts_no_deadline_only_in_economy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "volvo.json"
+            record = dict(source="home_assistant", connected=True,
+                          observed_at_utc=NOW.isoformat(),
+                          charge_mode="economy", target_soc_pct=80,
+                          vehicle_soc_pct=67, remaining_ac_kwh=10.0)
+            path.write_text(json.dumps(record))
+            s = read_ev_session(str(path), now=NOW)
+            self.assertEqual(s["charge_mode"], "economy")
+            self.assertIsNone(s["departure_at_utc"])
+            record["charge_mode"] = "deadline"
+            path.write_text(json.dumps(record))
+            self.assertIsNone(read_ev_session(str(path), now=NOW))
+            record["charge_mode"] = "economy"
+            record["target_soc_pct"] = 85
+            path.write_text(json.dumps(record))
+            self.assertIsNone(read_ev_session(str(path), now=NOW))
+            record["target_soc_pct"] = 80
+            record["vehicle_soc_pct"] = 81
+            path.write_text(json.dumps(record))
+            self.assertIsNone(read_ev_session(str(path), now=NOW))
+            record["vehicle_soc_pct"] = 80
+            record["remaining_ac_kwh"] = 0
+            path.write_text(json.dumps(record))
+            self.assertEqual(read_ev_session(str(path), now=NOW)["remaining_ac_kwh"], 0)
+            record["charge_mode"] = "unknown"
+            path.write_text(json.dumps(record))
+            self.assertIsNone(read_ev_session(str(path), now=NOW))
 
 
 if __name__ == "__main__":

@@ -64,6 +64,54 @@ class ShadowTests(unittest.TestCase):
         self.assertEqual(data["writes"], 0)
         self.assertEqual(streak, 0)
 
+    def test_economy_without_departure_only_suggests_low_price_period(self):
+        p = dict(logged_at=NOW.isoformat(), inputs=[], dispatch=[])
+        for i, buy in enumerate((30,) + (160,) * 31):
+            local = (NOW + timedelta(minutes=15 * i) +
+                     timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+            p["inputs"].append(dict(startTime=local, buyPrice=buy,
+                                    sellPrice=5, priceSource="actual"))
+            p["dispatch"].append(dict(startTime=local, solarExportKwh=0))
+        s = dict(charge_mode="economy", remaining_ac_kwh=1,
+                 target_soc_pct=80, departure_at_utc=None)
+        data, streak, _ = self._tick(session=s, price=p)
+        self.assertEqual(data["mode"], "shadow")
+        self.assertEqual(data["charge_mode"], "economy")
+        self.assertIsNone(data["departure_at_utc"])
+        self.assertEqual(data["grid_topup_suggested_a"], 6)
+        self.assertEqual(data["charging_suggested_a"], 6)
+        self.assertEqual(data["charging_permitted_a"], 0)
+        self.assertEqual(data["writes"], 0)
+        self.assertEqual(streak, 0)
+
+    def test_economy_stops_at_80_without_hardware_actions(self):
+        p = dict(logged_at=NOW.isoformat(), inputs=[], dispatch=[])
+        for i in range(32):
+            local = (NOW + timedelta(minutes=15 * i) +
+                     timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+            p["inputs"].append(dict(startTime=local, buyPrice=0,
+                                    sellPrice=0, priceSource="actual"))
+            p["dispatch"].append(dict(startTime=local, solarExportKwh=0))
+        s = dict(charge_mode="economy", remaining_ac_kwh=0,
+                 target_soc_pct=80, departure_at_utc=None)
+        data, _, _ = self._tick(session=s, price=p, live_export=2500)
+        self.assertEqual(data["charge_mode"], "economy")
+        self.assertEqual(data["grid_topup_suggested_a"], 0)
+        self.assertEqual(data["charging_suggested_a"], 0)
+        self.assertEqual(data["solar_suggested_a"], 0)
+        self.assertEqual(data["writes"], 0)
+
+    def test_deadline_forces_advice_at_high_price_without_actuation(self):
+        s = dict(charge_mode="deadline", target_soc_pct=80,
+                 remaining_ac_kwh=2.0,
+                 departure_at_utc=NOW + timedelta(minutes=20))
+        data, _, _ = self._tick(session=s, price=None)
+        self.assertEqual(data["charge_mode"], "deadline")
+        self.assertEqual(data["grid_topup_suggested_a"], 6)
+        self.assertEqual(data["charging_suggested_a"], 6)
+        self.assertEqual(data["charging_permitted_a"], 0)
+        self.assertEqual(data["writes"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

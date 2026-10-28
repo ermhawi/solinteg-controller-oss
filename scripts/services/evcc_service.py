@@ -36,7 +36,10 @@ def monitor_once(client: EvccAscii, streak: int) -> tuple[dict, int]:
     )
     params = dict(live=live, now=now, ev_measured_a=status.measured_current_a,
                   ev_running=running, phase_guard_verified=False,
-                  max_current_a=max_current_a, grid_topup_a=price.grid_budget_a)
+                  max_current_a=max_current_a, grid_topup_a=price.grid_budget_a,
+                  solar_allowed=price.solar_allowed,
+                  target_charge_allowed=(session is not None and
+                                         session["remaining_ac_kwh"] > 0))
     solar_params = {**params, "grid_topup_a": 0}
     solar_ready = decide_solar(**solar_params, stable_surplus_samples=3)
     streak = streak + 1 if solar_ready.suggested_amps >= 6 else 0
@@ -45,6 +48,11 @@ def monitor_once(client: EvccAscii, streak: int) -> tuple[dict, int]:
     return {
         "timestamp": now.isoformat(),
         "mode": "shadow",
+        "charge_mode": session.get("charge_mode", "deadline") if session else None,
+        "target_soc_pct": session.get("target_soc_pct", 80) if session else None,
+        "remaining_ev_ac_kwh": session["remaining_ac_kwh"] if session else None,
+        "departure_at_utc": (session["departure_at_utc"].isoformat()
+                             if session and session["departure_at_utc"] else None),
         "state": status.state,
         "configured_pwm_raw": status.configured_raw,
         "pilot_pwm_raw": status.pilot_raw,
@@ -56,6 +64,7 @@ def monitor_once(client: EvccAscii, streak: int) -> tuple[dict, int]:
         "solar_surplus_w": decision.surplus_w,
         "price_buy_ore_kwh": price.buy_ore,
         "price_sell_ore_kwh": price.sell_ore,
+        "price_cheap_threshold_ore_kwh": price.cheap_threshold_ore,
         "grid_topup_suggested_a": price.grid_budget_a,
         "grid_topup_planned_kwh": price.planned_grid_kwh,
         "price_reason": price.reason,
