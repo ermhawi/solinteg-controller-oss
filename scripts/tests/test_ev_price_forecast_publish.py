@@ -140,6 +140,36 @@ class ForecastTests(unittest.TestCase):
             with self.assertRaises(writer.ForecastError):
                 writer.publish(self.make(), database=Path(temp)/"db", output=Path(temp)/"file")
 
+    def test_demo_is_explicitly_synthetic_and_has_no_fake_sources(self):
+        demo = writer.make_demo(now=NOW)
+        self.assertEqual(demo["schema"], writer.SCHEMA)
+        self.assertEqual(demo["area"], "SE2")
+        self.assertEqual(demo["quality"], "demo_synthetic")
+        self.assertEqual(demo["sources"], [])
+        self.assertIn("TESTDATA", demo["reason"])
+        self.assertEqual(demo["device_writes"], 0)
+        self.assertEqual(len(demo["days"]), 7)
+        self.assertEqual(demo["days"][0]["type"], "published")
+        self.assertEqual(demo["days"][2]["type"], "forecast")
+        self.assertEqual(demo["best_charge_date"], "2026-11-01")
+
+    def test_demo_can_be_published_without_modifying_real_input_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root/"var").mkdir()
+            (root/"public").mkdir()
+            with patch.dict(os.environ, {"XC40_FORECAST_TEST_OUTPUT":"1"}):
+                self.assertTrue(writer.publish(
+                    writer.make_demo(now=NOW),
+                    database=root/"var"/"forecast.sqlite",
+                    output=root/"public"/"forecast.json",
+                ))
+            self.assertEqual(
+                json.loads((root/"public"/"forecast.json").read_text())["quality"],
+                "demo_synthetic",
+            )
+            self.assertNotIn("quality", EXAMPLE)
+
     def test_no_hardware_or_network_imports(self):
         text = Path(writer.__file__).read_text()
         for forbidden in ("requests", "httpx", "socket", "modbus", "subprocess",

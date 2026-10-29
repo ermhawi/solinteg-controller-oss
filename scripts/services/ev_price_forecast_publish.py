@@ -190,20 +190,57 @@ def publish(payload: dict, *, database: Path = DATABASE, output: Path = OUTPUT) 
     return True
 
 
+def make_demo(*, now: datetime | None = None) -> dict:
+    """Synthetic, explicitly labelled sample for an end-to-end UI check."""
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    today = now.astimezone(ZoneInfo("Europe/Stockholm")).date()
+    prices = [32, 45, 28, 20, 39, 56, 62]
+    lows = [32, 45, 18, 12, 22, 33, 35]
+    highs = [32, 45, 46, 40, 58, 83, 94]
+    return {
+        "schema": SCHEMA, "area": "SE2",
+        "generated_at_utc": now.isoformat(timespec="seconds"),
+        "local_date": today.isoformat(),
+        "recommendation": "wait",
+        "reason": "TESTDATA: syntetiska priser och laddningsråd, endast för visuell verifiering.",
+        "best_charge_date": (today + timedelta(days=3)).isoformat(),
+        "savings_kr_20kwh": 6.25, "savings_kr_40kwh": 12.5,
+        "savings_basis": "synthetic_demo_only",
+        "assumed_single_phase_6a_kw": 1.38,
+        "quality": "demo_synthetic",
+        "days": [
+            {
+                "date": (today + timedelta(days=i)).isoformat(),
+                "type": "published" if i < 2 else "forecast",
+                "price_ore_kwh": prices[i],
+                "low_ore_kwh": lows[i],
+                "high_ore_kwh": highs[i],
+            }
+            for i in range(len(prices))
+        ],
+        "sources": [], "device_writes": 0,
+    }
+
+
 def main() -> None:
-    raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
-    if len(raw) > MAX_INPUT_BYTES:
-        raise SystemExit("invalid forecast: input too large")
     try:
-        input_data = json.loads(raw)
-        payload = validate(input_data)
+        if sys.argv[1:] == ["--demo"]:
+            payload = make_demo()
+        elif sys.argv[1:]:
+            raise ForecastError("unknown options")
+        else:
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            if len(raw) > MAX_INPUT_BYTES:
+                raise ForecastError("input too large")
+            payload = validate(json.loads(raw))
         changed = publish(payload)
     except (ValueError, TypeError, sqlite3.Error, OSError) as exc:
         raise SystemExit(f"forecast not published: {exc}") from None
     print(json.dumps({
         "schema": SCHEMA, "published": changed,
         "generated_at_utc": payload["generated_at_utc"],
-        "days": len(payload["days"]), "device_writes": 0,
+        "days": len(payload["days"]), "quality": payload["quality"],
+        "device_writes": 0,
     }))
 
 

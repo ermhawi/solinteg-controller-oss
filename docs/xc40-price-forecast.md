@@ -108,6 +108,26 @@ python3 -m unittest scripts.tests.test_ev_price_forecast_publish -v
 ```
 
 Ingen systemd-timer behövs: ChatGPT-jobbet är schemaläggaren.
-Den privata databasen skapas först vid första riktiga körningen.
+Den privata databasen skapas först vid första godkända körningen.
 Vid rollback: pausa bara detta ChatGPT-jobb och ta vid behov bort
 den publika JSON-filen; rör inga andra EV-/batteritjänster.
+
+### Kontrollerat provskott
+
+`--demo` skapar sju **syntetiska** dygnspriser, scenariointervall och ett
+illustrativt laddningsråd. Den vanliga stdin-validatorn används fortsatt
+av det schemalagda jobbet (utan `--demo`). Demodata märks
+`quality=demo_synthetic`, `savings_basis=synthetic_demo_only` och
+`sources=[]`. Dashboarden visar ett tydligt demomeddelande och kan inte
+förväxlas med verifierade elpriser.
+
+```sh
+sudo -n -u solinteg-evshadow /usr/bin/python3 \
+  /opt/solinteg/ev-shadow-runtime/scripts/services/ev_price_forecast_publish.py --demo
+```
+
+Provet går genom samma privata SQLite, atomiska JSON-fil, read-only
+Home Assistant-sensor och Plotly-graf som produktionspubliceringen.
+Demodata ersätts av nästa **verifierade** normalkörning; om denna inte
+lyckas blir sensorn `unavailable` efter 36 timmar. Demodata får
+aldrig tolkas som en faktisk elprisprognos.
