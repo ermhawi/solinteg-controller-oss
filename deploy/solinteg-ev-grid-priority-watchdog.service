@@ -1,0 +1,24 @@
+[Unit]
+Description=Independent safety watchdog and rollback for permanent EV L3 grid priority
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/solinteg
+StateDirectory=solinteg-ev-grid-priority
+StateDirectoryMode=0755
+ExecStart=/usr/bin/python3 /usr/local/libexec/solinteg-ev-grid-priority/ev_grid_priority_watchdog.py
+TimeoutStartSec=50
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/solinteg/app/scripts/services
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX

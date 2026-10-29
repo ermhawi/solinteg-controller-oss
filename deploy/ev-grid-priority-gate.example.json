@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "policy_id": "ev-grid-priority-permanent-v1",
+  "mode": "shadow",
+  "activation_id": "replace-with-unique-activation-id",
+  "activated_utc": "2026-10-29T00:00:00+00:00",
+  "dispatcher_sha256": "replace-with-the-deployed-dispatcher-sha256"
+}

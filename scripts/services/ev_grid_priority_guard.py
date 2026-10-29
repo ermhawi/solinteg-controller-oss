@@ -16,14 +16,21 @@ must restore the original running dispatcher before expiration.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 UTC = timezone.utc
 TRIAL_PATH = Path("/opt/solinteg/ev-grid-priority-trial.json")
+PRODUCTION_PATH = Path("/var/lib/solinteg-ev-grid-priority/gate.json")
+WATCHDOG_STATUS_PATH = Path("/var/lib/solinteg-ev-grid-priority/status.json")
+DISPATCH_PATH = Path("/opt/solinteg/app/scripts/services/dispatch_loop.py")
+PRODUCTION_POLICY_ID = "ev-grid-priority-permanent-v1"
+MAX_WATCHDOG_AGE_SECONDS = 40
 MAX_TRIAL_SECONDS = 900
 MAX_EV_AGE_SECONDS = 65
 MAX_INVERTER_AGE_SECONDS = 60
@@ -63,8 +70,40 @@ def _stamp(value: object) -> datetime:
     return stamp.astimezone(UTC)
 
 
+def _trusted_file(path: Path) -> bool:
+    """Production controls must live in a root-owned, non-writable directory."""
+    try:
+        if path.is_symlink() or not path.is_file() or path.parent.is_symlink():
+            return False
+        file_stat, directory_stat = path.stat(), path.parent.stat()
+        return (file_stat.st_uid == directory_stat.st_uid == 0
+                and not (file_stat.st_mode & 0o022)
+                and not (directory_stat.st_mode & 0o022))
+    except OSError:
+        return False
+
+
 def validate_gate(gate: dict | None, now: datetime) -> str:
-    if not isinstance(gate,dict) or set(gate) != {
+    if not isinstance(gate,dict):
+        return "off"
+    if type(gate.get("schema_version")) is int and gate["schema_version"] == 2:
+        if (set(gate) != {"schema_version", "mode", "policy_id",
+                          "activation_id", "activated_utc", "dispatcher_sha256"}
+                or gate["mode"] not in ("shadow", "active")
+                or gate["policy_id"] != PRODUCTION_POLICY_ID
+                or not isinstance(gate["activation_id"], str)
+                or not re.fullmatch(r"[a-zA-Z0-9_-]{8,64}", gate["activation_id"])
+                or not isinstance(gate["dispatcher_sha256"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", gate["dispatcher_sha256"])):
+            return "off"
+        try:
+            activated = _stamp(gate["activated_utc"])
+        except (ValueError, TypeError):
+            return "off"
+        if activated > now.astimezone(UTC) + timedelta(seconds=5):
+            return "off"
+        return gate["mode"]
+    if set(gate) != {
         "schema_version", "mode", "started_utc", "expires_utc",
         "trial_id", "max_duration_seconds"}:
         return "off"
@@ -154,19 +193,23 @@ def suggest(action: str, power_w: int, live: dict | None, evcc: dict | None,
         # Predicted import assuming balanced inverter reduction. Fixed minimum
         # 50W setpoint may yield a bit more inverter power; conservatively cap.
         remaining_ac = min(max(0,ac),target*OUTPUT_TO_BATTERY_EFF_ESTIMATE)
-        predicted_l3_import = -l3+max(0,ac-remaining_ac)/3.0
+        predicted_phase_imports = [-p+max(0,ac-remaining_ac)/3.0
+                                   for p in (l1,l2,l3)]
+        predicted_l3_import = predicted_phase_imports[2]
         predicted_total_import = -grid+max(0,ac-remaining_ac)
-        if (predicted_l3_import > L3_IMPORT_HARD_TEST_BOUND_W
+        if (any(p > L3_IMPORT_HARD_TEST_BOUND_W for p in predicted_phase_imports)
                 or predicted_total_import > GRID_IMPORT_HARD_TEST_BOUND_W):
-            raise ValueError("predicted grid import exceeds conservative trial envelope")
+            raise ValueError("predicted phase or total grid import exceeds conservative envelope")
     except (KeyError,TypeError,ValueError,OverflowError) as exc:
         return Recommendation("unavailable",action,power_w,str(exc)[:140],{})
     metrics = {
+        "ev_grid_priority_policy": ("permanent" if gate.get("schema_version")==2 else "trial"),
         "ev_grid_trial_mode":mode,
         "ev_grid_trial_ict2_a":round(amps[1],2),
         "ev_grid_trial_ev_w_est":round(ev_w),
         "ev_grid_trial_non_ev_l3_w_est":round(non_ev_l3),
         "ev_grid_trial_predicted_l3_import_w":round(predicted_l3_import),
+        "ev_grid_priority_predicted_phase_import_w":[round(v) for v in predicted_phase_imports],
         "ev_grid_trial_predicted_total_grid_import_w":round(predicted_total_import),
         "ev_grid_trial_original_target_w":power_w,
         "ev_grid_trial_target_w":target,
@@ -182,18 +225,36 @@ def suggest(action: str, power_w: int, live: dict | None, evcc: dict | None,
 
 
 def evaluate_snapshot(action: str, power_w: int, now: datetime,
-                      live_path: Path, evcc_path: Path, gate_path: Path=TRIAL_PATH
-                      ) -> Recommendation:
-    """Use existing immutable-ish disk snapshots only, never any hardware API."""
+                      live_path: Path, evcc_path: Path, gate_path: Path | None=None,
+                      status_path: Path=WATCHDOG_STATUS_PATH,
+                      dispatch_path: Path=DISPATCH_PATH) -> Recommendation:
+    """Read-only snapshots; permanent active mode also requires a live root watchdog."""
+    if gate_path is None:
+        gate_path = PRODUCTION_PATH if PRODUCTION_PATH.exists() else TRIAL_PATH
     try:
         if not gate_path.is_file() or gate_path.is_symlink():
             return Recommendation("off",action,power_w,"no regular gate file",{})
         gate = json.loads(gate_path.read_text(encoding="utf-8"))
-        if validate_gate(gate,now)=="off":
-            return Recommendation("off",action,power_w,"trial not valid",{})
+        mode = validate_gate(gate,now)
+        if mode=="off":
+            return Recommendation("off",action,power_w,"invalid or expired gate",{})
+        if gate.get("schema_version")==2:
+            if not _trusted_file(gate_path):
+                return Recommendation("off",action,power_w,"untrusted production gate",{})
+            if mode=="active":
+                if not _trusted_file(status_path):
+                    return Recommendation("unavailable",action,power_w,"watchdog status not trusted",{})
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+                age = (now - _stamp(status["at_utc"])).total_seconds()
+                if (status.get("state")!="active_monitor_ok"
+                        or status.get("activation_id")!=gate["activation_id"]
+                        or not -5 <= age <= MAX_WATCHDOG_AGE_SECONDS):
+                    return Recommendation("unavailable",action,power_w,"watchdog not healthy/fresh",{})
+                if hashlib.sha256(dispatch_path.read_bytes()).hexdigest()!=gate["dispatcher_sha256"]:
+                    return Recommendation("unavailable",action,power_w,"running dispatcher changed",{})
         live=json.loads(live_path.read_text(encoding="utf-8"))
         evcc=json.loads(evcc_path.read_text(encoding="utf-8"))
-    except (OSError,UnicodeError,json.JSONDecodeError,ValueError):
+    except (OSError,UnicodeError,json.JSONDecodeError,ValueError,TypeError,KeyError):
         return Recommendation("unavailable",action,power_w,"source snapshots unavailable",{})
     return suggest(action,power_w,live,evcc,now=now,gate=gate)
 
@@ -201,19 +262,25 @@ def evaluate_snapshot(action: str, power_w: int, now: datetime,
 def guard_dispatch(action: str, power_w: int, expected_soc_kwh, solar_skip: bool,
                    detail: str, numbers: dict, now: datetime,
                    *, live_path: Path, evcc_path: Path,
-                   gate_path: Path=TRIAL_PATH):
+                   gate_path: Path | None=None,
+                   status_path: Path=WATCHDOG_STATUS_PATH,
+                   dispatch_path: Path=DISPATCH_PATH):
     """A single OPTIONAL, reducing-only hook in the existing ARMED dispatcher."""
     if numbers.get("soc_recovery"):
         return action,power_w,expected_soc_kwh,solar_skip,detail,numbers
-    result=evaluate_snapshot(action,power_w,now,live_path,evcc_path,gate_path)
+    result=evaluate_snapshot(action,power_w,now,live_path,evcc_path,gate_path,
+                             status_path=status_path,dispatch_path=dispatch_path)
     if result.state in ("active","shadow"):
         numbers.update(result.measurements)
         numbers["ev_grid_trial_status"]=result.state
+        numbers["ev_grid_priority_status"]=result.state
     elif result.state=="unavailable":
         numbers["ev_grid_trial_status"]="unavailable"
         numbers["ev_grid_trial_reason"]=result.reason
+        numbers["ev_grid_priority_status"]="unavailable"
     if (result.state != "active" or result.power_w >= power_w
             or action != "discharge"):
         return action,power_w,expected_soc_kwh,solar_skip,detail,numbers
+    label = "EV L3 grid cap" if result.measurements.get("ev_grid_priority_policy")=="permanent" else "EV L3 trial cap"
     return "discharge",result.power_w,None,False,(
-        f"EV L3 trial cap {power_w}->{result.power_w}W; {detail}"),numbers
+        f"{label} {power_w}->{result.power_w}W; {detail}"),numbers

@@ -172,5 +172,68 @@ class EvGridPriorityTests(unittest.TestCase):
                      "inverter_control", "evcc_ascii", "fc10", "from pymodbus"):
             self.assertNotIn(term,text)
 
+    def test_all_three_phases_have_individual_import_limits(self):
+        d={**LIVE,"meter_l1_w":-3000,"grid_w":-3430,"house_load_w":5629}
+        r=self.call(live=d,gate={**GATE,"mode":"active"})
+        self.assertEqual((r.state,r.power_w),("unavailable",2300))
+        self.assertIn("phase",r.reason)
+
+    def test_permanent_gate_is_strict_and_has_no_expiry(self):
+        prod={"schema_version":2,"mode":"active",
+              "policy_id":guard.PRODUCTION_POLICY_ID,
+              "activation_id":"test-activation-20261029",
+              "activated_utc":(NOW-timedelta(days=90)).isoformat(),
+              "dispatcher_sha256":"a"*64}
+        self.assertEqual(guard.validate_gate(prod,NOW),"active")
+        self.assertEqual(guard.validate_gate({**prod,"mode":"shadow"},NOW),"shadow")
+        for changed in ({"policy_id":"unknown"}, {"activation_id":"bad"},
+                        {"dispatcher_sha256":"x"*64},
+                        {"activated_utc":(NOW+timedelta(days=1)).isoformat()},
+                        {"mode":"always"}):
+            with self.subTest(changed=changed):
+                self.assertEqual(guard.validate_gate({**prod,**changed},NOW),"off")
+
+    def test_permanent_shadow_and_watchdog_gated_active(self):
+        import hashlib
+        from unittest.mock import patch
+        prod={"schema_version":2,"mode":"shadow",
+              "policy_id":guard.PRODUCTION_POLICY_ID,
+              "activation_id":"test-activation-20261029",
+              "activated_utc":(NOW-timedelta(seconds=120)).isoformat()}
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)
+            live,evcc,gate,status,dispatch=[folder/n for n in (
+                "live.json","evcc.json","gate.json","status.json","dispatch.py")]
+            dispatch.write_text("test dispatcher",encoding="utf-8")
+            prod["dispatcher_sha256"]=hashlib.sha256(dispatch.read_bytes()).hexdigest()
+            live.write_text(json.dumps(LIVE),encoding="utf-8")
+            evcc.write_text(json.dumps(EVCC),encoding="utf-8")
+            gate.write_text(json.dumps(prod),encoding="utf-8")
+            # Only the test mocks the root-only ownership predicate.
+            with patch.object(guard,"_trusted_file",side_effect=lambda p:p.is_file()):
+                def check():
+                    return guard.evaluate_snapshot("discharge",2300,NOW,live,evcc,gate,
+                                                   status_path=status,dispatch_path=dispatch)
+                self.assertEqual(check().state,"shadow")
+                gate.write_text(json.dumps({**prod,"mode":"active"}),encoding="utf-8")
+                self.assertEqual(check().state,"unavailable")  # no watchdog
+                heartbeat={"at_utc":NOW.isoformat(),"state":"active_monitor_ok",
+                           "activation_id":prod["activation_id"]}
+                status.write_text(json.dumps(heartbeat),encoding="utf-8")
+                self.assertEqual((check().state,check().power_w),("active",50))
+                status.write_text(json.dumps({**heartbeat,"at_utc":
+                    (NOW-timedelta(seconds=41)).isoformat()}),encoding="utf-8")
+                self.assertEqual(check().state,"unavailable")
+                status.write_text(json.dumps({**heartbeat,"activation_id":"old-session"}),
+                                  encoding="utf-8")
+                self.assertEqual(check().state,"unavailable")
+                status.write_text(json.dumps(heartbeat),encoding="utf-8")
+                dispatch.write_text("unexpected deployment",encoding="utf-8")
+                self.assertEqual(check().state,"unavailable")
+                out=guard.guard_dispatch("charge",1000,None,False,"charge",{},NOW,
+                    live_path=live,evcc_path=evcc,gate_path=gate,
+                    status_path=status,dispatch_path=dispatch)
+                self.assertEqual(out[:2],("charge",1000))
+
 if __name__=="__main__":
     unittest.main()
