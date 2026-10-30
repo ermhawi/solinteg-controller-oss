@@ -75,12 +75,19 @@ och orelaterade filer, lokala omergade brancher och kvarvarande
 worktrees. Commita bara arbetsrelaterade filer och radera aldrig
 andras orelaterade filer eller worktrees på eget initiativ.
 
-De åtta tidigare EV-commitsen efter `11c7fbd` finns ännu enbart
-lokalt på `Sundsvall` vid detta beslut. Granska incheckade
-privata IP-adresser/konfiguration och den lokalt ignorerade
-`GRANSKNING-2026-10-28.md` **innan** eventuell push eller
-produktionsdriftsättning. Den rapporten finns i den kanoniska
-klonen och ska bevaras utanför Git tills fynden behandlats.
+**Status 2026-10-30:** 26 granskade och sanerade commits har publicerats med
+en vanlig fast-forward-push till `origin/Sundsvall`, **utan merge** till
+`main` eller `upstream`. Den opublicerade historiken skrevs om i en
+isolerad klon så att verkliga interna IP-adresser och fakturerade
+förbrukningsvolymer inte finns kvar i publicerade commits. Gitleaks gav
+0 fynd i det granskade intervallet. Den ursprungliga historiken och
+`GRANSKNING-2026-10-28.md` har verifierade privata arkivkopior
+**utanför** Git-utcheckningen; den gamla lokala ignore-regeln togs bort.
+Publika `.service`-filer och miljöexempel innehåller syntetiska
+exempeladresser som måste anpassas enbart i privata installationskopior.
+
+Detta var en **Git-publicering, inte en driftsättning**: inget i den
+ARMED Solinteg-dispatchern eller EVCC:s fysiska strömgräns ändrades.
 
 Honcho ska behandla detta beslut som en **uttrycklig ersättning**
 av det tidigare beslutet att `hspolander` var primär lokal checkout.
