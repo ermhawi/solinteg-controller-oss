@@ -4,15 +4,15 @@
 
 ## Läs vidare
 
-- [Projektöversikt och användning](../README.md)
+- [Projektöversikt och användning](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/README.md)
 - [Repositorylayout](repository-layout.md)
 - [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
 - [EVCC – read-only rollout](evcc-readonly-rollout-2026-10-28.md)
 - [Elprisprognoser](xc40-price-forecast.md)
 - [Energikostnadsjournal](ev-cost-ledger.md)
-- [Modbus](../MODBUS.md)
-- [Driftsinstruktioner](../deploy/README.md)
-- [Domänkunskap](../DOMAIN.md)
+- [Modbus](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/MODBUS.md)
+- [Driftsinstruktioner](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/deploy/README.md)
+- [Domänkunskap](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/DOMAIN.md)
 
 ## Dokumentationsstandard
 

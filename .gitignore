@@ -72,3 +72,6 @@ skills-lock.json
 # fetch it — regenerate with scripts/fetch-ellevio-history.py, see its docstring)
 solar-data/ellevio/
 ellevio-cookie.txt
+
+# Generated documentation website
+/site/

@@ -1,0 +1,17 @@
+[project]
+site_name = "Solinteg Documentation"
+docs_dir = "docs"
+site_dir = "site"
+nav = [
+  { "Start" = "index.md" },
+  { "Repository" = "repository-layout.md" },
+  { "EV-laddning" = [
+    "ev-grid-priority-permanent-2026-10-29.md",
+    "evcc-readonly-rollout-2026-10-28.md",
+    "ev-cost-ledger.md",
+  ] },
+  { "Elprisprognos" = "xc40-price-forecast.md" },
+]
+
+[project.theme]
+features = ["navigation.sections", "navigation.path"]

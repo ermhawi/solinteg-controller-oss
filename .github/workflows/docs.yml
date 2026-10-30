@@ -1,0 +1,32 @@
+name: Documentation
+
+on:
+  pull_request:
+  push:
+    branches: [main, Sundsvall]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate documentation standard
+        run: |
+          test -f docs/index.md
+          grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' docs/.standards-version
+      - name: Build documentation
+        run: |
+          python3 -m pip install --disable-pip-version-check -r requirements-docs.txt
+          zensical build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: documentation-site
+          path: site/
+          retention-days: 7
