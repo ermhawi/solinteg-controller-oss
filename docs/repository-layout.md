@@ -23,7 +23,7 @@ Välj GitHub CLI `gh` för GitHub-operationer.
 | `~/dev/github.com/ermhawi/solinteg-controller-oss` | Kanonisk källkod, branch `Sundsvall` | Ja |
 | `/opt/solinteg/app` | Befintlig produktionsinstallation för husbatteri och webb | Nej, separat driftsättning |
 | `/opt/solinteg/ev-shadow-runtime` | Isolerad, skrivskyddad Volvo/Waveshare/skuggdrift | Nej, root-ägda distributionsfiler |
-| `~/dev/github.com/hspolander/solinteg-controller-oss` | **Utgående historisk klon** | Ja, men får inte användas för nytt arbete |
+| `~/dev/github.com/hspolander/solinteg-controller-oss` | **Avvecklad 2026-10-30; källkod, refs och privat miljö arkiverade** | Nej, katalogen borttagen |
 
 Installationskatalogerna uppdateras **inte automatiskt** av en commit
 i utvecklingsrepot. Flytta inte över live-konfiguration, systemd-enheter
@@ -51,16 +51,16 @@ till Git eller klistras in i agent-/Honcho-minne. **Kopiera inte
 `.env.local` till den kanoniska katalogen utan en separat granskning
 av bland annat `SOLINTEG_CONTROL_ARMED`**.
 
-Borttagning av den äldre klonen är **tillfälligt blockerad** tills
-befintliga interaktiva processer med arbetskatalog där (ett zsh-skal
-och en Claude-session observerades 2026-10-28) har avslutats eller
-bytt arbetskatalog. Döda inte dessa processer automatiskt, och
-radera/flytta inte deras aktiva arbetskatalog. När processen är fri:
-verifiera `git status`, senaste commit, eventuellt nytt ocommittat
-arbete, att backupen är läsbar och att tjänster inte refererar till
-vägen. Avveckla då endast den gamla klonen utan att röra
-`/opt/solinteg`, GitHub eller våra andra repon. Ingen automatisk
-`git push`, deploy eller borttagning är en del av detta beslut.
+**Avvecklad 2026-10-30:** Den gamla klonen var ren på `11c7fbd`,
+utan stashes, omergade lokala arbetsgrenar eller extra worktrees.
+Inga aktiva processer hade arbetskatalog eller öppna filer där och inga
+systemd-enheter pekade på katalogen. Både Git-bundlen, källkodsarkivet
+och säkerhetskopian av dess privata `.env.local` verifierades;
+miljöfilens SHA256 var identisk. Därefter avvecklades den separata
+klonen. Ett privat kvitto anger backupfiler och ursprunglig commit.
+**Den kanoniska `ermhawi`-checkouten, `/opt/solinteg`, systemd och
+hårdvarustyrning lämnades oförändrade.** Återskapa bara den äldre klonen
+från privat backup om ett dokumenterat återställningsbehov uppstår.
 
 ## Git-hygien och publicering
 
