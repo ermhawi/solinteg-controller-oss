@@ -32,6 +32,8 @@ LockPersonality=true
 ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
 MemoryMax=128M
 IPAddressDeny=any
+# Example allowlist only: replace with the actual Waveshare LAN address
+# before installing. Never allow an entire subnet as a shortcut.
 ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/evcc_observer.py --watch
 IPAddressAllow=192.168.0.20/32
 RestrictAddressFamilies=AF_UNIX AF_INET

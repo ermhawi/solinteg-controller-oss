@@ -32,6 +32,8 @@ LockPersonality=true
 ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
 MemoryMax=128M
 IPAddressDeny=any
+# Example allowlist only: replace BOTH addresses with this installation's
+# HA ClusterIP and post-DNAT host endpoint before installing this unit.
 ExecStart=/usr/bin/python3 /opt/solinteg/ev-shadow-runtime/scripts/services/ha_ev_session.py --watch
 IPAddressAllow=10.0.0.20/32
 # HA pod is host-networked; kube-proxy translates the ClusterIP to Dell LAN IP.

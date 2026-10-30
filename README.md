@@ -83,6 +83,11 @@ that's the actual step-by-step guide for standing this up on a dedicated box.
 
 For the Sundsvall installation, use **one canonical Git checkout**:
 `~/dev/github.com/ermhawi/solinteg-controller-oss` on branch `Sundsvall`.
+**`Sundsvall` is permanent and independent: push reviewed changes to
+`origin/Sundsvall`; do not merge into `main` or `upstream`.**
+Private network addresses and actual invoice usage must never be put in public
+Git history. The committed `.service` and `.env.example` addresses are synthetic
+examples that must be customized in the private deployment environment.
 The GitHub repository `hspolander/solinteg-controller-oss` remains an **upstream
 remote**, not the active local development checkout. The running Solinteg app
 and isolated EV observers under `/opt/solinteg/` are deployments, not Git

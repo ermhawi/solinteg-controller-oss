@@ -16,4 +16,4 @@
 
 ## Dokumentationsstandard
 
-Projektet följer [engineering-standards v1.0.0](https://github.com/ermhawi/engineering-standards/blob/v1.0.0/docs/policy.md). Git/Markdown är källan till sanningen; dokument uppdateras i samma branch som relaterad kod. Befintlig dokumentation bibehålls.
+Projektet följer [engineering-standards v1.2.0](https://github.com/ermhawi/engineering-standards/blob/v1.2.0/docs/policy.md). Git/Markdown är källan till sanningen; dokument uppdateras i samma branch som relaterad kod. Befintlig dokumentation bibehålls.

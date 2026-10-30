@@ -473,7 +473,10 @@ Tidigare uppladdade originalfakturor återfanns i ChatGPT:s filbibliotek
 OCR och betalningsuppgifter **kopieras inte till Git eller Dell**.
 `docs/ev-invoice-rate-evidence-2026.json` lagrar **enbart**
 förbrukningsperiod, fakturadatum, leverantörsroll och anonymiserade
-priskomponenter med originalfilnamn som proveniens:
+priskomponenter med originalfilnamn som proveniens. Fältet `import_kwh`
+är en **syntetisk testvolym på 100 kWh** i det publika repositoryt,
+inte kundens verkliga förbrukning. Originalvolymer och fakturor hör endast
+hemma i privat lagring; en publik kopia får inte användas för fakturaavstämning:
 
 | Dokument och period | Prisrad | Historiskt fakturerad nivå |
 | --- | --- | --- |

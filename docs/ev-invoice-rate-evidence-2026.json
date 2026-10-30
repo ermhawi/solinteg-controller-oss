@@ -18,7 +18,7 @@
       "variable_purchase_ore_ex_vat": "3.28",
       "monthly_fee_sek_ex_vat": "39.20",
       "vat_rate": "0.25",
-      "note": "Historical consumption-weighted period averages; not per-15-minute October prices, tariff validity, or settlement."
+      "note": "PUBLIC SAMPLE: import_kwh is synthetic (100 kWh), NOT the customer\u0027s actual consumption. Only historical unit rates are retained; not valid for October pricing or settlement."
     },
     {
       "id": "sundsvall_elnat_invoice_2026_07",
@@ -34,7 +34,7 @@
       "electricity_tax_ore_incl_vat": "45.00",
       "export_grid_credit_ore_incl_vat": "1.50",
       "annual_fixed_grid_fee_sek_incl_vat": "8052.50",
-      "note": "Invoice unit rates for July only, not guaranteed effective through October. Fixed fee excluded from marginal energy cost."
+      "note": "PUBLIC SAMPLE: import_kwh is synthetic (100 kWh), NOT the customer\u0027s actual consumption. July unit rates only; fixed fee excluded from marginal energy cost."
     }
   ]
 }

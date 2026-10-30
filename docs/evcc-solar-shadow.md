@@ -338,7 +338,7 @@ paus. Vid utebliven kvittens behandlas status som **okänd**; ingen
 automatisk retry eller återstart görs.
 
 **Länken återställd 2026-10-28:** Waveshare svarar nu från Dell på
-`192.168.0.20:4196`. En separat FC03-observatör läser `0x000F` och
+`192.168.0.20:4196` (**syntetisk dokumentationsadress; faktisk IP hålls privat**). En separat FC03-observatör läser `0x000F` och
 `0x002E` var 30:e sekund och rapporterar EVCC-status `B2`,
 `configured_pwm_raw=267`, `pilot_pwm_raw=267` och cirka 0,3 A kanalström.
 Pilotens inställning motsvarar cirka 16 A **tillgänglig** ström, inte

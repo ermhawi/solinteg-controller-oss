@@ -15,6 +15,7 @@ const config = [
   {
     ignores: [
       '.next/**',
+      'site/**', // Zensical-generated output, not project source code.
       'node_modules/**',
       'next-env.d.ts',
       // Generated data modules: long literal arrays produced by scripts/tools/*, not hand-edited.

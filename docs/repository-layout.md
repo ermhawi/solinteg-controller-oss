@@ -64,6 +64,12 @@ vägen. Avveckla då endast den gamla klonen utan att röra
 
 ## Git-hygien och publicering
 
+**Permanent branchregel (beslut 2026-10-30):** `Sundsvall` ska **aldrig mergas**
+till `main` eller till `hspolander`-upstream. Efter granskning publiceras endast
+den självständiga branchen på `origin/Sundsvall` i den egna forken. Alla verkliga
+nätverksadresser och kunders fakturavolymer saneras också ur **opublicerad
+commithistorik** före push; publicerade exempel använder syntetiska värden.
+
 Efter varje kodändring: rapportera kort repo, branch, ocommittade
 och orelaterade filer, lokala omergade brancher och kvarvarande
 worktrees. Commita bara arbetsrelaterade filer och radera aldrig

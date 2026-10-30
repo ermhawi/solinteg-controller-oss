@@ -57,19 +57,17 @@ class InvoiceTariffTests(unittest.TestCase):
         self.assertEqual(g["grid_export_credit_ore_per_kwh_incl_vat"], "1.50")
         self.assertEqual(g["fixed_grid_fee_kr_per_year_incl_vat"], "8052.50")
 
-    def test_historic_tibber_line_amounts_round_to_invoice(self):
+    def test_synthetic_consumption_uses_historical_unit_rates(self):
         kwh = Decimal("100.00")
         values = {
             "spot": (kwh * Decimal("36.61") / 100).quantize(Decimal("0.01")),
             "fixed_surcharge": (kwh * Decimal("6.00") / 100).quantize(Decimal("0.01")),
             "variable_purchase": (kwh * Decimal("3.28") / 100).quantize(Decimal("0.01")),
         }
-        # The invoice's weighted average is displayed with only 2 decimals.
-        # 100.00 * 36.61 / 100 rounds to 36.61 SEK, but the invoice
-        # reports 36.61 SEK using higher-precision period source amounts.
-        self.assertLessEqual(abs(values["spot"]-Decimal("36.61")),Decimal("0.01"))
-        self.assertEqual(values["fixed_surcharge"],Decimal("6.00"))
-        self.assertEqual(values["variable_purchase"],Decimal("3.28"))
+        # Synthetic public sample: never expose a customer's billed kWh here.
+        self.assertEqual(values["spot"], Decimal("36.61"))
+        self.assertEqual(values["fixed_surcharge"], Decimal("6.00"))
+        self.assertEqual(values["variable_purchase"], Decimal("3.28"))
 
     def test_october_is_not_invoice_reconciled_despite_close_model_rates(self):
         r = self._report("2026-10-28")

@@ -33,6 +33,8 @@ ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var
 MemoryMax=128M
 TimeoutStartSec=45
 IPAddressDeny=any
+# Example allowlist only: replace both addresses with the real HA service
+# ClusterIP and translated backend before installing (fail closed by default).
 IPAddressAllow=10.0.0.20/32
 IPAddressAllow=192.168.0.10/32
 RestrictAddressFamilies=AF_UNIX AF_INET

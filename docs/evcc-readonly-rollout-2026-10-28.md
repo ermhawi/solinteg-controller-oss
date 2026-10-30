@@ -11,7 +11,7 @@ Four independently enabled systemd units:
 | Unit | Reads | Writes |
 | --- | --- | --- |
 | solinteg-ev-ha | Internal HA Energy State API | Its own JSON snapshots |
-| solinteg-ev-observer | Waveshare 192.168.0.20:4196, Modbus ASCII **FC03 only** | Its own EVCC JSON snapshot |
+| solinteg-ev-observer | Waveshare (private LAN address; example `192.168.0.20:4196`), Modbus ASCII **FC03 only** | Its own EVCC JSON snapshot |
 | solinteg-ev-shadow | Existing optimizer_runs price rows, live.json, and above snapshots | Its own advisory plan JSON |
 | solinteg-ev-history | Local HA, EVCC, plan and inverter JSON snapshots | Private 30-day SQLite history |
 
@@ -50,12 +50,13 @@ which contains optional manual writing functionality, was **not installed**.
   permits the Waveshare IP; the price planner has no network access.
   Network rules are defense in depth, NOT an independent safety fuse.
 
-The private HA service currently resolves to 10.0.0.20, but its
-Kubernetes host-networked endpoint is 192.168.0.10. Both addresses
-are whitelisted for the HA reader; with only the ClusterIP whitelisted,
-systemd's egress restriction caused a URLError due to DNAT. If either
-endpoint changes, the reader fails closed and requires a reviewed unit
-update. Waveshare is currently at 192.168.0.20:4196.
+The private deployment uses an HA ClusterIP and a separate host-networked
+backend address. Both must be explicitly whitelisted for the HA reader;
+allowing the ClusterIP alone failed due to DNAT. The public source templates
+use **synthetic example addresses** (`10.0.0.20`, `192.168.0.10` and
+`192.168.0.20` for the Waveshare). Real endpoints are kept only in the
+private deployment configuration. Any endpoint change requires a reviewed,
+fail-closed unit update.
 
 ## Deliberately uncalibrated scenario
 
