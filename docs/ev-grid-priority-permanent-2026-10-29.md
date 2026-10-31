@@ -15,13 +15,55 @@ Bygger på det verifierade provet 2026-10-28:
   den är identisk med original-backupen från provet och saknar EV-hooken.
 - Den äldre trial-timern är `disabled/inactive`, gate-filen saknas,
   och trialens rollback-status är `restored_original_dispatch`/`rollback_ok=true`.
-- **Aktuell blockerare 2026-10-29 18:53 CET:** EVCC-observatören rapporterade
-  `read_ok=false, state=unknown` trots färsk tidsstämpel. Inget aktivt
-  EV-grid-priority-läge får införas förrän verkliga C2/Ict2/6 A-värden är stabila.
+- **Historisk blockerare 2026-10-29 18:53 CET:** EVCC-observatören
+  rapporterade `read_ok=false, state=unknown`. Läsback fungerar åter enligt
+  den skrivskyddade kontrollen 2026-10-31; det undanröjer inte övriga krav.
 - Git-branchen `Sundsvall` är betydligt nyare än aktiv dispatcher (F-11).
   **Installera inte hela Git HEAD över ARMED-drift** utan separat
   kompatibilitetsgranskning och riskbedömning. Endast det granskade skyddet
   får överföras som minimal versionerad förändring i releasefönstret.
+
+## Senaste read-only releasekontroll (2026-10-31 10:08 CET)
+
+- `solinteg-dispatch.service` är aktiv men kör fortfarande original-SHA256
+  `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`
+  **utan EV-prioriteringshook**. Den aktiva `l3_charge_guard` begränsar
+  batteriets *laddning*, inte dess urladdning till bilens fas.
+  `DISPATCH_L3_CHARGE_GUARD_MODE=1` och budgeten är 4 000 W.
+  `DISPATCH_L3_BATTERY_MODE=shadow` står i miljöfilen men motsvarande
+  kod saknas i den installerade dispatchern; detta är ingen aktiv EV-policy.
+- EVCC-observatören är aktiv och läser `read_ok=true`, `state=C2`,
+  `Ict2=6,0 A`, `configured_pwm_raw=pilot_pwm_raw=100`, `writes=0`.
+  Övriga isolerade HA-/pris-/historiktjänster är aktiva men skrivskyddade.
+- Den permanenta watchdog-timern är ännu inte installerad, trial-timern
+  är inaktiv och ingen schema-2-gate finns. `phase_guard_verified=false`;
+  inget oberoende RMS-baserat L3-säkringsskydd är verifierat.
+- Vid kontrollen understeg husbatteriets SoC 25 % och PV översteg 100 W.
+  Nattpolicyns gränser (SoC 25–95 %, PV högst 100 W) var inte uppfyllda.
+  Skrivskyddad simulation gav `shadow_state=unavailable`, **ingen fysisk
+  begränsning** och ingen rekommenderad ström att applicera. Detta är
+  ett tidsspecifikt säkerhetsstopp, inte ett misslyckat funktionstest.
+- Den minimala releasekandidaten genererades endast under `/tmp`:
+  SHA256 `7934dd1c31e6ea07780f33492ae57ca33447b3ff7e43259edebd2116ae2db6d4`.
+  Den kompilerar och `systemd-analyze verify` accepterade watchdog-units.
+  Inga tjänster, gate-filer eller fysiska styrinställningar ändrades.
+- Releasekontrollen har sex skrivskyddade regressionstester; totalt
+  **817 Python-tester** och **697 Vitest-tester** passerade (ett Vitest-test
+  hoppades över). ESLint, TypeScript typecheck och Zensical-dokumentationsbygge
+  passerade utan fel.
+
+Skrivskyddad preflight (kontrollerar känd dispatcher-SHA, beräknar endast
+skuggförslag från färska live-/EVCC-snapshots och returnerar JSON):
+
+```bash
+sudo -n python3 scripts/tools/ev_grid_priority_preflight.py
+```
+
+`shadow_eligible_now=true` är **inte** ett aktiveringsbeslut.
+`physical_activation_authorized` och
+`independent_l3_rms_protection_verified` förblir `false`.
+För verklig installation krävs fortfarande releasegrindarna nedan,
+inklusive särskilt godkänt underhållsfönster och fysisk aktivering.
 
 ## Versionerad design (ingen extra fysisk aktivering)
 
