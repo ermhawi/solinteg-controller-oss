@@ -17,10 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ev_grid_priority_solar_shadow import assess
+from ev_grid_priority_idle_strategy import evaluate as evaluate_idle
 
 LIVE = Path("/opt/solinteg/live.json")
 EVCC = Path("/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json")
 CONTROLS = Path("/opt/solinteg/telemetry.db")
+HISTORY = Path("/opt/solinteg/ev-shadow-runtime/var/ev-history.sqlite")
 GATE = Path("/var/lib/solinteg-ev-grid-priority/gate.json")
 OUTPUT = Path("/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json")
 MAX_CONTROL_AGE_S = 900
@@ -52,9 +54,25 @@ def last_applied(controls: Path, *, now: datetime) -> tuple[str, int, dict]:
     }
 
 
+def recent_ev_samples(history: Path, *, now: datetime) -> list[dict]:
+    """Only recent read-only historian data; missing DB means no stability proof."""
+    fields = ("captured_at_utc", "inverter_fresh", "inverter_age_s",
+              "evcc_record_fresh", "evcc_age_s", "evcc_read_ok", "evcc_state",
+              "evcc_charging_detected", "evcc_6a_limit_verified",
+              "evcc_measured_a", "battery_w", "house_soc_pct", "pv_w",
+              "house_load_w", "grid_w", "l1_grid_w", "l2_grid_w", "l3_grid_w")
+    since = int(now.timestamp() * 1000) - 180_000
+    with closing(sqlite3.connect(history.resolve().as_uri() + "?mode=ro", uri=True)) as con:
+        rows = con.execute(
+            "SELECT " + ",".join(fields) + " FROM ev_samples "
+            "WHERE captured_epoch_ms >= ? ORDER BY captured_epoch_ms DESC LIMIT 6",
+            (since,)).fetchall()
+    return [dict(zip(fields, row)) for row in reversed(rows)]
+
+
 def inspect(live_path: Path = LIVE, evcc_path: Path = EVCC,
             controls_path: Path = CONTROLS, gate_path: Path = GATE,
-            *, now: datetime | None = None) -> dict:
+            *, history_path: Path = HISTORY, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     result = {
         "timestamp": now.isoformat(),
@@ -80,8 +98,17 @@ def inspect(live_path: Path = LIVE, evcc_path: Path = EVCC,
         result.update(details)
         result["observed_action"] = action
         result["observed_target_w"] = power if action != "unknown" else None
-        result["advice"] = assess(action, power, live, evcc, now=now).as_dict()
-        result["state"] = result["advice"]["state"]
+        advice = assess(action, power, live, evcc, now=now)
+        result["advice"] = advice.as_dict()
+        result["state"] = advice.state
+        if action == "idle":
+            try:
+                samples = recent_ev_samples(history_path, now=now)
+            except (OSError, sqlite3.Error, ValueError, TypeError):
+                samples = []  # no history is NOT evidence of a stable transition
+            result["idle_strategy"] = evaluate_idle(
+                action, live, advice, samples, now=now,
+                age_of_dispatch_s=details.get("dispatch_age_s")).as_dict()
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         result.update(state="unavailable", reason=type(exc).__name__)
     return result
@@ -109,10 +136,12 @@ def main() -> None:
     parser.add_argument("--live", type=Path, default=LIVE)
     parser.add_argument("--evcc", type=Path, default=EVCC)
     parser.add_argument("--controls", type=Path, default=CONTROLS)
+    parser.add_argument("--history", type=Path, default=HISTORY)
     parser.add_argument("--gate", type=Path, default=GATE)
     parser.add_argument("--output", type=Path, default=OUTPUT)
     args = parser.parse_args()
-    result = inspect(args.live, args.evcc, args.controls, args.gate)
+    result = inspect(args.live, args.evcc, args.controls, args.gate,
+                     history_path=args.history)
     publish(args.output, result)
     print(json.dumps({"state": result["state"], "device_writes": 0}))
 

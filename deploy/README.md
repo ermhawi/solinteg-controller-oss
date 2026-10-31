@@ -192,8 +192,8 @@ No behavior change is made by merely syncing code to Git.
 `scripts/services/ev_grid_priority_shadow_observer.py` is deliberately
 independent from ARMED dispatch and the root EV-grid watchdog. Its
 `ev_grid_priority_solar_shadow.py` imports no inverter/EVCC control
-code, reads existing local snapshots and `telemetry.db` using
-SQLite `mode=ro`, and writes only
+code, reads existing local snapshots, `telemetry.db` and
+`ev-history.sqlite` using SQLite `mode=ro`, and writes only
 `/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json`
 as the existing `solinteg-evshadow` user (0600). A dedicated systemd
 timer triggers it every ~30 seconds; the unit denies all network
@@ -202,11 +202,22 @@ connections and uses a strict filesystem sandbox.
 The approved Dell installation has root-owned code copies in
 `/usr/local/libexec/solinteg-ev-grid-solar-shadow` and only the
 `solinteg-ev-grid-solar-shadow.{service,timer}` systemd units.
+The 2026-10-31 11:09 CET shadow-only upgrade added
+`ev_grid_priority_idle_strategy.py` and updated the observer.
+It stopped/restarted only this sidecar timer, not ARMED dispatch or
+the root EV watchdog. Its last known-good observer source is backed up
+with mode 0400 at
+`/var/lib/solinteg-ev-grid-priority/solar-shadow-observer-before-idle-20261031.py`.
+If the sidecar fails, stop only its timer, verify the backup checksum
+(`8daef9e8e3a4b539fe2c1a424d84bb73b7c03550f3556ea6c1e701e0d854b59a`),
+restore the observer atomically with root ownership, and restart the
+sidecar timer. Do **not** roll back the ARMED dispatcher or change the
+root gate to recover the observation service.
 Inspect without changing house or EV controls:
 
 ```bash
 systemctl is-active solinteg-ev-grid-solar-shadow.timer
-sudo -n -u solinteg-evshadow python3 -c 'from pathlib import Path; import json; p=Path("/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json"); d=json.loads(p.read_text()); print(json.dumps({"timestamp":d.get("timestamp"),"state":d.get("state"),"observed_action":d.get("observed_action"),"advice":d.get("advice"),"device_writes":d.get("device_writes")},indent=2))'
+sudo -n -u solinteg-evshadow python3 -c 'from pathlib import Path; import json; p=Path("/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json"); d=json.loads(p.read_text()); print(json.dumps({"timestamp":d.get("timestamp"),"state":d.get("state"),"observed_action":d.get("observed_action"),"advice":d.get("advice"),"idle_strategy":d.get("idle_strategy"),"device_writes":d.get("device_writes")},indent=2))'
 ```
 
 A separate offline replay for operator investigation needs no service
@@ -221,6 +232,15 @@ During sunny `idle` the observer reports `solar_hold_unverified`
 without a hardware-action suggestion. When extended L1/L2/L3 CT reads
 are temporarily unavailable, it fails closed with `unavailable`
 without reusing old readings; the existing poller handles CT retries.
+When the observed decision is `idle`, a separate `idle_strategy`
+field examines four consecutive valid historian samples. It requires
+a stable EV draw, SoC 25–95%, matching phase CT, and dispatch
+settling time before even suggesting a hypothetical 50 W save.
+A current `work_mode_raw=0x101` readback must corroborate the
+logged `idle`; a manual mode change yields `dispatch_mode_mismatch`.
+Whole-house PV surplus retains Auto; possible PV-to-battery charging
+while EV grid-funds is marked `pv_first_charge_unverified`.
+The field is omitted during non-idle dispatch and is NEVER a command.
 Its physical-control permission is always false. The installed production
 EV guard **still does not intercept Auto/idle**; there is no new PV-
 or battery-write path from these units. See `docs/architecture/adr-2026-10-31-ev-solar-shadow.md`.

@@ -366,6 +366,57 @@ låta några av de nya observationerna påverka fysisk styrning.
 Se [ADR](architecture/adr-2026-10-31-ev-solar-shadow.md) för
 beräkningsantaganden och nästa provsteg.
 
+## Nästa skuggsteg: solmedveten Auto/idle-växling
+
+**Utvecklat 2026-10-31, fortfarande inga nya styrskrivningar.**
+`scripts/services/ev_grid_priority_idle_strategy.py` utökar den
+isolerade read-only-observatören med fältet `idle_strategy`
+(när senaste dispatchbeslutet verkligen är `idle`).
+Modellen föreslår enbart hypotetiska lägen och kräver fyra
+sammanhängande, kvalitetskontrollerade 30-sekundersprover från
+`ev-history.sqlite`, samt en stabil dispatchåtgärd över samma
+tidsperiod. Aktuell EVCC-Ict2 och 50006 kräver fortfarande separat
+färsk verifiering. `work_mode_raw=0x101` måste dessutom bekräfta
+att växelriktaren faktiskt är i Auto – ett tidigare loggat
+`idle` får aldrig misstas för ett manuellt ändrat inverterläge. Om mätvärden saknas blir resultatet väntan/
+`unavailable`, aldrig en påhittad nollström.
+
+Beslutsträd: håll Auto om solöverskottet stabilt täcker **hela**
+husets och bilens effekt; enbart testat 50 W-batterisparläge om
+solelen med god marginal **inte ens täcker huset utan bilen** och
+husbatteriet faktiskt urladdas i flera prover. Föreslagen växling
+kontrollerar även konservativt prognostiserad import per fas och
+totalt. Mellanläget, då solelen kunde ha laddat husbatteriet om
+elnätet försörjt bilen, redovisas som
+`pv_first_charge_unverified` **utan något körbart börvärde**,
+eftersom den avsedda effektfördelningen inte är verifierad på enheten.
+Om solelen redan täcker **hela** huslasten men batteriet ändå
+fortsätter urladdas blir resultatet i stället
+`solar_surplus_discharge_anomaly`, inte automatiskt `keep_auto`.
+
+En ny read-only replay genom 2026-10-31 11:00 UTC täckte 7 974
+prover och 378 verifierade 6 A-laddningsprover. Alla **tre**
+verifierade `idle`-prover hade SoC under 25 %. En fysisk
+Auto/idle-växling inom godkänt SoC-fönster har därför **inte
+bevisats**. Dessutom är 50 W-batterisparläge inte ett sant
+0 W-hålläge och det tidigare in-mode freeze-försöket misslyckades.
+Inga styrregister, gate- eller watchdogvillkor förändrades.
+
+**Driftsatt 2026-10-31 11:09 CET:** Endast den separata
+`solinteg-ev-grid-solar-shadow`-observatörens rootägda Python-filer
+uppdaterades på Dell. Ursprunglig observatör finns i en rootägd
+0400-backup, medan dess timer åter är aktiv. Kontroll efteråt:
+`mode=shadow`, `shadow_monitor_ok`, ordinarie ARMED-dispatcher
+och oberoende watchdog aktiva, `device_writes=0`, output 0600.
+Eftersom dispatchern fortfarande laddade husbatteriet med SoC cirka
+20 %, innehöll observationen `existing_charge` men inget
+`idle_strategy` – inga extra `idle`-beslut har utförts eller simulerats
+ur ett faktiskt `idle`-läge i produktion.
+
+Se [ADR](architecture/adr-2026-10-31-ev-solar-shadow.md) för
+driftsatta SHA256, rollbackbackup, tröskelvärden, mätkvalitetskrav,
+falska positiva och begränsningar.
+
 ## Kvalitet och avgränsat leveransbeslut
 
 - Offline: befintliga 16 trialpolicyfall/9 trialwatchdogfall

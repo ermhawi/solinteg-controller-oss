@@ -10,7 +10,16 @@ Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff4
 solmedveten observatör samlar hypotetiska börvärden var 30:e sekund.
 Detta är **inte** fysisk nätprioritering: det finns fortfarande inget
 verifierat solbevarande sätt att skydda Auto/idle utan att hindra
-solladdning av husbatteriet. Se
+solladdning av husbatteriet.
+**Shadow-komplettering 2026-10-31 11:09 CET:** Observatören analyserar nu
+även Auto/idle med fyra sammanhängande verifierade historikprover,
+hysteres mellan solöverskott/underskott, separat L1/L2/L3-importprognos
+och uttryckligt `pv_first_charge_unverified` när solen kan
+finansiera husbatteriet men inte samtidigt bilen. Besluten är
+`model_actionable=false` och `device_writes=0`; inga aktiva
+registerändringar tillåts. Replay omfattade 378 verifierade 6 A-prover,
+men de tre `idle`-proverna hade alla hus-SoC under 25 % och kunde
+inte verifiera en verklig Auto→batterispar-övergång. Se
 [`ev-grid-priority-permanent-2026-10-29.md`](../../ev-grid-priority-permanent-2026-10-29.md)
 och [ADR](../../architecture/adr-2026-10-31-ev-solar-shadow.md).
 

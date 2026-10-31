@@ -53,6 +53,14 @@ class SolarReplayTests(unittest.TestCase):
         self.assertEqual(report["device_writes"], 0)
         self.assertFalse(report["independent_phase_balance_recorded"])
 
+    def test_idle_so_c_below_guard_is_not_solar_hold_evidence(self):
+        r = record(10, 4200)
+        r["house_soc_pct"] = 20
+        report = replay.replay([r], [control(0, "idle", 0)])
+        self.assertEqual(report["counts"]["idle_with_verified_ev"], 1)
+        self.assertEqual(report["counts"]["idle_outside_shadow_soc_band"], 1)
+        self.assertNotIn("idle_in_shadow_soc_band", report["counts"])
+
     def test_malformed_or_unverified_evcc_is_not_charging(self):
         sample = record(20, 4200, verified=False)
         report = replay.replay([sample], [control(0, "idle", 0)])

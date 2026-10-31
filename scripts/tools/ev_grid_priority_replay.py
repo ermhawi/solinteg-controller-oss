@@ -136,6 +136,14 @@ def replay(samples: list[dict], controls: list[dict], *,
             counts["pv_over_100_samples"] += 1
         if action:
             counts["action_" + action["planned_action"]] += 1
+            if action["planned_action"] == "idle":
+                # This window tests whether the historical AUTO gap can
+                # validate the NEW policy: low SoC forbids a 50 W hold.
+                counts["idle_with_verified_ev"] += 1
+                if 25 <= sample["house_soc_pct"] <= 95:
+                    counts["idle_in_shadow_soc_band"] += 1
+                else:
+                    counts["idle_outside_shadow_soc_band"] += 1
         else:
             counts["action_unknown"] += 1
         advice = scenario(sample, action)
