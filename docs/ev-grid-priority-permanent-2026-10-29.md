@@ -417,6 +417,15 @@ Se [ADR](architecture/adr-2026-10-31-ev-solar-shadow.md) för
 driftsatta SHA256, rollbackbackup, tröskelvärden, mätkvalitetskrav,
 falska positiva och begränsningar.
 
+**Separat tidsbegränsat test 2026-10-31:** Ett uttryckligen godkänt,
+fysiskt återhämtningsprov höjer husbatteriets mål till 25 % med ett
+dispatcher-processlokalt tak på 1 000 W. EVCC-laddningen är fortsatt
+6 A och EV-prioritetens rootgate `shadow`. Detta prov styr
+**enbart husbatteriets befintliga återhämtning**, inte EV-prioritering
+eller något PV-medvetet Auto/idle-beslut. En separat watchdog
+återställer dispatcherstarten vid 25 %, säkerhetsfel eller efter
+två timmar; se [runbook](temporary-soc25-pilot-2026-10-31.md).
+
 ## Kvalitet och avgränsat leveransbeslut
 
 - Offline: befintliga 16 trialpolicyfall/9 trialwatchdogfall

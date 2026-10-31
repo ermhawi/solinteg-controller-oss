@@ -188,6 +188,15 @@ enable active mode without a separately approved physical test. Roll back
 this guard by setting `DISPATCH_L3_CHARGE_GUARD_MODE=0` and restarting dispatch.
 No behavior change is made by merely syncing code to Git.
 
+**Temporary 25% house-battery recovery pilot (separately approved):**
+See [the runbook](../docs/temporary-soc25-pilot-2026-10-31.md).
+It uses a temporary process-scoped dispatch systemd drop-in and a root
+watchdog; it does not change the shared `solinteg.env`, live dispatcher
+source, EVCC 6 A setting or EV grid-priority `mode=shadow`.
+The independent watchdog rolls back the exact drop-in at 25% SoC,
+a hard two-hour deadline or a stale/invalid/safety observation. The
+one-off pilot must not be confused with the permanent EV protection.
+
 **Separate solar-aware EV/L3 observer (read-only, installed 2026-10-31):**
 `scripts/services/ev_grid_priority_shadow_observer.py` is deliberately
 independent from ARMED dispatch and the root EV-grid watchdog. Its

@@ -7,6 +7,8 @@
 - [Projektöversikt och användning](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/README.md)
 - [Repositorylayout](repository-layout.md)
 - [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
+- [Tillfälligt husbatteriprov 20–25 %](temporary-soc25-pilot-2026-10-31.md)
+- [Beslut: tidsbegränsat fysiskt SoC-återhämtningsprov](architecture/adr-2026-10-31-temporary-soc25-recovery.md)
 - [Beslut: solmedveten EV/L3-shadow](architecture/adr-2026-10-31-ev-solar-shadow.md)
 - [EVCC – read-only rollout](evcc-readonly-rollout-2026-10-28.md)
 - [Elprisprognoser](xc40-price-forecast.md)

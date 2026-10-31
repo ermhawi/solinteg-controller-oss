@@ -1,5 +1,29 @@
 # Sundsvall Sunwoda SoC recovery calibration — 2026-10-23
 
+## Temporary 25% recovery test — 2026-10-31
+
+A separate, user-approved, two-hour-bounded physical trial started
+11:26 CET. The ordinary 21% recovery exited into Auto at 11:21;
+at 11:25 the Sunwoda battery had fallen back to 20% while supplying
+roughly 1.7 kW of the house, including coincident 6 A EV charging.
+This is a concrete recurrence of the observed recovery/idle cycling,
+not evidence of where individual battery watts were delivered.
+
+**Temporary mitigation:** Dispatcher-only systemd process override
+sets recovery exit 25%, recovery target 1000 W, and physical forced
+battery-target cap 1000 W. Existing root/standard watchdogs, site
+import limit, inverter floor, shared env, EVCC 6 A and the EV grid
+priority gate `mode=shadow` were unchanged. An independent root
+timer performs measured-power/CT/EVCC/SoC safety checks every ~15 s
+and automatically restores the normal dispatcher start at 25%,
+by 13:26 CET, or on failure. At first verified load the inverter
+was actually charging around 1024 W while EVCC still read 6.0 A.
+This does **not** prove house SoC has yet reached 25%.
+
+See [operator runbook](docs/temporary-soc25-pilot-2026-10-31.md)
+and [ADR](docs/architecture/adr-2026-10-31-temporary-soc25-recovery.md).
+Do not convert this one-off approval into permanent 1000 W recovery.
+
 ## Current code status — 2026-10-27 consolidation
 
 The 17% reserve and 13–16% recovery experiment described below is **historical**.

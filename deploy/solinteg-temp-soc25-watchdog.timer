@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch and revert one-off Solinteg 25 percent battery recovery pilot
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solinteg-temp-soc25-watchdog.service
+
+[Install]
+WantedBy=timers.target
