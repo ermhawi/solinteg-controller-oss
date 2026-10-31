@@ -57,6 +57,15 @@ to the car.
 - Original active EV policy still knows only the night-tested 6 A
   discharge case and **still does not protect Auto/idle**. No physical
   mode change was made by this ADR.
+- At 2026-10-31 10:55 CET the ordinary poller lost the extended
+  L1/L2/L3 CT block after a Modbus decode error and marked all three
+  phase fields NULL. The observer correctly returned `unavailable`;
+  no fallback to stale or invented phase readings is acceptable. The
+  existing poller retries independently without changing physical
+  control. The poller reported CT recovery at 10:57:29 CET, after one
+  failed attempt. A read-only observer run at 10:57:56 CET then
+  recovered to `existing_charge` with zero device writes. Verify
+  sustained reliability before any active EV test.
 - Before any physical trial: prove a solar-preserving alternative to
   Auto, retain SoC recovery, test nighttime and daytime transitions,
   validate phase/RMS current margins independently, and obtain separate

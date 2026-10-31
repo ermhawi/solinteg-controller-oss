@@ -218,10 +218,12 @@ sudo -n -u solinteg-evshadow python3 scripts/tools/ev_grid_priority_replay.py \
 ```
 
 During sunny `idle` the observer reports `solar_hold_unverified`
-without a hardware-action suggestion. Its physical-control permission
-is always false. The installed production EV guard **still does not
-intercept Auto/idle**; there is no new PV- or battery-write path from
-these units. See `docs/architecture/adr-2026-10-31-ev-solar-shadow.md`.
+without a hardware-action suggestion. When extended L1/L2/L3 CT reads
+are temporarily unavailable, it fails closed with `unavailable`
+without reusing old readings; the existing poller handles CT retries.
+Its physical-control permission is always false. The installed production
+EV guard **still does not intercept Auto/idle**; there is no new PV-
+or battery-write path from these units. See `docs/architecture/adr-2026-10-31-ev-solar-shadow.md`.
 
 **solinteg-healthcheck** (every 5 min) and **solinteg-heartbeat-ping** (every 10 min) need
 two accounts, both free, both one-time setup done in their own app/website — nothing to

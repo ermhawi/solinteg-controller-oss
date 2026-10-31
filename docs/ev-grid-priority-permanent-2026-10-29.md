@@ -343,6 +343,21 @@ fas-/solfördelning är **inte** ett RMS-fassäkringsskydd.
 Historikdatabasen saknar både enskild Ict2 och fasregister 50006 vid
 varje prov; replay etiketterar därför dessa uttryckligen som antaganden.
 
+**Datakvalitet i produktion:** 2026-10-31 10:55 CET rapporterade
+pollern ett Modbus-avkodningsfel i det utökade CT-blocket, och
+`meter_l1_w`/`meter_l2_w`/`meter_l3_w` blev `null` tills dess att
+den befintliga retryfunktionen återfår mätvärden.
+Den nya observatören visade då `unavailable`
+(`invalid or missing meter_l1_w`), utan att använda gamla CT-värden
+eller skriva ett nytt inverterbörvärde. Pollern rapporterade att
+CT-avläsningen återhämtat sig automatiskt klockan **10:57:29 CET**
+efter ett misslyckat läsförsök. En ny observer-körning klockan
+**10:57:56 CET** gav åter `existing_charge`, `device_writes=0`,
+utan omstart av den vanliga dispatchern. Den ordinarie ARMED-dispatchern
+och dess root-watchdog fortsatte vara aktiva; detta är **ingen**
+verifiering av säkringsskydd. Fysisk EV-prioritering kräver stabil CT
+och oberoende fasström-/RMS-kontroll.
+
 **Driftsättningsgräns:** Den tidigare checksummebundna ARMED-dispatchern,
 dess EV-policy och root-watchdog, 6 A EVCC-tak och `gate.json mode=shadow`
 är **oförändrade**. Separat explicit tillstånd krävs för att
