@@ -1,15 +1,19 @@
 # Permanent nätprioritering för XC40 på L3 – releaseförberedelse 2026-10-29
 
-**Status: versionshanterad och testad, INTE installerad eller fysiskt aktiverad.**
+**Status 2026-10-31:** Rootägt releasepaket och watchdog-units är
+installerade på Dell, men **normal dispatcher är oförändrad, gate saknas
+och watchdog-timern är inaktiv**. Varken shadow-läge eller fysisk
+EV-prioritering är aktiverade.
 Bygger på det verifierade provet 2026-10-28:
 [runbook](ev-grid-priority-trial-2026-10-28.md) och
 [Notion](https://app.notion.com/p/400aa897399b81af9d11f18187955e75).
 
 ## Avgränsning och befintlig drift
 
-- Den vanliga `solinteg-dispatch.service` är **ARMED**. Ingen tjänst,
-  inverterregister, EVCC/Volvo-inställning, gate eller watchdog har ändrats
-  i drift i denna förberedelse.
+- Den vanliga `solinteg-dispatch.service` är **ARMED**. Under den första
+  förberedelsen 2026-10-29 ändrades inga tjänster, inverterregister,
+  EVCC/Volvo-inställningar, gate-filer eller watchdoggar. 2026-10-31 installerades
+  separata watchdog-units och releasefiler utan att ändra den aktiva dispatchern.
 - Dell kör fortfarande äldre `/opt/solinteg/app/scripts/services/dispatch_loop.py`
   (SHA256 `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`);
   den är identisk med original-backupen från provet och saknar EV-hooken.
@@ -35,8 +39,9 @@ Bygger på det verifierade provet 2026-10-28:
 - EVCC-observatören är aktiv och läser `read_ok=true`, `state=C2`,
   `Ict2=6,0 A`, `configured_pwm_raw=pilot_pwm_raw=100`, `writes=0`.
   Övriga isolerade HA-/pris-/historiktjänster är aktiva men skrivskyddade.
-- Den permanenta watchdog-timern är ännu inte installerad, trial-timern
-  är inaktiv och ingen schema-2-gate finns. `phase_guard_verified=false`;
+- Vid denna kontroll klockan 10:08 var den permanenta watchdog-timern
+  ännu inte installerad. Trial-timern var inaktiv och ingen schema-2-gate
+  fanns. `phase_guard_verified=false`;
   inget oberoende RMS-baserat L3-säkringsskydd är verifierat.
 - Vid kontrollen understeg husbatteriets SoC 25 % och PV översteg 100 W.
   Nattpolicyns gränser (SoC 25–95 %, PV högst 100 W) var inte uppfyllda.
@@ -62,8 +67,69 @@ sudo -n python3 scripts/tools/ev_grid_priority_preflight.py
 `shadow_eligible_now=true` är **inte** ett aktiveringsbeslut.
 `physical_activation_authorized` och
 `independent_l3_rms_protection_verified` förblir `false`.
-För verklig installation krävs fortfarande releasegrindarna nedan,
-inklusive särskilt godkänt underhållsfönster och fysisk aktivering.
+Den kontrollerade shadow-omstarten är godkänd, men måste invänta
+releasevillkoren nedan. Fysisk `mode=active` kräver senare ett separat
+uttryckligt godkännande.
+
+## Kontrollerad shadow-installation – delvis genomförd 2026-10-31 10:17 CET
+
+Användaren godkände en kontrollerad installation och omstart **endast i
+shadow-läge**. Dagens preflight gav husbatteri-SoC cirka 20 % och
+PV cirka 388 W. Säkerhetsvillkoren för den dokumenterade releasegrinden
+(SoC 25–95 %, PV högst 100 W) var **inte uppfyllda**, så dispatcher-omstarten
+och shadow-aktiveringen **genomfördes inte**. Ingen ny strömbegränsning,
+bil-/EVCC-skrivning eller inverterskrivning ingick i förberedelserna.
+
+Följande förbereddes med verifierade SHA256 och rootägda filer:
+
+- `/var/lib/solinteg-ev-grid-priority/dispatch-before.py` (0400):
+  byteexakt original, SHA256
+  `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`.
+- `/var/lib/solinteg-ev-grid-priority/guard-before.py` (0400):
+  backup av tidigare trialpolicy, SHA256
+  `4ef6f2fc36acb449ee05498081a64e6bccabf25bc0c1a46a0f25ac4ced1857d2`.
+  **Viktigt:** den installerade trialpolicyn har inte stöd för schema-2.
+  Den måste ersättas med den granskade policyfilen i releasefönstret.
+- `/var/lib/solinteg-ev-grid-priority/dispatch-shadow-candidate.py`
+  (0400): AST-verifierad, minimal dispatcherpatch, SHA256
+  `7934dd1c31e6ea07780f33492ae57ca33447b3ff7e43259edebd2116ae2db6d4`.
+- `/usr/local/libexec/solinteg-ev-grid-priority/`:
+  rootägda, skrivskyddade kopior av versionerad watchdog och permanent policy.
+  `/opt/solinteg/app/scripts/services` lämnades oförändrad.
+- `/etc/systemd/system/solinteg-ev-grid-priority-watchdog.{service,timer}`
+  installerades och godkändes av `systemd-analyze verify`.
+  En manuellt startad oneshot gav
+  `{"state":"not_armed","device_writes":0}`.
+  **Timern är fortfarande disabled** och schema-2-`gate.json` saknas.
+
+Watchdoggen har nu separat `mode=shadow`-övervakning: verifiera
+rootägarskap, originalbackup, installerad policy, dispatcher-SHA och
+dispatch-tjänstens drift; vid avvikelse återkalla gate och återställ
+byteexakt original. Vid godkänd kontroll loggas `shadow_monitor_ok`.
+**Shadow-läget kräver inte giltiga nattliga EVCC/SoC/PV-värden för sin
+integritetskontroll och skriver aldrig ett nytt effektbörvärde.**
+`mode=active` behåller samtliga tidigare krav på färska fysiska
+mätvärden och verifierad batterirespons.
+
+Nästa bemannade steg när releasegrinden kan godkännas:
+
+1. Upprepa preflight, kontrollera BMS och CT (SoC, PV, temperatur,
+   stabil EVCC 6 A och register 50006=0). Kontrollera original-SHA och
+   rootägd backup **omedelbart före** varje byte.
+2. Ersätt bara exakt känd dispatcher med den förberedda minimala patchen
+   och den granskade schema-2-policyn (ingen `Git HEAD`-synk).
+   Skapa rootägd `gate.json` med **endast** `mode=shadow` och exakt
+   installerad SHA256. Omstart av dispatcher får ske först när alla
+   releasevillkor är uppfyllda.
+3. Aktivera 15-sekunders watchdog-timer och verifiera
+   `shadow_monitor_ok`, oförändrade beslut/batterisetpoints,
+   färska loggar och inga EV-/inverterskrivningar från den nya policyn.
+   Vid fel: återkalla gate, stoppa dispatcher kontrollerat,
+   återställ byteexakt originaldispatcher **och** tidigare guard från
+   rootbackup, starta originaltjänsten och verifiera checksummor.
+4. Fysisk `mode=active` ingår **inte** i detta godkännande och kräver
+   separat uttryckligt tillstånd samt fullständiga säkrings- och
+   watchdogkontroller.
 
 ## Versionerad design (ingen extra fysisk aktivering)
 

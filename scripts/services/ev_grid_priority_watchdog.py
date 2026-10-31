@@ -165,9 +165,10 @@ def monitor(now: datetime) -> str:
         gate = read_json(GATE)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError):
         return "not_armed"
-    if gate.get("mode") != "active":
+    mode = gate.get("mode")
+    if mode not in ("shadow", "active"):
         return "not_armed"
-    if not guard._trusted_file(GATE) or guard.validate_gate(gate, now) != "active":
+    if not guard._trusted_file(GATE) or guard.validate_gate(gate, now) != mode:
         rollback("untrusted or invalid gate", now, gate)
         return "rolled_back"
     try:
@@ -184,6 +185,10 @@ def monitor(now: datetime) -> str:
         if hashlib.sha256(DISPATCH.read_bytes()).hexdigest() != gate["dispatcher_sha256"]:
             raise RuntimeError("dispatcher hash changed")
         run(["/usr/bin/systemctl", "is-active", "--quiet", SERVICE], timeout=8)
+        if mode == "shadow":
+            atomic_status({"at_utc": now.isoformat(), "state": "shadow_monitor_ok",
+                           "activation_id": gate["activation_id"]})
+            return "shadow_monitor_ok"
         evcc = read_json(EVCC)
         if idle_ev(evcc, now):
             atomic_status({"at_utc": now.isoformat(), "state": "idle_ev_not_charging",

@@ -62,6 +62,44 @@ class PermanentWatchdogTests(unittest.TestCase):
             self.assertEqual(w.monitor(NOW),"not_armed")
             run.assert_not_called()
 
+    def test_shadow_monitors_integrity_without_requiring_night_conditions(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder=Path(t)
+            paths,gate,_,_=self.fixture(folder)
+            gate["mode"]="shadow"
+            paths["GATE"].write_text(json.dumps(gate),encoding="utf-8")
+            paths["EVCC"].unlink()
+            paths["LIVE"].unlink()
+            with self.setup_watchdog(paths,folder),patch.object(
+                    guard,"_trusted_file",side_effect=lambda p:p.is_file()),patch.object(
+                    w,"run") as run,patch.object(w,"rollback") as rollback:
+                self.assertEqual(w.monitor(NOW),"shadow_monitor_ok")
+                status=json.loads(paths["STATUS"].read_text())
+                self.assertEqual(status["state"],"shadow_monitor_ok")
+                self.assertEqual(status["activation_id"],gate["activation_id"])
+                run.assert_called_once_with(
+                    ["/usr/bin/systemctl","is-active","--quiet",w.SERVICE],timeout=8)
+                rollback.assert_not_called()
+
+    def test_shadow_fails_closed_on_dispatch_or_service_failure(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder=Path(t)
+            paths,gate,_,_=self.fixture(folder)
+            gate["mode"]="shadow"
+            paths["GATE"].write_text(json.dumps(gate),encoding="utf-8")
+            with self.setup_watchdog(paths,folder),patch.object(
+                    guard,"_trusted_file",side_effect=lambda p:p.is_file()),patch.object(
+                    w,"rollback") as rollback:
+                paths["DISPATCH"].write_text("unexpected change",encoding="utf-8")
+                self.assertEqual(w.monitor(NOW),"rolled_back")
+                self.assertIn("hash",rollback.call_args[0][0])
+                rollback.reset_mock()
+                paths["DISPATCH"].write_text("from ev_grid_priority_guard import guard_dispatch\ndef main():\n    pass\n",
+                                              encoding="utf-8")
+                with patch.object(w,"run",side_effect=RuntimeError("dispatch down")):
+                    self.assertEqual(w.monitor(NOW),"rolled_back")
+                self.assertIn("dispatch down",rollback.call_args[0][0])
+
     def test_healthy_monitor_creates_matching_fresh_heartbeat(self):
         with tempfile.TemporaryDirectory() as t:
             folder=Path(t)
