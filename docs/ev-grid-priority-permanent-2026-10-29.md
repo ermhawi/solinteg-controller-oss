@@ -428,6 +428,18 @@ konservativa stoppgräns 3 200 W. Återställning var klar **11:42:56**,
 husbatteriet nådde **21 %**, inte 25 %. Ingen ny höjning genomfördes.
 Se [runbook](temporary-soc25-pilot-2026-10-31.md).
 
+**Separat adaptivt 1,5 kW-prov 2026-10-31:** Ett andra
+uttryckligen godkänt, fasberoende återhämtningsprov körs från
+**12:04 CET**, med ny separat rootövervakning och samma oberoende
+3 200 W-fasstopp. L3-planeringsgränsen är 3 000 W, återhämtnings-
+börvärde max 1 500 W, nedreglering till 300 W vid otillförlitliga
+CT-mätningar. En fysisk mätning bekräftade **1 523 W laddning**,
+EVCC Ict2 **5,9 A** och bibehållen EV-rootgate `shadow`.
+Detta är **inte** EV-grid-prioritering eller ny Auto/idle-kontroll.
+25 % SoC har ännu inte verifierats; oberoende automatisk
+återställning senast **14:04 CET**. Se
+[runbook](temporary-soc25-adaptive-pilot-2026-10-31.md).
+
 ## Kvalitet och avgränsat leveransbeslut
 
 - Offline: befintliga 16 trialpolicyfall/9 trialwatchdogfall

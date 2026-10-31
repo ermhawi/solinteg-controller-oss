@@ -32,6 +32,28 @@ See [operator runbook](docs/temporary-soc25-pilot-2026-10-31.md)
 and [ADR](docs/architecture/adr-2026-10-31-temporary-soc25-recovery.md).
 Do not convert this one-off approval into permanent 1000 W recovery.
 
+## Adaptivt återhämtningsprov upp till 1,5 kW — 2026-10-31
+
+Efter stoppet av 1 kW-försöket har ägaren särskilt godkänt **ett nytt**
+fasberoende 1,5 kW-prov till 25 % SoC med bibehållna 3,2 kW/fas och
+6,5 kW totalt som oberoende avbrytningsvillkor. En separat dispatcher-
+processlokal wrapper aktiverar redan existerande L3-charge-guard
+med ett lägre **3,0 kW planeringsutrymme** och tillåter nedreglering
+till originalets 300 W vid otillförlitliga CT-mätvärden. EVCC kvar på
+6 A; normal dispatcherkod, root EV-gate och privata env oförändrade.
+Det är ett temporärt prov, inte ny permanent policy.
+
+**Verifierat 12:04 CET:** Efter en omedelbart återställd första
+startkontroll (systemd/PID-övergång) aktiverades ett nytt, separat
+root-övervakat prov. Dispatcherns `charge 1500 W` bekräftades
+med verklig `battery_w=-1523 W`, EVCC Ict2 **5,9 A** och L3
+nätimport **1 437 W**. Root watchdog var aktiv och verifierad.
+Fortsatt 25 %-mål, hårt slut **14:04 CET**, eller tidigare
+säkerhetsavbrott. Inget påstående om uppnått 25 % ännu.
+
+Se [runbook](docs/temporary-soc25-adaptive-pilot-2026-10-31.md)
+och [ADR](docs/architecture/adr-2026-10-31-adaptive-soc25-recovery.md).
+
 ## Current code status — 2026-10-27 consolidation
 
 The 17% reserve and 13–16% recovery experiment described below is **historical**.

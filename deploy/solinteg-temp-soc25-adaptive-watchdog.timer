@@ -1,0 +1,11 @@
+[Unit]
+Description=Monitor and restore one-off 1.5kW adaptive Sunwoda charge pilot
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solinteg-temp-soc25-adaptive-watchdog.service
+
+[Install]
+WantedBy=timers.target

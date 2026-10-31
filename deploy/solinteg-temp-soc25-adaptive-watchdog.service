@@ -1,0 +1,17 @@
+[Unit]
+Description=Independent rollback watchdog for bounded 1.5kW adaptive SoC25 pilot
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/solinteg-recovery-25-pilot/temporary_soc25_adaptive_watchdog.py --tick
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/etc/systemd/system/solinteg-dispatch.service.d /var/lib/solinteg-recovery-25-adaptive-pilot
+TimeoutStartSec=90

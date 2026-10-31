@@ -188,6 +188,15 @@ enable active mode without a separately approved physical test. Roll back
 this guard by setting `DISPATCH_L3_CHARGE_GUARD_MODE=0` and restarting dispatch.
 No behavior change is made by merely syncing code to Git.
 
+**One-off 1.5 kW adaptive 25% recovery trial (separately approved):**
+See [adaptive runbook](../docs/temporary-soc25-adaptive-pilot-2026-10-31.md)
+and [ADR](../docs/architecture/adr-2026-10-31-adaptive-soc25-recovery.md).
+This dedicated 46-prefixed drop-in starts a process-local wrapper around the
+**unchanged** ARMED dispatcher. Existing L3 guard actively reduces 1500 W
+charge as needed within a 3000 W L3 planning budget, down to 300 W on
+unknown CT. Original 3200 W per-phase emergency STOP and independent
+15s rollback remain. It does **not** write EVCC or arm EV grid priority.
+
 **Temporary 25% house-battery recovery pilot (separately approved):**
 See [the runbook](../docs/temporary-soc25-pilot-2026-10-31.md).
 It uses a temporary process-scoped dispatch systemd drop-in and a root
