@@ -166,6 +166,26 @@ class EvGridPriorityTests(unittest.TestCase):
             self.assertEqual(out[:5],("discharge",2300,9.5,False,"original"))
             self.assertEqual(out[5]["ev_grid_trial_status"],"shadow")
 
+    def test_shadow_with_daylight_and_low_soc_never_changes_dispatch_target(self):
+        from unittest.mock import patch
+        prod={"schema_version":2,"mode":"shadow",
+              "policy_id":guard.PRODUCTION_POLICY_ID,
+              "activation_id":"shadow-daytime-20261031",
+              "activated_utc":(NOW-timedelta(minutes=5)).isoformat(),
+              "dispatcher_sha256":"a"*64}
+        with tempfile.TemporaryDirectory() as d:
+            folder=Path(d)
+            live,evcc,gate=[folder/n for n in ("live.json","evcc.json","gate.json")]
+            live.write_text(json.dumps({**LIVE,"pv_w":550,"soc_pct":20}))
+            evcc.write_text(json.dumps(EVCC))
+            gate.write_text(json.dumps(prod))
+            with patch.object(guard,"_trusted_file",return_value=True):
+                out=guard.guard_dispatch("discharge",2300,9.5,False,"original",{},NOW,
+                    live_path=live,evcc_path=evcc,gate_path=gate)
+            self.assertEqual(out[:5],("discharge",2300,9.5,False,"original"))
+            self.assertEqual(out[5]["ev_grid_priority_status"],"unavailable")
+            self.assertIn("SoC/temperature/PV",out[5]["ev_grid_trial_reason"])
+
     def test_no_hardware_or_socket_imported(self):
         text=Path(guard.__file__).read_text().lower()
         for term in ("import pymodbus", "requests.post", "socket.", "write_register",

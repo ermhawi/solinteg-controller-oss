@@ -1,9 +1,8 @@
 # Permanent nätprioritering för XC40 på L3 – releaseförberedelse 2026-10-29
 
-**Status 2026-10-31:** Rootägt releasepaket och watchdog-units är
-installerade på Dell, men **normal dispatcher är oförändrad, gate saknas
-och watchdog-timern är inaktiv**. Varken shadow-läge eller fysisk
-EV-prioritering är aktiverade.
+**Status 2026-10-31 10:25 CET:** Den minimala EV-hooken är installerad,
+`mode=shadow` är aktiverat och root-watchdoggen kör var 15:e sekund.
+**Ingen fysisk EV-nätprioritering är aktiverad** (`mode=active` ej godkänt).
 Bygger på det verifierade provet 2026-10-28:
 [runbook](ev-grid-priority-trial-2026-10-28.md) och
 [Notion](https://app.notion.com/p/400aa897399b81af9d11f18187955e75).
@@ -14,11 +13,13 @@ Bygger på det verifierade provet 2026-10-28:
   förberedelsen 2026-10-29 ändrades inga tjänster, inverterregister,
   EVCC/Volvo-inställningar, gate-filer eller watchdoggar. 2026-10-31 installerades
   separata watchdog-units och releasefiler utan att ändra den aktiva dispatchern.
-- Dell kör fortfarande äldre `/opt/solinteg/app/scripts/services/dispatch_loop.py`
-  (SHA256 `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`);
-  den är identisk med original-backupen från provet och saknar EV-hooken.
-- Den äldre trial-timern är `disabled/inactive`, gate-filen saknas,
-  och trialens rollback-status är `restored_original_dispatch`/`rollback_ok=true`.
+- Vid den tidigare read-only-kontrollen körde Dell den äldre dispatchern
+  (SHA256 `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`)
+  utan EV-hook. Sedan 10:25 kör den minimalt patchade shadow-versionen;
+  det byteexakta originalet finns kvar i rootägd backup.
+- Den äldre trial-timern är `disabled/inactive`; trialens tidigare
+  rollback-status är `restored_original_dispatch`/`rollback_ok=true`.
+  Den nya permanenta watchdog-timern är aktiv med en separat schema-2-gate i shadow-läge.
 - **Historisk blockerare 2026-10-29 18:53 CET:** EVCC-observatören
   rapporterade `read_ok=false, state=unknown`. Läsback fungerar åter enligt
   den skrivskyddade kontrollen 2026-10-31; det undanröjer inte övriga krav.
@@ -67,69 +68,110 @@ sudo -n python3 scripts/tools/ev_grid_priority_preflight.py
 `shadow_eligible_now=true` är **inte** ett aktiveringsbeslut.
 `physical_activation_authorized` och
 `independent_l3_rms_protection_verified` förblir `false`.
-Den kontrollerade shadow-omstarten är godkänd, men måste invänta
-releasevillkoren nedan. Fysisk `mode=active` kräver senare ett separat
-uttryckligt godkännande.
+Den godkända shadow-omstarten är nu genomförd och verifierad.
+Nattgränserna begränsar endast aktiv fysisk styrning, inte
+shadow-installationen. Fysisk `mode=active` kräver fortfarande
+ett separat uttryckligt godkännande.
 
-## Kontrollerad shadow-installation – delvis genomförd 2026-10-31 10:17 CET
+## Driftsatt shadow-läge – 2026-10-31 10:25 CET
 
-Användaren godkände en kontrollerad installation och omstart **endast i
-shadow-läge**. Dagens preflight gav husbatteri-SoC cirka 20 % och
-PV cirka 388 W. Säkerhetsvillkoren för den dokumenterade releasegrinden
-(SoC 25–95 %, PV högst 100 W) var **inte uppfyllda**, så dispatcher-omstarten
-och shadow-aktiveringen **genomfördes inte**. Ingen ny strömbegränsning,
-bil-/EVCC-skrivning eller inverterskrivning ingick i förberedelserna.
+Användaren godkände en kontrollerad omstart och installation i
+**enbart shadow-läge**. Förberedelserna avbröts först eftersom SoC var
+20 % och solproduktionen över 100 W; detta visade sig vara en för strikt
+tolkning. Nattgränsen är ett säkerhetsvillkor för *aktiv fysisk*
+urladdningsbegränsning, **inte** för att installera eller bevaka shadow.
+Denna skillnad verifierades även med ett regressionstest som säkrar
+oförändrad dispatch-tuple vid SoC 20 % och PV 550 W.
 
-Följande förbereddes med verifierade SHA256 och rootägda filer:
+### Versions- och rollbackspärrar
 
-- `/var/lib/solinteg-ev-grid-priority/dispatch-before.py` (0400):
-  byteexakt original, SHA256
-  `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`.
-- `/var/lib/solinteg-ev-grid-priority/guard-before.py` (0400):
-  backup av tidigare trialpolicy, SHA256
-  `4ef6f2fc36acb449ee05498081a64e6bccabf25bc0c1a46a0f25ac4ced1857d2`.
-  **Viktigt:** den installerade trialpolicyn har inte stöd för schema-2.
-  Den måste ersättas med den granskade policyfilen i releasefönstret.
-- `/var/lib/solinteg-ev-grid-priority/dispatch-shadow-candidate.py`
-  (0400): AST-verifierad, minimal dispatcherpatch, SHA256
+- Originaldispatcher: SHA256
+  `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`,
+  root/0400-backup:
+  `/var/lib/solinteg-ev-grid-priority/dispatch-before.py`.
+- Ursprunglig trialpolicy: SHA256
+  `4ef6f2fc36acb449ee05498081a64e6bccabf25bc0c1a46a0f25ac4ced1857d2`,
+  root/0400-backup:
+  `/var/lib/solinteg-ev-grid-priority/guard-before.py`.
+- Installerad dispatcher med **enbart minimal EV-hook**: SHA256
   `7934dd1c31e6ea07780f33492ae57ca33447b3ff7e43259edebd2116ae2db6d4`.
-- `/usr/local/libexec/solinteg-ev-grid-priority/`:
-  rootägda, skrivskyddade kopior av versionerad watchdog och permanent policy.
-  `/opt/solinteg/app/scripts/services` lämnades oförändrad.
-- `/etc/systemd/system/solinteg-ev-grid-priority-watchdog.{service,timer}`
-  installerades och godkändes av `systemd-analyze verify`.
-  En manuellt startad oneshot gav
-  `{"state":"not_armed","device_writes":0}`.
-  **Timern är fortfarande disabled** och schema-2-`gate.json` saknas.
+  Originalets serviceägare, grupp och filrättigheter behölls.
+- Installerad policy: SHA256
+  `709f260b41163bcd18c45a66816ad7f500dedda2235266cb74e8eb2fab9dab79`.
+  Identisk med rootägd kopia under
+  `/usr/local/libexec/solinteg-ev-grid-priority/`.
+- Rootägd schema-2-`/var/lib/solinteg-ev-grid-priority/gate.json`:
+  **`mode=shadow`**, unikt activation-ID och bunden dispatcher-SHA.
+  Ingen `mode=active`-gate skapades.
+- Separat root/systemd-watchdog med timer var 15:e sekund:
+  `shadow_monitor_ok` verifierades direkt efter omstart och vid
+  följande timerticks. Ordinarie `solinteg-watchdog.timer` behölls.
 
-Watchdoggen har nu separat `mode=shadow`-övervakning: verifiera
-rootägarskap, originalbackup, installerad policy, dispatcher-SHA och
-dispatch-tjänstens drift; vid avvikelse återkalla gate och återställ
-byteexakt original. Vid godkänd kontroll loggas `shadow_monitor_ok`.
-**Shadow-läget kräver inte giltiga nattliga EVCC/SoC/PV-värden för sin
-integritetskontroll och skriver aldrig ett nytt effektbörvärde.**
-`mode=active` behåller samtliga tidigare krav på färska fysiska
-mätvärden och verifierad batterirespons.
+### Omstart och verifierad drift
 
-Nästa bemannade steg när releasegrinden kan godkännas:
+Vid deployment var husbatteriet **20 %**, PV **1 787 W** och
+EVCC läste ungefär 5,9 A på Ict2 (`state=C2`).
+Den vanliga ARMED-dispatchern stoppades med SIGTERM, gick som avsett
+tillbaka till Auto (`General 0x101`) och startades sedan med samma
+miljöfil och den minimala EV-hooken. Originalets funktion för
+nätimportgräns och återhämtningsladdning fortsatte att fungera:
+vid 10:25:28 ställdes ordinarie importgräns in igen, och
+vid 10:25:31 skickades den befintliga SoC-recovery-laddningen på 300 W.
+Vid 10:25:40 var den ännu
+`accepted_pending_physical_confirmation`; det är **inte**
+en verifiering av faktiskt laddad effekt. Vid 10:26:59 var
+uppmätt husbatterieffekt **-313 W** (laddning, inte urladdning),
+och SoC fortsatt 20 %. Detta visar att återhämtningsladdningen
+återupptogs efter omstarten.
 
-1. Upprepa preflight, kontrollera BMS och CT (SoC, PV, temperatur,
-   stabil EVCC 6 A och register 50006=0). Kontrollera original-SHA och
-   rootägd backup **omedelbart före** varje byte.
-2. Ersätt bara exakt känd dispatcher med den förberedda minimala patchen
-   och den granskade schema-2-policyn (ingen `Git HEAD`-synk).
-   Skapa rootägd `gate.json` med **endast** `mode=shadow` och exakt
-   installerad SHA256. Omstart av dispatcher får ske först när alla
-   releasevillkor är uppfyllda.
-3. Aktivera 15-sekunders watchdog-timer och verifiera
-   `shadow_monitor_ok`, oförändrade beslut/batterisetpoints,
-   färska loggar och inga EV-/inverterskrivningar från den nya policyn.
-   Vid fel: återkalla gate, stoppa dispatcher kontrollerat,
-   återställ byteexakt originaldispatcher **och** tidigare guard från
-   rootbackup, starta originaltjänsten och verifiera checksummor.
-4. Fysisk `mode=active` ingår **inte** i detta godkännande och kräver
-   separat uttryckligt tillstånd samt fullständiga säkrings- och
-   watchdogkontroller.
+Efterföljande read-only verifiering klockan 10:25:51 och
+återigen 10:26:59 visade `solinteg-dispatch.service=active`,
+`solinteg-ev-grid-priority-watchdog.timer=active`,
+`shadow_monitor_ok` med korrekt activation-ID och installerad
+dispatcher-SHA, samt färsk dispatch-heartbeat.
+PV var vid den sista kontrollen 2 565 W; shadow-läget var
+fortsatt normalt. EV-watchdoggen rapporterar `device_writes=0`.
+
+**Viktigt:** SIGTERM/omstart av den ordinarie ARMED-dispatchern
+påverkar växelriktarens befintliga styrning kortvarigt; det är inte
+samma sak som EV-policyns shadow-läge. Den nya EV-hooken
+skriver inga register och kan inte begränsa batteriet i shadow-läge.
+För `discharge` vid hög PV/låg SoC registreras `unavailable`
+med oförändrat beslut; `charge`, `idle` och SoC-recovery lämnas
+också oförändrade.
+
+### Varför 100 W fortfarande finns i den aktiva policyn
+
+Beräkningen av tillåten batteriurladdning mot bilens L3-last
+bygger på en nattlig approximation: växelriktarens balanserade
+AC-utmatning fördelas på tre faser när solproduktionen är försumbar.
+Vid större PV kan AC-utmatningen komma både från solceller och
+husbatteri. Utan en separat, verifierad fördelning riskerar policyn
+att felaktigt tilldela bilens laddning till husbatteriet respektive PV.
+Därför får `mode=active` ännu bara påverka urladdning vid
+PV högst 100 W och SoC 25–95 %. Detta är **en tillfällig gräns för
+bevisläget**, inte ett krav på att minska solproduktionen.
+En PV-medveten modell, fasprov och säkringsmarginaler måste
+utvecklas och verifieras separat innan dessa aktiva gränser höjs.
+
+### Kvalitet efter shadow-deployment
+
+- **820 Python-tester** godkända, inklusive regressionstest för
+  skuggdrift med hög PV och SoC under nattpolicyns gräns.
+- **697 Vitest-tester** godkända (ett manuellt test överhoppat),
+  ESLint, TypeScript typecheck och Zensical-bygge utan fel.
+- Källkodens policy och dispatcher-SHA verifierade mot installerade
+  rootägda kopior; ingen `mode=active`-gate finns.
+
+### Kvarstående arbete
+
+- Följ fortsatt upp SoC-recovery, shadow-status under både
+  dags- och nattförhållanden samt datakvalitet; den första
+  mätningen efter restart visade -313 W batteriladdning.
+- Förbättra skuggberäkningen för hög PV utan aktivering av fysisk styrning.
+- `mode=active`, dynamiska EVCC-strömändringar och en eventuell
+  RMS-baserad L3-fassäkringsreglering ingår **inte** i denna release;
+  nytt uttryckligt godkännande och ytterligare fysiska prov krävs.
 
 ## Versionerad design (ingen extra fysisk aktivering)
 
@@ -184,7 +226,7 @@ avsiktligt standby framför att påverka övrig styrning; permanent betyder
 alltid tillgänglig bevakning, **inte garanterad nätmatning i varje solscenario**.
 Ytterligare fysiska prov kräver särskilt tillstånd.
 
-## Checksummebunden minimal dispatcherpatch (endast offline)
+## Checksummebunden minimal dispatcherpatch (offline förberedd, nu i shadow-drift)
 
 F-11 löses genom `scripts/tools/prepare_ev_grid_priority_dispatch.py`, som
 läser den verifierade äldre dispatchern och bygger en AST-validerad
@@ -201,10 +243,11 @@ och kandidat-SHA256
 `7934dd1c31e6ea07780f33492ae57ca33447b3ff7e43259edebd2116ae2db6d4`,
 `written=false`. Scriptet avvisar okänd originalchecksumma, ändrade hookankare
 och dubbel injektion. Det lägger enbart till `Path`-import och EV-prioritering
-före den gamla charge-guarden. Installations- och restartsteg lämnas avsiktligt
-ogenomförda tills separat uttryckligt godkännande ges.
+före den gamla charge-guarden. Verktyget utför fortfarande **ingen installation**.
+Den separat godkända shadow-releaseprocessen använde den checksummebundna
+kandidaten för att uppdatera ARMED-installationen 2026-10-31.
 
-## Driftsättningsgrind – får inte utföras utan nytt uttryckligt godkännande
+## Releasegrind – shadow-steg 1–5 genomförda, aktiv styrning kräver nytt godkännande
 
 1. Kontrollera drift och Git-version en gång till. Hantera F-11 genom
    minimal och separat granskad patch/hook i *faktiskt installerad* dispatcher,
