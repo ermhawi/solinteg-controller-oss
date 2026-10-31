@@ -28,7 +28,7 @@ Bygger på det verifierade provet 2026-10-28:
   kompatibilitetsgranskning och riskbedömning. Endast det granskade skyddet
   får överföras som minimal versionerad förändring i releasefönstret.
 
-## Senaste read-only releasekontroll (2026-10-31 10:08 CET)
+## Historisk read-only releasekontroll före shadow-drift (2026-10-31 10:08 CET)
 
 - `solinteg-dispatch.service` är aktiv men kör fortfarande original-SHA256
   `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`
@@ -308,6 +308,49 @@ kandidaten för att uppdatera ARMED-installationen 2026-10-31.
   husbatteriurladdning under EV-laddning; rollback återställer beprövad
   fysisk säkerhet, **inte nätprioriteringens ekonomi**.
 
+## Solmedveten EV/L3-skugganalys – 2026-10-31
+
+**Genomfört, utan fysisk styrning:** Historiska `ev_samples` och
+`control_actions` kan nu återspelas via
+`scripts/tools/ev_grid_priority_replay.py` (båda SQLite-databaserna öppnas
+endast med `mode=ro`). Ett verkligt replayfönster
+2026-10-28 15:30 UTC–2026-10-31 09:40 UTC innehöll **7 919 prover**,
+**327** verifierade EV-laddprover, **102** samtidiga batteriurladdningar
+över 500 W och **sex** sammanhängande episoder. Replay skiljer
+`idle_auto`, `planned_discharge`, `charge_pending_response`
+och okända beslut. Dessa är korrelationer, inte kausal elflödesmätning.
+
+En isolerad `solinteg-ev-grid-solar-shadow.service/.timer` är installerad
+på Dell, med **30 s periodicitet**, som `solinteg-evshadow`.
+Rootägd kod under `/usr/local/libexec/solinteg-ev-grid-solar-shadow/`
+läser befintliga `live.json`, EVCC:s skrivskyddade FC03-snapshot,
+den senaste faktiskt loggade dispatchåtgärden och root-gatens läge.
+Den skriver enbart privat advisory JSON till:
+
+`/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json`
+
+Den nya observationsmodellen beräknar en solmedveten hypotetisk
+urladdningsgräns och validerar verklig Ict2, 50006=0, fas-CT och
+PV/batteri-/AC-konsistens. För `idle`/Auto vid hög PV lämnas förslaget
+avsiktligt **utan ett tillämpbart börvärde**
+(`solar_hold_unverified`), eftersom påtvingad 50 W-urladdning kan
+hindra normal solladdning av husbatteriet. Vid låg SoC och befintlig
+`charge` går den befintliga säkerhets-/återhämtningsstyrningen före.
+
+`physical_control_authorized=false`, `model_actionable=false` och
+`device_writes=0`. Modellens 230 V-antagande och balanserade
+fas-/solfördelning är **inte** ett RMS-fassäkringsskydd.
+Historikdatabasen saknar både enskild Ict2 och fasregister 50006 vid
+varje prov; replay etiketterar därför dessa uttryckligen som antaganden.
+
+**Driftsättningsgräns:** Den tidigare checksummebundna ARMED-dispatchern,
+dess EV-policy och root-watchdog, 6 A EVCC-tak och `gate.json mode=shadow`
+är **oförändrade**. Separat explicit tillstånd krävs för att
+låta några av de nya observationerna påverka fysisk styrning.
+
+Se [ADR](architecture/adr-2026-10-31-ev-solar-shadow.md) för
+beräkningsantaganden och nästa provsteg.
+
 ## Kvalitet och avgränsat leveransbeslut
 
 - Offline: befintliga 16 trialpolicyfall/9 trialwatchdogfall
@@ -316,7 +359,9 @@ kandidaten för att uppdatera ARMED-installationen 2026-10-31.
 - `systemd-analyze verify` ska godkänna de nya enheterna.
 - `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`,
   `npm test`, `npm run lint`, `npm run typecheck` ska passera.
-- Denna ändring får committas på lokal `Sundsvall`, men inte
-  aktiveras/deployas förrän driftgrindarna ovan är uppfyllda och
-  uttryckligt tillstånd har inhämtats. Push av äldre lokala commits
-  kräver separat granskning av privat konfiguration.
+- Den godkända driftsättningen 2026-10-31 omfattar endast
+  checksummebunden `mode=shadow` och den separata skrivskyddade
+  observatören. Alla tillägg som påverkar fysiska styrkommandon,
+  inklusive `mode=active` och nya Auto/idle-åtgärder, kräver
+  separata säkerhetsgrindar och uttryckligt godkännande.
+  Privat konfiguration eller mätloggar får aldrig publiceras.

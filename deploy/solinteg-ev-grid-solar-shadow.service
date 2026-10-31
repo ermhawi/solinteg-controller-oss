@@ -1,0 +1,18 @@
+[Unit]
+Description=Read-only solar-aware EV L3 priority shadow observer
+After=solinteg-poller.service solinteg-ev-observer.service
+
+[Service]
+Type=oneshot
+User=solinteg-evshadow
+Group=solinteg
+ExecStart=/usr/bin/python3 /usr/local/libexec/solinteg-ev-grid-solar-shadow/ev_grid_priority_shadow_observer.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateTmp=true
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/opt/solinteg/ev-shadow-runtime/var

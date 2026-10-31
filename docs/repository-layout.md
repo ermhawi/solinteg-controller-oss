@@ -22,7 +22,8 @@ Välj GitHub CLI `gh` för GitHub-operationer.
 | --- | --- | --- |
 | `~/dev/github.com/ermhawi/solinteg-controller-oss` | Kanonisk källkod, branch `Sundsvall` | Ja |
 | `/opt/solinteg/app` | Befintlig produktionsinstallation för husbatteri och webb | Nej, separat driftsättning |
-| `/opt/solinteg/ev-shadow-runtime` | Isolerad, skrivskyddad Volvo/Waveshare/skuggdrift | Nej, root-ägda distributionsfiler |
+| `/opt/solinteg/ev-shadow-runtime` | Isolerad, skrivskyddad Volvo/Waveshare/skuggdrift; privata JSON- och historikfiler | Nej, root-ägda distributionsfiler |
+| `/usr/local/libexec/solinteg-ev-grid-solar-shadow` | Rootägda skript för separat read-only EV/L3-observatör | Nej, inga skrivrättigheter till växelriktaren |
 | `~/dev/github.com/hspolander/solinteg-controller-oss` | **Avvecklad 2026-10-30; källkod, refs och privat miljö arkiverade** | Nej, katalogen borttagen |
 
 Installationskatalogerna uppdateras **inte automatiskt** av en commit

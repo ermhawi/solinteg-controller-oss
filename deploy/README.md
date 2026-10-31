@@ -188,6 +188,41 @@ enable active mode without a separately approved physical test. Roll back
 this guard by setting `DISPATCH_L3_CHARGE_GUARD_MODE=0` and restarting dispatch.
 No behavior change is made by merely syncing code to Git.
 
+**Separate solar-aware EV/L3 observer (read-only, installed 2026-10-31):**
+`scripts/services/ev_grid_priority_shadow_observer.py` is deliberately
+independent from ARMED dispatch and the root EV-grid watchdog. Its
+`ev_grid_priority_solar_shadow.py` imports no inverter/EVCC control
+code, reads existing local snapshots and `telemetry.db` using
+SQLite `mode=ro`, and writes only
+`/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json`
+as the existing `solinteg-evshadow` user (0600). A dedicated systemd
+timer triggers it every ~30 seconds; the unit denies all network
+connections and uses a strict filesystem sandbox.
+
+The approved Dell installation has root-owned code copies in
+`/usr/local/libexec/solinteg-ev-grid-solar-shadow` and only the
+`solinteg-ev-grid-solar-shadow.{service,timer}` systemd units.
+Inspect without changing house or EV controls:
+
+```bash
+systemctl is-active solinteg-ev-grid-solar-shadow.timer
+sudo -n -u solinteg-evshadow python3 -c 'from pathlib import Path; import json; p=Path("/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json"); d=json.loads(p.read_text()); print(json.dumps({"timestamp":d.get("timestamp"),"state":d.get("state"),"observed_action":d.get("observed_action"),"advice":d.get("advice"),"device_writes":d.get("device_writes")},indent=2))'
+```
+
+A separate offline replay for operator investigation needs no service
+restart:
+
+```bash
+sudo -n -u solinteg-evshadow python3 scripts/tools/ev_grid_priority_replay.py \
+  --since 2026-10-28T15:30:00+00:00 --until 2026-10-31T09:40:00+00:00
+```
+
+During sunny `idle` the observer reports `solar_hold_unverified`
+without a hardware-action suggestion. Its physical-control permission
+is always false. The installed production EV guard **still does not
+intercept Auto/idle**; there is no new PV- or battery-write path from
+these units. See `docs/architecture/adr-2026-10-31-ev-solar-shadow.md`.
+
 **solinteg-healthcheck** (every 5 min) and **solinteg-heartbeat-ping** (every 10 min) need
 two accounts, both free, both one-time setup done in their own app/website — nothing to
 install:

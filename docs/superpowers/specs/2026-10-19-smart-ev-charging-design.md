@@ -4,6 +4,16 @@ Status: **Designspecifikation, revision 4, 2026-10-26**, med kompletteringar 202
 
 Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff46f056eb2a8823b9bf817955d8e`, ABL:s dokumenterade register, **separat godkända Modbus-läs- och skrivprov 2026-10-21** samt etapp-/L3-planen i `91c2802` (2026-10-24). Datum, råtelegram och bevisnivå skiljs åt i avsnitt 13. Fältproven gjordes före dokumentrevisionen; inga nya laddkommandon utförs här.
 
+**Driftkomplettering 2026-10-31:** Den checksummebundna EV-prioriteringen
+är nu aktiverad **endast i shadow-läge** på Dell. Historiska
+`idle → Auto`-perioder har återspelats; en oberoende, read-only
+solmedveten observatör samlar hypotetiska börvärden var 30:e sekund.
+Detta är **inte** fysisk nätprioritering: det finns fortfarande inget
+verifierat solbevarande sätt att skydda Auto/idle utan att hindra
+solladdning av husbatteriet. Se
+[`ev-grid-priority-permanent-2026-10-29.md`](../../ev-grid-priority-permanent-2026-10-29.md)
+och [ADR](../../architecture/adr-2026-10-31-ev-solar-shadow.md).
+
 ## 0. Nytt huvudspår: L3-samordning av husbatteriet, utan Waveshare
 
 **Bekräftat användarkrav 2026-10-24:** Volvon styr själv när den laddar och sin amperegräns (18 A vid kravbeslutet; EVCC:s separata pilotgräns sänktes manuellt och verifierades till 6 A 2026-10-28, se `docs/evcc-readonly-rollout-2026-10-28.md`). Solinteg-appen ska med växelriktarens befintliga Modbus-data minska **husbatteriets** laddning när L3 blir kraftigt belastad. Om bilen börjar ladda när huset går på husbatteri ska Solinteg minska batteriets urladdning så att **elnätet försörjer bilens tillkommande last** och lagrad batterienergi bevaras. Det kräver inte att husbatteriet laddas från nätet samtidigt som det laddas ur. Ingen ny bil-/EVCC-integration, och ingen säkerhetsgaranti för andra apparaters belastning på L3.
