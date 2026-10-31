@@ -65,9 +65,19 @@ samples. Separate physical EV-to-house battery priority remained OFF.
   **6.0 A** with pilot/configuration both 6 A. L3 grid import was
   approximately **1451 W**; the other phase imports were small and
   the independent supervisor remained `running`.
-- **Hard stop:** 2026-10-31 **13:26 CET**, unless 25% or a stop
-  condition is observed earlier. **No completion claim** is made
-  before the watchdog's root-owned status reports it.
+- **11:42:42 CET:** Grid L3 import increased from approximately
+  **1.67 kW to 3.277 kW**, a roughly **1.6 kW additional load** on
+  that phase. The particular appliance is unknown. The battery still
+  charged around 933 W, with SoC reported at **21%**. The recorded
+  import exceeded the pilot's conservative **3.2 kW/phase** threshold.
+- **11:42:49–11:42:56 CET:** The independent watchdog correctly
+  **aborted the trial**, removed its exact drop-in, reloaded systemd,
+  restarted the normal dispatcher, and disabled its one-shot timer.
+  Root status explicitly reports `state=aborted` and
+  `conservative L1/L2/L3 import bound exceeded`. Original dispatch
+  source/environment, EVCC 6 A and EV root `mode=shadow` remained
+  unchanged; 25% was **not reached**. The later 13:26 time deadline
+  therefore did not apply.
 
 ## Limitations
 

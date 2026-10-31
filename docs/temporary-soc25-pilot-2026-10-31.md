@@ -106,9 +106,22 @@ to conduct this test.
 - The independent systemd timer ran successful `running` checks,
   original watchdogs remained active and root EV gate stayed
   `mode=shadow`.
-- **Hard deadline:** 13:26 CET. The observed completion/abort state
-  must be read from the private status JSON; it was **not yet
-  reached** at initial verification.
+- **11:42:42 CET:** The normal 30 s poller reported **3277 W grid
+  import on L3**, after approximately 1666–1681 W on the immediately
+  preceding readings. Total grid import reached 4498 W and the battery
+  still charged at approximately 933 W. This was a roughly **1.6 kW
+  additional L3 load**; the connected appliance was not identified.
+- **11:42:49–11:42:56 CET:** The independent watchdog correctly aborted
+  the pilot because the **3200 W per-phase limit** was exceeded. It
+  removed its owned systemd drop-in, restarted the original dispatcher,
+  and disabled its own one-shot timer. Root status: `state=aborted`,
+  `reason=conservative L1/L2/L3 import bound exceeded`.
+  At abort, house SoC was **21%**, not 25%. Original EVCC 6 A and
+  root EV-priority `mode=shadow` remained unchanged.
+- The **13:26 CET** hard deadline therefore never became relevant.
+  Faster charging or repeating this physical trial requires a
+  **separate explicit user approval**, not merely raising the pilot's
+  existing phase cutoff.
 
 Automated restoration behavior and the reason for using a
 dispatcher-process-scoped override are recorded in

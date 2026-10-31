@@ -18,7 +18,15 @@ timer performs measured-power/CT/EVCC/SoC safety checks every ~15 s
 and automatically restores the normal dispatcher start at 25%,
 by 13:26 CET, or on failure. At first verified load the inverter
 was actually charging around 1024 W while EVCC still read 6.0 A.
-This does **not** prove house SoC has yet reached 25%.
+
+**Observed outcome:** The watchdog automatically **aborted at
+11:42:49 CET**, after the recorded L3 grid import spiked from about
+1.67 kW to **3.277 kW**, breaching the intentionally conservative
+3.2 kW per-phase stop limit. An additional L3 load of roughly 1.6 kW
+appeared, but the appliance was not identified. The original dispatcher
+was restored at **11:42:56 CET**, the pilot timer disabled, and battery
+SoC was **21%**. It **did not reach 25%**. No repeat trial or higher
+physical charging limit is authorized by this event.
 
 See [operator runbook](docs/temporary-soc25-pilot-2026-10-31.md)
 and [ADR](docs/architecture/adr-2026-10-31-temporary-soc25-recovery.md).
