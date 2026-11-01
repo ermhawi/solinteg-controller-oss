@@ -82,7 +82,11 @@ def inspect(live_path: Path = LIVE, evcc_path: Path = EVCC,
         "physical_control_authorized": False,
     }
     try:
-        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        try:
+            gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            result.update(state="disabled", reason="root gate missing")
+            return result
         if not isinstance(gate, dict) or gate.get("mode") != "shadow":
             result.update(state="disabled", reason="root gate is not shadow")
             return result

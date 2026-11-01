@@ -127,3 +127,24 @@ No private IPs, credentials or utility invoices may be published.
 - **Hard deadline:** **14:04 CET on 2026-10-31**, unless 25% SoC
   or an earlier safety condition ends the trial. Read the live
   root status rather than assuming it completed after a time estimate.
+
+## Verified closure — 2026-11-01 follow-up
+
+- The root-only adaptive status records `state=aborted`, reason
+  `operator requested stop`, restored at **12:15:51 CET** on 2026-10-31.
+  The last recorded house SoC was **21%**; 25% was **not** reached.
+- During this shutdown, the independent EV-priority watchdog observed
+  the dispatcher temporarily inactive at **12:15:31 CET**, revoked
+  its `shadow` gate and restored the byte-identical original dispatcher
+  (SHA256 `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`).
+  This is a separate rollback from the adaptive-pilot stop.
+- On 2026-11-01 at 09:51 CET, normal dispatch and its watchdog were
+  active, both temporary trial timers were inactive, and the EVCC
+  independently confirmed ongoing **5.9 A** charging. The root
+  EV-priority gate remained absent. No further physical trial was started.
+- At **09:55 CET on 2026-11-01**, a read-only diagnostic correction
+  was installed in the **separate solar shadow observer only**, with
+  a root-only rollback backup. The observer now reports `disabled`,
+  `reason=root gate missing`, `device_writes=0` rather than a misleading
+  `FileNotFoundError`; normal dispatch and both permanent timers remain
+  active. No EV/shadow gate or physical controller setting was changed.

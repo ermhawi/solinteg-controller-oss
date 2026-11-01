@@ -440,6 +440,35 @@ Detta är **inte** EV-grid-prioritering eller ny Auto/idle-kontroll.
 återställning senast **14:04 CET**. Se
 [runbook](temporary-soc25-adaptive-pilot-2026-10-31.md).
 
+## Uppföljning 2026-11-01: shadow återkallat under separat SoC-prov
+
+Det adaptiva husbatteriprovet avslutades av operatören **2026-10-31
+12:15:51 CET** vid **21 % SoC**. EV-prioritetens oberoende watchdog
+såg den tillfälligt stoppade dispatchern redan **12:15:31 CET** och
+utförde sin konservativa rollback. Gaten saknas därefter, och aktiv
+dispatcher matchar byteexakt den tidigare originalversionen
+(SHA256 `a2f3aba4be8d64771ed2b20c71c9ceed5c3ce25ff99cad246bc5529afd65a8b7`).
+Ingen fysisk EV-prioritering var aktiverad. Enbart systemd-timerns
+fortsatta aktivitet bevisar **inte** att `shadow` är armerat.
+
+Vid läsning **2026-11-01 09:51 CET** körde ordinarie dispatcher,
+EVCC visade `C2`, Ict2 **5,9 A** med oförändrad 6 A-PWM, och
+husbatteriet låg på 21 % (uppmätt laddning cirka 340 W). Den
+solmedvetna observatören rapporterade `unavailable/FileNotFoundError`
+när den saknade gaten. En isolerad diagnostikkorrigering installerades
+**09:55 CET** i endast den rootägda, skrivskyddade observatören.
+Verifierad efter körning: `state=disabled`, `reason=root gate missing`,
+`device_writes=0`, `physical_control_authorized=false`. Ny SHA256:
+`91b569847b2380304c038913cd0a68f915117edb663f04f01f5caae5596aeb79`.
+Tidigare fil sparades som 0400 root-backup under
+`/var/lib/solinteg-ev-grid-priority/solar-shadow-observer-before-missing-gate-20261101.py`.
+Dispatchern, EVCC, gaten och båda permanenta timrarna förblev oförändrade.
+
+För fortsatt shadow-prov krävs granskad återinstallation med ny gate,
+checksummebunden minimal hook, kontrollerad omstart och fristående
+rollbackplan. Det tidigare adaptiva SoC-provet får inte återstartas
+utan nytt godkännande och färsk fas-/BMS-kontroll.
+
 ## Kvalitet och avgränsat leveransbeslut
 
 - Offline: befintliga 16 trialpolicyfall/9 trialwatchdogfall

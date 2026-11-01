@@ -92,6 +92,14 @@ class ShadowObserverTests(unittest.TestCase):
         self.assertEqual(r["state"], "disabled")
         self.assertNotIn("advice", r)
 
+    def test_missing_gate_is_disabled_after_watchdog_rollback(self):
+        self.gate.unlink()
+        r = self.inspect()
+        self.assertEqual(r["state"], "disabled")
+        self.assertEqual(r["reason"], "root gate missing")
+        self.assertEqual(r["device_writes"], 0)
+        self.assertNotIn("advice", r)
+
     def test_unavailable_history_does_not_guess_applied_action(self):
         self.actions.unlink()
         r = self.inspect()
