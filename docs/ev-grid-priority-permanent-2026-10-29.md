@@ -464,6 +464,21 @@ Tidigare fil sparades som 0400 root-backup under
 `/var/lib/solinteg-ev-grid-priority/solar-shadow-observer-before-missing-gate-20261101.py`.
 Dispatchern, EVCC, gaten och båda permanenta timrarna förblev oförändrade.
 
+**Separat identifierad SoC-oscillation 2026-11-01:** Vid **09:51:45 CET**
+avslutade den ordinarie återhämtningsfunktionen vid **21 %** och
+slog om från EMS-laddning till Auto. Read-only `readings` visar då
+**cirka 6 kW verklig batteriurladdning** kl. 09:52–09:53, medan
+EVCC fortsatte på 5,9 A. Hus-SoC föll till **18 %**, varefter
+300 W-återhämtningen återstartades. Detta är en verifierad
+växling mellan recovery och Auto, inte en misstänkt felaktig SoC-sensor.
+Vid 09:56:44 CET låg hus-SoC fortsatt på 18 %, och nätimporten
+var **7 235 W totalt, 3 344 W på L3**. Båda värdena överstiger
+den tidigare *provets* konservativa 6 500/3 200 W-stoppgränser;
+det är inte ett konstaterat överskridande av 20 A-säkringarnas märkström.
+Inget nytt fysiskt prov eller EVCC-kommando kördes. Problemen
+måste lösas med skild återhämtnings-/EV-samordning och säkert
+fasbudgetprov innan fysisk EV-prioritering aktiveras.
+
 För fortsatt shadow-prov krävs granskad återinstallation med ny gate,
 checksummebunden minimal hook, kontrollerad omstart och fristående
 rollbackplan. Det tidigare adaptiva SoC-provet får inte återstartas
