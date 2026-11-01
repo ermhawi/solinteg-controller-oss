@@ -229,8 +229,16 @@ class ReserveWatchdogDecisionTests(unittest.TestCase):
         result = self.evaluate(live=x)
         self.assertEqual(result.state, "reserve_nonresponse")
 
-    def test_near_25_wrong_inverter_mode_aborts(self):
-        x = {**charge_live(), "work_mode_raw": 0x101}
+    def test_newly_crossed_26_waits_for_next_dispatch_tick(self):
+        # At 20:38:03 the 30s poller first observed 26%; watchdog ran
+        # before the next dispatch iteration and used to abort instantly.
+        x = {**LIVE, "soc_pct": 26., "work_mode_raw": 0x101}
+        result = self.evaluate(live=x)
+        self.assertEqual(result.state, "reserve_nonresponse")
+        self.assertIn("awaiting EMS", result.reason)
+
+    def test_wrong_mode_does_not_bypass_immediate_overcharge_stop(self):
+        x = {**charge_live(watts=-2100.), "work_mode_raw": 0x101}
         self.assertEqual(self.evaluate(live=x).state, "abort")
 
     def test_phase_stop_and_battery_temperature_abort(self):
@@ -305,9 +313,9 @@ class ReserveWatchdogStateTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def tick(self, **kwargs):
+    def tick(self, *, at=NOW, **kwargs):
         with mock.patch.object(watchdog, "datetime") as dt:
-            dt.now.return_value = NOW
+            dt.now.return_value = at
             return watchdog.tick(**kwargs)
 
     def test_running_record_only_no_writes(self):
@@ -340,6 +348,42 @@ class ReserveWatchdogStateTests(unittest.TestCase):
         with mock.patch.object(common, "_restore", return_value={"state": "aborted"}) as restore:
             self.assertEqual(self.tick()["state"], "aborted")
             self.assertIn("EVCC", restore.call_args.kwargs["reason"])
+
+    def test_26pct_mode_transition_waits_for_dispatch_then_clears_timer(self):
+        self.live.write_text(json.dumps({**LIVE, "soc_pct": 26.,
+                                         "work_mode_raw": 0x101}))
+        first = self.tick()
+        self.assertEqual(first["state"], "running")
+        self.assertIn("awaiting EMS", first["check_reason"])
+        self.assertEqual(json.loads(self.state.read_text())["nonresponse_since_utc"],
+                         NOW.isoformat())
+        # The next dispatcher iteration activates a real charging target.
+        self.live.write_text(json.dumps(charge_live()))
+        second = self.tick()
+        self.assertEqual(second["state"], "running")
+        self.assertNotIn("nonresponse_since_utc", json.loads(self.state.read_text()))
+
+    def test_26pct_wrong_mode_rollback_after_180s_nonresponse(self):
+        self.live.write_text(json.dumps({**LIVE, "soc_pct": 26.,
+                                         "work_mode_raw": 0x101}))
+        self.assertEqual(self.tick()["state"], "running")
+        later = NOW + timedelta(seconds=181)
+        live = {**LIVE, "soc_pct": 26., "work_mode_raw": 0x101,
+                "timestamp": later.isoformat()}
+        self.live.write_text(json.dumps(live))
+        self.evcc.write_text(json.dumps({**A1, "timestamp": later.isoformat()}))
+        with mock.patch.object(common, "_restore",
+                               return_value={"state": "aborted"}) as restore:
+            self.assertEqual(self.tick(at=later)["state"], "aborted")
+            self.assertIn("over 180 seconds", restore.call_args.kwargs["reason"])
+
+    def test_low_soc_below_23_still_aborts_immediately(self):
+        self.live.write_text(json.dumps({**LIVE, "soc_pct": 22.,
+                                         "work_mode_raw": 0x101}))
+        with mock.patch.object(common, "_restore",
+                               return_value={"state": "aborted"}) as restore:
+            self.assertEqual(self.tick()["state"], "aborted")
+            self.assertIn("23-100%", restore.call_args.kwargs["reason"])
 
     def test_no_unowned_file_deleted_by_real_rollback(self):
         other = self.folder / "unrelated.conf"

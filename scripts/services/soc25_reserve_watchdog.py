@@ -104,12 +104,17 @@ def evaluate(live: dict, evcc: dict, *, now: datetime, started: datetime,
         if elapsed >= START_SETTLE_S:
             if not service_ok or not process_ok:
                 raise ValueError("dispatcher or reserve process not verified")
-            if live.get("work_mode_raw") != 0x303 and soc <= 26:
-                raise ValueError("low SoC: inverter not in EMS recovery mode")
         surplus = max(0, pv-house)
         max_expected_charge = max(1900, min(5500, surplus) + 500)
         if soc < RECOVERY_EXIT_PCT and battery_w < -max_expected_charge:
             raise ValueError("reserve recovery charging faster than supervised grid/PV envelope")
+        if soc <= 26 and elapsed >= START_SETTLE_S and live.get("work_mode_raw") != 0x303:
+            # The poller can report 26% just after dispatch handled a 27%
+            # sample; the next 30s iteration has not reached charge mode.
+            # The existing 180s nonresponse timer gives it time to react,
+            # but never overrides immediate CT/thermal/EV/overcharge stops.
+            return Decision("reserve_nonresponse",
+                            "low SoC: awaiting EMS recovery mode", values)
         if soc <= 26 and elapsed >= START_SETTLE_S:
             if battery_w > -70:
                 return Decision("reserve_nonresponse",

@@ -1,10 +1,12 @@
 # Tillfälligt förbikopplat batterisparläge – 2026-11-01
 
-**Status: fysiskt aktiverat kl. 19:59 CET 2026-11-01**, separat från
-48-reservens ordinarie inverterstyrning. Detta är ett avgränsat,
-tidsbegränsat **databasplansprov**, inte ett permanent ändrat sparläge.
-Den faktiska effekten och senare SoC-övergångar måste kontrolleras
-från invertervärden och rotägda loggar.
+**Status: stoppat och återställt kl. 20:38 CET 2026-11-01.**
+Start kl. 19:59 CET gav verifierad `General/Auto` och cirka 1,8 kW
+urladdning; provet stoppades automatiskt när den separata SoC25-
+reservens watchdog avbröt vid den första 26 %-mätningen.
+**49/49 JSON-planer återställdes, inga ändringar hoppades över.**
+Båda förbikopplingstimerna är inaktiva. Ingen permanent plan- eller
+EVCC-ändring gjordes; 26→28 %-laddningen hann inte verifieras.
 
 ## Syfte
 
@@ -122,9 +124,16 @@ systemd-analyze verify deploy/solinteg-soc25-plan-bypass*
   nätutbytet är cirka **26 W export** totalt och EVCC är fortfarande
   `A1`. Senaste dispatchlogg visar `idle 0 W applied` 20:00:59.
   Båda temporära timer-enheterna samt 48-reservens watchdog är aktiva.
-- **Ännu ej verifierat:** Att SoC når 26,5 % och 48-reservens
-  laddning sedan återhämtar till 28 %. Ingen permanent policyändring
-  är genomförd.
+- **20:38 CET:** Den första `26%`-mätningen kom in mellan
+  dispatcherns körningar. 48-reservens watchdog krävde felaktigt
+  EMS-laddläge omedelbart och avbröt försöket. När den rotägda
+  reservstatusen upphörde att vara `running`, stoppade denna
+  planförbikoppling sig själv och återställde exakt **49 av 49**
+  ändrade `optimizer_runs.dispatch_json` (`changed_runs_skipped=0`).
+  Båda temporära timers är inaktiva och originaldispatchern kör.
+  Se [reservprovets incidentanalys](soc25-reserve-no-ev-2026-11-01.md).
+- **Ännu ej verifierat:** Faktisk laddning från 26% tillbaka till
+  28%. Ingen permanent policyändring är genomförd.
 
 ## Risker och begränsningar
 

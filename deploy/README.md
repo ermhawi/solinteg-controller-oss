@@ -232,6 +232,16 @@ while a larger PV surplus remains eligible. The root timer enforces
 3200W/phase and 6500W/site measured-stop envelopes and a **six-hour
 hard deadline**. No inverter/BMS minimum SoC, EVCC setting, private
 site env, original dispatch source or failed 0W hold is changed.
+**Incident update (2026-11-01 20:38 CET):** First 26% SoC sample
+arrived between dispatcher iterations; root watchdog incorrectly
+required EMS recovery mode immediately, aborted the trial and restored
+original dispatch. Both 48-trial timers are now **inactive**. Source
+fix permits the existing supervised 180s nonresponse grace at a new
+low-SoC transition, retaining all immediate CT/BMS/EVCC stops. **The
+corrected source is not physically activated.** Do not reuse the
+aborted one-off state; a future test needs a new trial identity,
+fresh preflight and explicit authorization. See the
+[incident log](../docs/soc25-reserve-no-ev-2026-11-01.md).
 **Committing this code does not activate the physical test.** Confirm
 root state and watchdog before claiming 25% retention is verified.
 

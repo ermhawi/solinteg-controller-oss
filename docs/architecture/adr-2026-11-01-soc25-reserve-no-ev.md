@@ -1,7 +1,9 @@
 # ADR 2026-11-01: keep Sunwoda >=25% with EV disconnected
 
-**Status:** Implemented for independently watchdogged six-hour test.
-Physical effectiveness and permanent production behavior remain unverified.
+**Status:** The 2026-11-01 six-hour trial **aborted at 26%** on
+20:38 CET; original dispatcher restored. A watchdog scheduling-race
+fix is implemented and tested in source only; there is **no active
+trial** and physical effectiveness/permanent behavior remain unverified.
 
 ## Context
 
@@ -32,6 +34,29 @@ The watchdog may accept only fresh trustworthy A1 (unplugged, null
 currents) or B2 (configured pause, measured <=1A). All other states,
 including a reconnected charging C2 car, cause rollback without
 writing to EVCC. Reboot also triggers rollback.
+
+## First 26% crossing: abort and corrective decision (20:38 CET)
+
+The 30-second poller measured 27% at 20:37:33 and first measured
+26% at **20:38:03**. The independent watchdog ran at 20:38:10,
+**before the next dispatcher iteration**, while the inverter was still
+in `General/Auto`. The old `elapsed_since_trial_start >=120s`
+check incorrectly demanded immediate EMS recovery at 26% and aborted
+all six-hour-trial overrides. The separate plan-bypass companion then
+restored all 49 optimizer rows. The regular dispatcher resumed its
+pre-existing 21% recovery exit and 50W battery-save target.
+
+**Amendment:** a newly observed 26% SoC with missing EMS mode is now
+a monitored **`reserve_nonresponse`**, not an immediate abort.
+Reuse the existing **180-second first-nonresponse timeout** to allow
+poller/dispatch/Modbus synchronization. A later real charge clears it;
+otherwise the original root restoration still runs after 180s. All
+immediate EVCC/CT/BMS/phase/overcharge/SoC<23 hard stops are retained.
+
+This is a **source/test change only** and does not authorize reuse of
+the one-off aborted root state. Physical reactivation requires a new
+identity, preflight and separate authorization. The 26→28% recharge
+has **not** been verified on hardware.
 
 ## Tradeoffs
 

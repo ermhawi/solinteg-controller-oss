@@ -1,11 +1,16 @@
 # Sunwoda 25% SoC reserve with unplugged Volvo — 2026-11-01
 
-**Status: physically activated 2026-11-01 19:07 CET as an isolated six-hour
-trial.** The independent root watchdog accepted the unplugged `A1` state
-and both systemd timers are active. The hard stop is 2026-11-02 01:07 CET.
-**This does not yet prove recovery at 26.5% or lasting 25% retention:**
-the house battery was still at 38% at activation. No permanent hold or
-hardware/BMS threshold change is authorized by this implementation.
+**Status: aborted by watchdog 2026-11-01 20:38 CET at 26% SoC.**
+The prior six-hour reserve trial started at 19:07 CET, but the first
+26% poller sample reached its independent watchdog **before** the
+next 30-second dispatcher iteration. The watchdog incorrectly treated
+this normal transition latency as an immediate failure and restored
+the original dispatcher. Both trial timers are inactive; the temporary
+plan bypass stopped separately and restored all 49 plan rows.
+A transition-grace fix is **implemented and unit-tested in the
+repository only**, not installed or physically reactivated. The
+26.5→28% charge and lasting 25% reserve remain unverified. No permanent
+hardware/BMS threshold change was made.
 
 ## Goal and observed EVCC state
 
@@ -73,10 +78,16 @@ The independent root 15-second timer supervises:
   imports a Modbus client, communicates with EVCC or writes an inverter
   register itself.
 - Below the recovery band (SoC <=26%), actual inverter EMS mode and
-  physical battery charge must be verified after 120 seconds; missing
-  physical charge for >180 seconds causes rollback. During recovery,
-  excessive grid-funded charge is rejected, but normal *nonrecovery*
-  scheduled charging above the band may exceed 1.5kW.
+  physical battery charge must be verified. **After a new 27→26% SoC
+  transition, allow at most 180 seconds from the first nonresponse
+  observation** for the independently scheduled dispatcher to enter
+  EMS and establish physical charging. The 120-second startup settle
+  period alone cannot serve as transition grace for a trial started
+  90 minutes earlier. An uncorrected missing mode/charge after the
+  180-second limit still rolls back. CT, battery-temperature, EVCC,
+  overcharge, and SoC <23% failures still abort immediately. During
+  recovery, excessive grid-funded charge is rejected, but normal
+  *nonrecovery* scheduled charging above the band may exceed 1.5kW.
 - Every trial expires after **six hours**, or is stopped at the operator's
   request or upon reboot. A **second, independent one-shot deadline timer**
   calls the same owned rollback after six hours even if the regular 15-second
@@ -153,6 +164,59 @@ A normal dispatcher restart can still briefly hand control back to Auto.
 - The independent deadline timer's actual systemd `NEXT` was
   **2026-11-02 01:07:24 CET**. This is the *stop* deadline,
   not a guarantee that battery SoC will cross 26.5% before then.
+
+## Abort at the first 26% readback — 2026-11-01 20:38 CET
+
+Verified from root state, systemd journal and the raw 30-second poller
+samples (times local unless stated otherwise):
+
+- **20:37:20** original dispatcher, still running inside the supervised
+  process wrapper, entered `General/Auto` for the patched optimizer
+  `idle` slot. Battery SoC had most recently read **27%**.
+- **20:37:55** root reserve supervisor still reported `running`,
+  observed **27% SoC** and ~922W discharge, no CT/EVCC anomaly.
+- **20:38:03** poller reported **26% for the first time**, ~882W
+  discharge in `General/Auto`. Dispatcher had not yet had its next
+  opportunity to act on that new sample.
+- **20:38:10–20:38:16** the independent 15-second supervisor executed
+  its old immediate `soc <=26 and mode != 0x303` abort. Its status
+  became `aborted` with reason
+  `low SoC: inverter not in EMS recovery mode`. The supervisor
+  removed its pinned 48-prefix drop-in and restarted the original
+  dispatcher. **No forced 1,500W recovery was attempted.**
+- **20:38:15** the separate plan-bypass timer detected that the root
+  reserve was no longer active, stopped and restored **49/49** patched
+  plan rows (`changed_runs_skipped=0`). Both sets of temporary timers
+  were disabled by their owners.
+- **20:38:20** ordinary dispatcher logged recovery complete at
+  **26% with the original 21% exit**, showing that the 26.5→28%
+  temporary recovery thresholds were no longer present. The normal
+  battery-save target of 50W was applied.
+- **20:43** live readback **26% SoC**, ~185W measured discharge,
+  0W PV, and EVCC `A1` unplugged. Original dispatcher,
+  independent standard watchdog and poller were active.
+
+**Root cause:** watchdog's 120s settling threshold was relative to
+the *trial start*, not the *SoC recovery transition*. It therefore
+required mode `0x303` immediately when any 15s watchdog tick first
+observed 26%, even though the poller (~30s) and dispatcher (~30s)
+were asynchronous.
+
+**Code-only fix:** this single mode check now returns
+`reserve_nonresponse` instead of `abort`, using the watchdog's
+existing first-nonresponse clock and **180-second deadline**. A fresh
+physical charging observation clears this clock. Existing immediate
+CT/temperature/overcharge/EVCC/SoC<23 failures remain hard aborts.
+Targeted regression tests simulate both the before-dispatch 26%
+sample and the expired 180-second timeout; tests do not write to
+the inverter.
+
+The old one-off root status is **terminal**; do not overwrite or
+re-arm it as a workaround. Any later physical retry requires
+a separately reviewed new trial identity, fresh preflight and
+explicit authorization, after confirming no temporary overrides
+remain. This document records the diagnosis and corrected source,
+**not a successful 25% hold or a newly active physical trial**.
 
 ## Tests and limitations
 
