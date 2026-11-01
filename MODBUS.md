@@ -1,6 +1,6 @@
 # Solinteg Modbus reference (read + control)
 
-**Proposed only (2026-11-01):** [single-owner Modbus-broker migration plan](docs/plans/modbus-broker-2026-11-01.md) and [proposed ADR](docs/architecture/adr-2026-11-01-single-owner-modbus-broker.md). No broker is installed; the connection model documented below remains the current design until an explicitly approved staged cutover.
+**Offline broker prototype implemented (2026-11-01):** [single-owner migration plan](docs/plans/modbus-broker-2026-11-01.md), [offline baseline and tests](docs/modbus-broker-offline-2026-11-01.md), and [proposed production ADR](docs/architecture/adr-2026-11-01-single-owner-modbus-broker.md). No broker is installed; the connection model documented below remains the current design until an explicitly approved staged cutover.
 
 Source-verified against `plugin_solinteg.py` @ commit `350266f`
 (wills106/homeassistant-solax-modbus), cross-checked with the official Solinteg

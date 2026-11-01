@@ -1,6 +1,6 @@
 # Plan: Modbus-broker med ensam ägare och säker migrering
 
-**Status:** Föreslagen · 2026-11-01 · **Ingen kod eller fysisk styrning driftsatt**
+**Status:** Etapp **0–2 implementerad och testad offline** 2026-11-01; etapp 3–6 är fortfarande förslag. **Ingen broker är installerad, ingen fysisk styrning ändrad.** Se [genomföranderapport](../modbus-broker-offline-2026-11-01.md).
 **Repository/branch:** `ermhawi/solinteg-controller-oss` / `Sundsvall` – får aldrig mergas till `main`/upstream.
 **Omfattning:** Solintegs Modbus-TCP-dongel. **EVCC/Waveshare RS-485 är ett separat system.**
 **Beslut:** Planen godkänner bara analys och dokumentation, inte fysiska Modbus-skrivningar, ändrat SoC-golv eller nya SoC25-prov.
@@ -55,15 +55,15 @@ Brokerprocessen äger enda **ordinarie** TCP-sessionen. IPC över lokal Unix-dom
 
 | Etapp | Implementation | Klart när |
 | --- | --- | --- |
-| **0 – Baslinje** | Inventera alla direkta FC03/FC06-konsumenter (inkl. `inverter_control` CLI och fysiska prober), kör read-only mätning av pollcykler, svarstider, lägesbyten och observerade fel. Fastställ installerade service-/kodhachar och rollbackväg. | Inventeringsmatris och uppmätta basvärden, inga writes |
-| **1 – Broker offline** | Ny separat broker + smal IPC-client, serialiseringskö och fake Modbus-TCP-dongel. Hela kontrollsekvenser testas enbart mot fake; `ARMED=0` är default. | Testad kod, inga nya driftprocesser |
-| **2 – Telemetrikvalitet offline** | Reproducera alla tre SoC25-felbilder och lägesbyte mitt i FC03-serie. Testa kvalitet, samplingslatens, 4–8 s cloud-stall, backoff och separata reject-loggar. | Osäkra samplar avvisas, ingen CT-/temperatur-/fassäkerhet försvagas |
+| **0 – Baslinje** ✅ offline | Inventera alla direkta FC03/FC06-konsumenter (inkl. `inverter_control` CLI och fysiska prober), kör read-only mätning av pollcykler, svarstider, lägesbyten och observerade fel. Fastställ installerade service-/kodhachar och rollbackväg. | Inventeringsmatris och uppmätta basvärden, inga writes |
+| **1 – Broker offline** ✅ prototyp | Ny separat broker + smal IPC-client, serialiseringskö och fake Modbus-TCP-dongel. Hela kontrollsekvenser testas enbart mot fake; `ARMED=0` är default. | Testad kod, inga nya driftprocesser |
+| **2 – Telemetrikvalitet offline** ✅ fake-tester | Reproducera alla tre SoC25-felbilder och lägesbyte mitt i FC03-serie. Testa kvalitet, samplingslatens, 4–8 s cloud-stall, backoff och separata reject-loggar. | Osäkra samplar avvisas, ingen CT-/temperatur-/fassäkerhet försvagas |
 | **3 – Läs-only driftsättning** | Separat godkänd cutover: stäng gamla pollerns TCP-session **innan** en read-only broker tar dess plats. Pollern får data via UDS; ingen extra poller parallellt. Dispatcher/watchdog har ännu sin tidigare kortlivade reservväg, så full exklusivitet påstås inte här. | Samma `live.json`/SQLite-resultat, acceptabel latens/bortfall och verifierad enkel rollback |
 | **4 – Styrväg och nödfallback** | Flytta dispatcher till brokertransaktioner och watchdog till prioriterad `safety_auto`, implementera/testa exklusiv nödfallback och begär **separat klartecken** före varje fysisk write/cutover. | Verifierad write-ordning, fysisk readback/effekt, safe Auto vid delstegsfel/brokerkrasch |
 | **5 – Tvinga exklusivitet** | Spärra direkt TCP:502 för migrerade systemd-tjänster, endast broker och kontrollerad nödfallback får ansluta. Lägg till observability och drift-/avinstallationsrutiner. | En enda ordinarie TCP-owner verifierad och säker reservväg omtestad |
 | **6 – Uppföljning** | Jämför latens, giltiga/ogiltiga samples, watchdog-latens och fellarm mot baslinjen. | Dokumenterad go/no-go innan **ett separat nytt** SoC25-försök |
 
-**Rekommenderad första kodleverans:** etapp **0–2**, helt offline med fake dongel, utan installation i `/opt/solinteg/app`, systemd eller fysisk styrning.
+**Etapp 0–2 levererad:** endast offlinekällkod med injicerad minnesbaserad fake-dongel, verifierad UDS, kvalitetsmodell och felinjektionstester. Ingen riktig pymodbus-adapter, TCP-simulator på wire-nivå, systemd-unit eller driftsättning. Baslinjen kommer från historiskt SQLite-material; tidsupplösning per FC03-block och fysisk rollback återstår. Se [resultat och kvarstående säkerhetsgrindar](../modbus-broker-offline-2026-11-01.md).
 
 ## 4. Obligatoriska fel- och acceptanstester
 
@@ -85,7 +85,7 @@ Brokerprocessen äger enda **ordinarie** TCP-sessionen. IPC över lokal Unix-dom
 
 ### Beslut att låsa före drift
 
-1. Vilka UDS-roller/Unix-identiteter används för read/control/safety? `solinteg` är i dag delad.
+1. Vilka UDS-roller/Unix-identiteter används för read/control/safety? `solinteg` är i dag delad; offline-UDS ger endast read som standard och kan inte ge starka producerade roller förrän separata UID införts.
 2. Hur garanteras **fenced nödfallback** om broker tappar respons mitt under en fysisk multiwrite? Finns en verifierad säker exklusiv stoppsekvens?
 3. Vilken verifierad kvalitets-/tidsgräns ska gälla för datakohärens, och hur ska dispatcherns stale-data-fallback förbjudas från att starta farlig styrning?
 4. Är kontroll-latens tillräcklig trots 4–8s cloud-stall och minst 2s skrivintervall? Mät på fake, sedan read-only innan något skarpt.

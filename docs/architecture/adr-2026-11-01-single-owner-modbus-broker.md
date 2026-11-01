@@ -1,6 +1,6 @@
 # ADR 2026-11-01: en ägare för Solintegs Modbus TCP
 
-**Status: proposed** · **Fysisk driftsättning: inte godkänd** ·
+**Status: proposed for production** · **Etapp 0–2 offlineprototyp levererad 2026-11-01** · **Fysisk driftsättning: inte godkänd** ·
 Beslut gäller först efter granskning av [migrationsplanen](../plans/modbus-broker-2026-11-01.md).
 
 ## Kontext
@@ -67,6 +67,8 @@ att IPC-tillgänglighet ensam garanterar fysisk Auto.
 - Fram till ett godkänt implementationstest gäller nuvarande aktiva
   dispatcher, poller, watchdog och befintligt BMS-golv oförändrade.
   **Inget fjärde fysiskt SoC25-test ingår i detta beslut.**
+
+**Offlineunderlag:** [genomförande, baslinje och begränsningar](../modbus-broker-offline-2026-11-01.md).
 
 **Relaterat:** [migrationsplan](../plans/modbus-broker-2026-11-01.md),
 [Modbusregister](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/MODBUS.md),

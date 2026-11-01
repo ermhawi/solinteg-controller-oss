@@ -7,6 +7,7 @@ nav = [
   { "Repository" = "repository-layout.md" },
   { "Arkiv och städning" = "solinteg-archive-and-retired-artifacts-2026-11-01.md" },
   { "Modbus-broker (plan)" = "plans/modbus-broker-2026-11-01.md" },
+  { "Modbus-broker (offline 0–2)" = "modbus-broker-offline-2026-11-01.md" },
   { "ADR: Modbus-broker (föreslagen)" = "architecture/adr-2026-11-01-single-owner-modbus-broker.md" },
   { "EV-laddning" = [
     "ev-grid-priority-permanent-2026-10-29.md",

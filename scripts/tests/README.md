@@ -40,6 +40,16 @@ and declares the export side perfect. A guard against a silent failure has to be
 it's just a second silent failure. The dashed filename means it's loaded via `importlib.util`,
 not a plain import.
 
+## Offline Modbus-broker regression
+
+`test_modbus_broker.py` covers the explicitly **non-deployed** single-owner
+broker prototype and a one-connection fake Modbus dongle (never real TCP:502).
+It tests Unix-domain-socket credential roles, request-id idempotence,
+five-stage FC06 faults/Auto rollback, queued safety preemption, cloud stalls,
+mode flips and rejection of the contradictory SoC25 sample. Current
+`modbus_poller.py`/`dispatch_loop.py`/`watchdog.py` are unchanged;
+see [baseline and limitations](../../docs/modbus-broker-offline-2026-11-01.md).
+
 ## Running
 
 ```
