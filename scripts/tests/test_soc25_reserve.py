@@ -223,6 +223,39 @@ class ReserveWatchdogDecisionTests(unittest.TestCase):
     def test_active_charger_aborts_immediately(self):
         self.assertEqual(self.evaluate(evcc=C2, elapsed=15).state, "abort")
 
+    def test_real_startup_auto_sample_is_bounded_nonresponse_not_immediate_abort(self):
+        # Exact native poller sample during the 20:57:13-20:57:20
+        # dispatcher restart. Site CT/house sum is consistent, but
+        # AC and battery power were sampled at different transition times.
+        observed = {
+            **LIVE, "soc_pct": 26., "battery_w": 1050.,
+            "house_load_w": 1036., "grid_w": -880.,
+            "inverter_ac_w": 156., "meter_l1_w": -542.,
+            "meter_l2_w": -311., "meter_l3_w": -26.,
+            "work_mode_raw": 0x101,
+        }
+        decision = self.evaluate(live=observed, elapsed=10)
+        self.assertEqual(decision.state, "reserve_nonresponse", decision.reason)
+        self.assertIn("snapshot mismatch", decision.reason)
+        self.assertEqual(self.evaluate(live=observed, elapsed=200).state, "abort")
+
+    def test_startup_snapshot_grace_never_masks_real_safety_faults(self):
+        transient = {**LIVE, "soc_pct": 26., "battery_w": 1050.,
+                     "house_load_w": 1036., "grid_w": -880.,
+                     "inverter_ac_w": 156., "meter_l1_w": -542.,
+                     "meter_l2_w": -311., "meter_l3_w": -26.,
+                     "work_mode_raw": 0x101}
+        variants = (
+            {**transient, "battery_w": 1800.},
+            {**transient, "battery_temp_c": 55.},
+            {**transient, "meter_l3_w": -3200.},
+            {**transient, "grid_unbalanced_output_raw": 1},
+        )
+        for sample in variants:
+            with self.subTest(sample=sample):
+                self.assertEqual(self.evaluate(live=sample, elapsed=10).state, "abort")
+        self.assertEqual(self.evaluate(live=transient, evcc=C2, elapsed=10).state, "abort")
+
     def test_near_25_requires_real_charge(self):
         self.assertEqual(self.evaluate(live=charge_live()).state, "safe")
         x = {**LIVE, "soc_pct": 25.}

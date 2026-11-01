@@ -256,7 +256,15 @@ success requires at least two distinct charging samples (>=20s apart,
 negative battery_w and EMS 0x303), then measured SoC >=28%; stop also
 restores original dispatch if no charge occurs within 180s. No EVCC,
 original dispatcher source, native inverter/BMS minimum, or Modbus broker
-changes. **The source commit alone does NOT physically activate this retry.**
+changes. **The 49-prefix retry aborted during the 2026-11-01 20:57 CET
+startup** when a sequential battery/AC read mismatched the otherwise
+consistent CT/house/AC readings. Both one-off identities remain terminal;
+original dispatch and standard watchdog were restored. Subsequent
+source-only fix treats this *specific* first-120s General/Auto transition
+sample as bounded nonresponse (180s timeout), keeping all genuine CT,
+temperature, EVCC and excessive-power stops immediate. See
+[incident evidence](../docs/soc25-recovery-retry-2026-11-01.md).
+**No physical retry is active; source commits never activate control.**
 
 **Temporary no-save plan test (2026-11-01; separately approved):**
 See [plan-bypass runbook](../docs/temporary-soc25-plan-bypass-2026-11-01.md)

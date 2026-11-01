@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT_LIB = Path("/usr/local/libexec/solinteg-soc25-recovery-retry")
 # At install time this module is imported from the checkout; the immutable
 # deployment copy imports its own pinned base watchdog from this root path.
-if ROOT_LIB.is_dir():
+if Path(__file__).resolve().parent == ROOT_LIB:
     sys.path.insert(0, str(ROOT_LIB))
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))

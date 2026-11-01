@@ -89,9 +89,8 @@ def evaluate(live: dict, evcc: dict, *, now: datetime, started: datetime,
             raise ValueError("inverter balanced output register 50006 invalid")
         if (pv < 0 or house < 0
                 or abs(sum(phases) - grid) > max(100, abs(grid) * .05)
-                or abs(ac-grid-house) > max(150, house * .1)
-                or abs(ac-pv-battery_w) > 500 + .1*max(abs(ac), pv, abs(battery_w))):
-            raise ValueError("CT/house/PV/battery energy balance invalid")
+                or abs(ac-grid-house) > max(150, house * .1)):
+            raise ValueError("CT/house/PV energy balance invalid")
         if any(-x >= PHASE_STOP_W for x in phases) or -grid >= SITE_STOP_W:
             raise ValueError("conservative site/phase import stop envelope exceeded")
         evcc_mode = verified_evcc_safe(evcc)
@@ -108,6 +107,18 @@ def evaluate(live: dict, evcc: dict, *, now: datetime, started: datetime,
         max_expected_charge = max(1900, min(5500, surplus) + 500)
         if soc < RECOVERY_EXIT_PCT and battery_w < -max_expected_charge:
             raise ValueError("reserve recovery charging faster than supervised grid/PV envelope")
+        if abs(ac-pv-battery_w) > 500 + .1*max(abs(ac), pv, abs(battery_w)):
+            # In the first physical switch from EMS to General, sequential
+            # Modbus reads may straddle the mode transition: house and CT
+            # remain balanced while battery watts are from another instant.
+            # Rechecked within the existing 180s nonresponse window, ONLY
+            # during startup and with bounded discharge. Never relax phase,
+            # site, BMS, charger or charging-power hard stops above.
+            if (elapsed < START_SETTLE_S and live.get("work_mode_raw") == 0x101
+                    and 24 <= soc <= 28 and 0 <= battery_w <= 1500):
+                return Decision("reserve_nonresponse",
+                                "startup Auto transition battery/AC snapshot mismatch", values)
+            raise ValueError("battery/inverter AC energy balance invalid")
         if soc <= 26 and elapsed >= START_SETTLE_S and live.get("work_mode_raw") != 0x303:
             # The poller can report 26% just after dispatch handled a 27%
             # sample; the next 30s iteration has not reached charge mode.
