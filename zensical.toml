@@ -5,6 +5,7 @@ site_dir = "site"
 nav = [
   { "Start" = "index.md" },
   { "Repository" = "repository-layout.md" },
+  { "Arkiv och städning" = "solinteg-archive-and-retired-artifacts-2026-11-01.md" },
   { "EV-laddning" = [
     "ev-grid-priority-permanent-2026-10-29.md",
     "soc25-handoff-shadow-2026-11-01.md",

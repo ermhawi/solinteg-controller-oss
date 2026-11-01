@@ -1,5 +1,16 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**Archived one-off pilot cleanup (2026-11-01):** 35 unused deployment/
+rollback snapshots (~9.0 GiB), 22 retired SoC25 systemd units, five
+old root code directories and two obsolete EV-grid-trial units were
+removed after **verified GPG AES256-encrypted USB archival**.
+One full local rollback snapshot, seven root trial terminal-status
+markers, the live app/DB and ordinary watchdogs remain intact.
+See [artifact cleanup and restore runbook](../docs/solinteg-archive-and-retired-artifacts-2026-11-01.md)
+and [ADR](../docs/architecture/adr-2026-11-01-solinteg-usb-archive.md).
+**The root-local GPG archive key still requires an external encrypted
+backup; the USB archive alone is not disaster recovery.**
+
 The app + Modbus poller run as two systemd services on the NUC. No Vercel, no Home Assistant.
 This guide is written against the reference deployment's own hardware/network — any small
 dedicated Linux box with two NICs (or one NIC + a USB adapter) works the same way; substitute

@@ -6,6 +6,8 @@
 
 - [Projektöversikt och användning](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/README.md)
 - [Repositorylayout](repository-layout.md)
+- [Arkiv och avveckling av gamla drifts-/testartefakter](solinteg-archive-and-retired-artifacts-2026-11-01.md)
+- [ADR: krypterat USB-arkiv och bortstädning efter prover](architecture/adr-2026-11-01-solinteg-usb-archive.md)
 - [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
 - [Tillfälligt husbatteriprov 20–25 %](temporary-soc25-pilot-2026-10-31.md)
 - [Adaptivt 1,5 kW-prov till 25 %](temporary-soc25-adaptive-pilot-2026-10-31.md)
