@@ -1,0 +1,11 @@
+[Unit]
+Description=Temporary SoC25 plan bypass supervision every 15s
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solinteg-soc25-plan-bypass.service
+
+[Install]
+WantedBy=timers.target

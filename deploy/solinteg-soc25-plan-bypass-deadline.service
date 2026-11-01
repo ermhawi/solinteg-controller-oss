@@ -1,0 +1,17 @@
+[Unit]
+Description=Independent 21:45 stop for temporary SoC25 plan bypass
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/solinteg-soc25-plan-bypass/temporary_soc25_plan_bypass.py --stop
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/opt/solinteg /var/lib/solinteg-soc25-plan-bypass
+TimeoutStartSec=45

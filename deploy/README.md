@@ -235,6 +235,19 @@ site env, original dispatch source or failed 0W hold is changed.
 **Committing this code does not activate the physical test.** Confirm
 root state and watchdog before claiming 25% retention is verified.
 
+**Temporary no-save plan test (2026-11-01; separately approved):**
+See [plan-bypass runbook](../docs/temporary-soc25-plan-bypass-2026-11-01.md)
+and [ADR](../docs/architecture/adr-2026-11-01-temp-soc25-plan-bypass.md).
+A separate one-off root timer removes only the live optimizer slot's
+`batterySaveDriftKwh` marker, so the byte-identical dispatcher handles
+`idle` as normal Auto/self-use. It does **not** write Modbus or EVCC,
+and never changes the active supervised 48 SoC25 reserve. New optimizer
+runs (about every five minutes) are patched only in their current slot.
+Original plan JSON is SHA-journaled and restored on SoC <=26.5%,
+charger A1 evidence loss, safety failure or at **21:45 CET**, with an
+independent calendar stop timer. All other plan fields and future slots
+are untouched. Check real inverter output before claiming discharge.
+
 **Separate solar-aware EV/L3 observer (read-only, installed 2026-10-31):**
 `scripts/services/ev_grid_priority_shadow_observer.py` is deliberately
 independent from ARMED dispatch and the root EV-grid watchdog. Its

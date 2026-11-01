@@ -10,6 +10,7 @@ nav = [
     "soc25-handoff-shadow-2026-11-01.md",
     "temporary-soc25-evpaused-pilot-2026-11-01.md",
     "soc25-reserve-no-ev-2026-11-01.md",
+    "temporary-soc25-plan-bypass-2026-11-01.md",
     "evcc-readonly-rollout-2026-10-28.md",
     "ev-cost-ledger.md",
   ] },

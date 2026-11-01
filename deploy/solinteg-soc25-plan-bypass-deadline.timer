@@ -1,0 +1,11 @@
+[Unit]
+Description=One-off SoC25 plan bypass stop at 21:45 Stockholm time
+
+[Timer]
+OnCalendar=2026-11-01 21:45:00 Europe/Stockholm
+AccuracySec=1s
+Persistent=true
+Unit=solinteg-soc25-plan-bypass-deadline.service
+
+[Install]
+WantedBy=timers.target
