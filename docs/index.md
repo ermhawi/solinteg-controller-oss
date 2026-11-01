@@ -9,6 +9,8 @@
 - [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
 - [Tillfälligt husbatteriprov 20–25 %](temporary-soc25-pilot-2026-10-31.md)
 - [Adaptivt 1,5 kW-prov till 25 %](temporary-soc25-adaptive-pilot-2026-10-31.md)
+- [Föreslaget 25–26 % återhämtningsskydd (enbart skuggmodell)](soc25-handoff-shadow-2026-11-01.md)
+- [ADR: 25–26 % skuggmodell, utan fysisk aktivering](architecture/adr-2026-11-01-soc25-handoff-shadow.md)
 - [Beslut: fasberoende tillfällig återhämtningsladdning](architecture/adr-2026-10-31-adaptive-soc25-recovery.md)
 - [Beslut: tidsbegränsat fysiskt SoC-återhämtningsprov](architecture/adr-2026-10-31-temporary-soc25-recovery.md)
 - [Beslut: solmedveten EV/L3-shadow](architecture/adr-2026-10-31-ev-solar-shadow.md)

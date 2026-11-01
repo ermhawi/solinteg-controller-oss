@@ -148,3 +148,5 @@ No private IPs, credentials or utility invoices may be published.
   `reason=root gate missing`, `device_writes=0` rather than a misleading
   `FileNotFoundError`; normal dispatch and both permanent timers remain
   active. No EV/shadow gate or physical controller setting was changed.
+- Follow-up: a [standalone 25–26% SoC/Auto handoff shadow design](soc25-handoff-shadow-2026-11-01.md)
+  is **proposed only**; it does not restart this aborted physical trial.

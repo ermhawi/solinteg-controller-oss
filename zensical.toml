@@ -7,6 +7,7 @@ nav = [
   { "Repository" = "repository-layout.md" },
   { "EV-laddning" = [
     "ev-grid-priority-permanent-2026-10-29.md",
+    "soc25-handoff-shadow-2026-11-01.md",
     "evcc-readonly-rollout-2026-10-28.md",
     "ev-cost-ledger.md",
   ] },
