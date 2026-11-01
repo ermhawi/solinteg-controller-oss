@@ -93,6 +93,15 @@ restaureringstestad i denna åtgärd.
 
 ## Definition of Done för kommande engångsprov
 
+**Agentansvar från engineering-standards v1.2.2:** följ
+[den normerande artefaktpolicyn](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/artifact-hygiene.md)
+tillsammans med Git-hygien. En agent som skapar testtimers, tillfällig
+root-kod, installationskopior eller loggar ska också inventera och
+avveckla sina **egna** resurser vid avslut. En avstängd timer är inte
+avinstallerad; ett rent Git-repo är inte ett rent driftssystem.
+Äldre/okända eller användarägda resurser bevaras till separat
+godkännande. Ingen ny automatisk destruktiv timer aktiveras.
+
 Ett tillfälligt prov är inte färdigt enbart för att timer är
 `disabled` eller för att Git är rent:
 

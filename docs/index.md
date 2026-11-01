@@ -35,4 +35,4 @@
 
 ## Dokumentationsstandard
 
-Projektet följer [engineering-standards v1.2.0](https://github.com/ermhawi/engineering-standards/blob/v1.2.0/docs/policy.md). Git/Markdown är källan till sanningen; dokument uppdateras i samma branch som relaterad kod. Befintlig dokumentation bibehålls.
+Projektet följer [engineering-standards v1.2.2](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/policy.md), inklusive [Git-hygien](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/git-hygiene.md) och [artefaktstädning](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/artifact-hygiene.md) som agentens Definition of Done. Git/Markdown är källan till sanningen; dokument uppdateras i samma branch som relaterad kod. Se [lokal arkiv- och städrutin](solinteg-archive-and-retired-artifacts-2026-11-01.md). Befintlig dokumentation bibehålls.
