@@ -1,9 +1,11 @@
 # Sunwoda 25% SoC reserve with unplugged Volvo — 2026-11-01
 
-**Status:** Implemented as an isolated, *time-bounded six-hour trial*. This
-runbook is not evidence of physical activation. Confirm the root status before
-claiming the test has started or reached its SoC floor. No permanent 25% hold
-or hardware/BMS threshold change is authorized by this implementation.
+**Status: physically activated 2026-11-01 19:07 CET as an isolated six-hour
+trial.** The independent root watchdog accepted the unplugged `A1` state
+and both systemd timers are active. The hard stop is 2026-11-02 01:07 CET.
+**This does not yet prove recovery at 26.5% or lasting 25% retention:**
+the house battery was still at 38% at activation. No permanent hold or
+hardware/BMS threshold change is authorized by this implementation.
 
 ## Goal and observed EVCC state
 
@@ -117,12 +119,47 @@ on `daemon-reload`. The **new** root-owned overlay does not set
 its maximum runtime without changing the running dispatcher's age.
 A normal dispatcher restart can still briefly hand control back to Auto.
 
+## Physical activation evidence — 2026-11-01
+
+- **18:56 CET:** Read-only live observation SoC **39%**, battery
+  **+975W discharging**, Volvo CP **A1** without current measurements,
+  PV **0W**, no 48-prefixed overlay. The completed earlier 47-prefixed
+  test was not restarted.
+- **19:07 CET:** Strict five-minute read-only preflight **passed**:
+  SoC **38%**, EVCC mode `disconnected`, predicted maximum import
+  approximately **1,084W/phase** and **2,446W total** for an extra
+  1,500W reserve charge. Two root-owned watchdog/deadline timers were
+  enabled *before* the ARMED dispatcher restart; installer returned
+  `started_supervised` at **19:07:21 CET**.
+- **19:07:47 CET:** Real `/proc` inspection confirms the process runs
+  `soc25_reserve_dispatch.py`, both isolated environment keys are
+  present, original installed `dispatch_loop.py` remains SHA-matched,
+  root status is `running` and both watchdog timers are active.
+  Native work mode temporarily observed as General after the scheduled
+  dispatcher restart; this was before the new target was independently
+  read back. See subsequent live measurements rather than assuming
+  persistent hold from this early sample.
+- **19:08:46 CET:** Native EMS mode `0x303` is again physically
+  observed, battery discharge **238W** with SoC **38%** and the
+  normal optimizer active above the reserve band. EVCC remains
+  **A1**, watchdog state `running` after fresh independent checks,
+  and both timers are active.
+- **19:09:32 CET (after the 120-second settle period):** Watchdog
+  still `running`, SoC **38%**, actual battery discharge approximately
+  **164W**, inverter in EMS mode `0x303`, EVCC still disconnected
+  `A1`, regular and independent deadline timers active.
+  This verifies normal operation above the reserve band, *not yet*
+  an actual 26.5→28% recovery transition.
+- The independent deadline timer's actual systemd `NEXT` was
+  **2026-11-02 01:07:24 CET**. This is the *stop* deadline,
+  not a guarantee that battery SoC will cross 26.5% before then.
+
 ## Tests and limitations
 
 ```bash
 python3 -m unittest scripts.tests.test_soc25_reserve -v
 python3 -m unittest discover -s scripts/tests -p 'test_*.py' -q
-systemd-analyze verify deploy/solinteg-soc25-reserve-watchdog.service deploy/solinteg-soc25-reserve-watchdog.timer
+systemd-analyze verify deploy/solinteg-soc25-reserve-*
 ```
 
 - Historical 25% SoC behavior is observed but **not proof** of a
