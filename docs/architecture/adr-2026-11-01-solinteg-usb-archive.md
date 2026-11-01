@@ -38,12 +38,15 @@ avinstallerade **24** gamla test-`systemd`-enheter och fem
 gamla rotbibliotek. Aktiva dispatcher-/poller-/säkerhetsvakter
 fick inte nya Modbus-skrivare eller ändrade trösklar.
 
-Den enda GPG-återläsningsnyckeln lagras hittills på serverns
-systemdisk, root-`0600`. **Separat säker förvaring av nyckeln, exempelvis
-i Bitwarden, återstår** innan USB-arkivet utgör oberoende
-katastrofåterställning. Att en äldre katalog arkiverats
-utan byggberoenden betyder dessutom att den inte längre
-kan startas som en omedelbar rollback.
+**Uppföljning 2026-11-01:** GPG-nyckeln har nu en verifierad
+extern kopia i Bitwarden Secrets Manager med namnet
+`SOLINTEG_USB_ARCHIVE_PASSPHRASE_20261101`. Värdet återlästes
+från Bitwarden och kunde dekryptera USB-arkivets provhistorik
+utan att nyckelfilen på servern användes. Nyckeln förvaras även
+lokalt root-`0600`; återläsning förutsätter fortsatt åtkomst till
+Bitwarden. Detta är inte en komplett katastrofåterställning av
+servern, och äldre källkod utan byggberoenden är ingen omedelbart
+startbar rollback.
 
 En framtida automatiserad cleanup måste ha en testad,
 idempotent ägar- och checksummekontroll; manuellt verifierade

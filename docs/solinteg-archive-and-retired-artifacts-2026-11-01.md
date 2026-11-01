@@ -65,13 +65,17 @@ enhetsfiler, rootkod och statusar har dessutom SHA256-jämförts
 mot ursprungliga filer. `SHA256SUMS` och
 `cleanup-report.json` verifierar leveransen.
 
-**Viktig kvarstående åtgärd:** Dekrypteringsnyckeln ligger endast
-lokalt, root-ägd med `0600`, på
-`/root/.config/solinteg-archive/passphrase`. Den behöver
-säkerhetskopieras till en betrodd hemlighetshanterare, till
-exempel Bitwarden, innan USB-arkivet kan räknas som återläsbart
-även efter ett haveri på systemdisken. Lägg **aldrig** okrypterad
-nyckel på samma NTFS-disk.
+**Verifierad nyckelbackup 2026-11-01:** GPG-lösenfrasen är sparad i
+Bitwarden Secrets Manager som
+`SOLINTEG_USB_ARCHIVE_PASSPHRASE_20261101`, i det befintliga
+Secrets Manager-projektet som används av `ha-kube`.
+Värdet lästes tillbaka via Bitwardens SDK och användes för att
+**dekryptera och kontrollera** `trial-evidence.tar.zst.gpg` på USB,
+**utan att den lokala nyckelfilen användes**. Den ursprungliga
+`/root/.config/solinteg-archive/passphrase` är fortsatt root-ägd
+med `0600`. Bitwarden-åtkomsten måste också kunna återställas
+oberoende av servern. Arkivet är inte en komplett backup av
+hela servern. Lägg **aldrig** en okrypterad nyckel på samma USB-disk.
 
 För läsbarhetskontroll på ursprunglig server:
 

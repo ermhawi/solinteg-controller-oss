@@ -8,8 +8,13 @@ One full local rollback snapshot, seven root trial terminal-status
 markers, the live app/DB and ordinary watchdogs remain intact.
 See [artifact cleanup and restore runbook](../docs/solinteg-archive-and-retired-artifacts-2026-11-01.md)
 and [ADR](../docs/architecture/adr-2026-11-01-solinteg-usb-archive.md).
-**The root-local GPG archive key still requires an external encrypted
-backup; the USB archive alone is not disaster recovery.**
+**Key escrow verified 2026-11-01:** the root-local GPG archive
+passphrase was stored in Bitwarden Secrets Manager as
+`SOLINTEG_USB_ARCHIVE_PASSPHRASE_20261101`. Cloud readback
+successfully decrypted and listed the archived trial evidence
+without reading the host's local key. This does not constitute
+a full server disaster-recovery backup; preserve independent
+Bitwarden account access and the active backup rotation.
 
 The app + Modbus poller run as two systemd services on the NUC. No Vercel, no Home Assistant.
 This guide is written against the reference deployment's own hardware/network — any small
