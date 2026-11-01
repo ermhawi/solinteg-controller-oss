@@ -1,0 +1,17 @@
+[Unit]
+Description=Independent rollback supervisor for one-off Sunwoda 26-to-28% retry
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/solinteg-soc25-recovery-retry/soc25_recovery_retry_watchdog.py --tick
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/etc/systemd/system/solinteg-dispatch.service.d /var/lib/solinteg-soc25-recovery-retry
+TimeoutStartSec=90

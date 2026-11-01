@@ -1,0 +1,11 @@
+[Unit]
+Description=Supervise one-off Sunwoda 26-to-28% retry
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solinteg-soc25-recovery-retry-watchdog.service
+
+[Install]
+WantedBy=timers.target

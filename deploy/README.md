@@ -245,6 +245,19 @@ fresh preflight and explicit authorization. See the
 **Committing this code does not activate the physical test.** Confirm
 root state and watchdog before claiming 25% retention is verified.
 
+**Independent 26→28% SoC25 retry (2026-11-01):**
+See [runbook](../docs/soc25-recovery-retry-2026-11-01.md) and
+[ADR](../docs/architecture/adr-2026-11-01-soc25-recovery-retry.md).
+The retry is a NEW root-owned 49-prefix one-off identity with independent
+15-second watchdog and 90-minute hard-stop timer. It reuses the pinned
+original dispatcher through a new library wrapper, not the aborted
+48-prefix state or the previous 49 patched optimizer rows. Physical
+success requires at least two distinct charging samples (>=20s apart,
+negative battery_w and EMS 0x303), then measured SoC >=28%; stop also
+restores original dispatch if no charge occurs within 180s. No EVCC,
+original dispatcher source, native inverter/BMS minimum, or Modbus broker
+changes. **The source commit alone does NOT physically activate this retry.**
+
 **Temporary no-save plan test (2026-11-01; separately approved):**
 See [plan-bypass runbook](../docs/temporary-soc25-plan-bypass-2026-11-01.md)
 and [ADR](../docs/architecture/adr-2026-11-01-temp-soc25-plan-bypass.md).
