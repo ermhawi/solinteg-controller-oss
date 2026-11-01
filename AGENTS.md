@@ -14,6 +14,16 @@ Follow [engineering-standards v1.2.2](https://github.com/ermhawi/engineering-sta
 
 Before new work, resolve old staged/untracked/ignored files, stashes, unpublished commits and stale auxiliary worktrees. A clean commit is not done until checks pass, the allowed tracking branch is in sync, and only the primary checkout remains. Preserve unknown work and private configuration instead of deleting or publishing it. Run `python3 /home/hakan/dev/github.com/ermhawi/engineering-standards/scripts/git_hygiene.py --mode preflight .` and `--mode done .` when available.
 
+## Bitwarden Secrets Manager
+
+För framtida arkivnycklar, API-tokens och hemligheter, följ [den gemensamma
+Bitwarden Secrets Manager-runbooken](https://github.com/ermhawi/engineering-standards/blob/main/docs/operations/bitwarden-secrets-manager.md).
+HA-Kube har befintlig Secrets Manager-/ESO-integration. Välj rätt projekt
+och behörig maskinidentitet, använd Bitwarden UI eller skyddad SDK-process
+för att skriva/läsa **värden**, verifiera readback och återställning utan
+att skriva ut hemlighetsmaterial. Använd aldrig `bws-get` eller
+`bws-create` som säkert agentflöde för känsliga värden.
+
 ## Mandatory artifact cleanup DoD
 
 Before concluding any Solinteg task, inventory **agent-owned temporary resources outside Git** (systemd services/timers/drop-ins, active processes, test scripts, staging/release directories, containers, logs and snapshots). Record the owner, terminal state and rollback for every one-off physical trial. Verify the original dispatcher, poller, EV/phase safety guards and real telemetry BEFORE removing anything. Preserve terminal root status tombstones, required backups and the last working rollback.

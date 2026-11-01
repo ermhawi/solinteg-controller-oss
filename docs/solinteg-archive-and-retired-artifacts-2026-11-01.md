@@ -65,6 +65,11 @@ enhetsfiler, rootkod och statusar har dessutom SHA256-jämförts
 mot ursprungliga filer. `SHA256SUMS` och
 `cleanup-report.json` verifierar leveransen.
 
+**För andra projekt:** [Gemensam agentrunbook för Bitwarden
+Secrets Manager](https://github.com/ermhawi/engineering-standards/blob/main/docs/operations/bitwarden-secrets-manager.md)
+dokumenterar åtkomst, projektval, SDK, säker metadatahantering och
+verifiering av innehåll utan exponering i chatt/loggar.
+
 **Verifierad nyckelbackup 2026-11-01:** GPG-lösenfrasen är sparad i
 Bitwarden Secrets Manager som
 `SOLINTEG_USB_ARCHIVE_PASSPHRASE_20261101`, i det befintliga
