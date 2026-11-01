@@ -1,8 +1,10 @@
 # Tillfälligt förbikopplat batterisparläge – 2026-11-01
 
-**Status:** Kod för ett separat, avgränsat fysiskt försök. Ändring i
-databasplanen aktiveras **enbart** med explicit `--start --confirm`.
-Kontrollera rotägda loggen för faktisk aktivering och resultat.
+**Status: fysiskt aktiverat kl. 19:59 CET 2026-11-01**, separat från
+48-reservens ordinarie inverterstyrning. Detta är ett avgränsat,
+tidsbegränsat **databasplansprov**, inte ett permanent ändrat sparläge.
+Den faktiska effekten och senare SoC-övergångar måste kontrolleras
+från invertervärden och rotägda loggar.
 
 ## Syfte
 
@@ -80,6 +82,49 @@ separat säkerhetsövervakning.
 python3 -m unittest scripts.tests.test_temporary_soc25_plan_bypass -v
 systemd-analyze verify deploy/solinteg-soc25-plan-bypass*
 ```
+
+## Fysisk provlogg och reparerat uppstartsproblem
+
+- **19:59:07 CET:** Startförkontroll godkänd, hus SoC **36 %**,
+  EVCC `A1`, ingen solproduktion. Installationen skrev
+  `batterySaveDriftKwh`-undantaget i den aktuella planen med
+  `run_id=11547`. Inga Modbus- eller EVCC-skrivningar i testskriptet.
+- **19:59:37–19:59:52 CET:** Den ordinarie dispatchern loggade
+  `idle 0 W` med outcome `applied`, växelriktaren observerades
+  i **General/Auto (0x101)** och batteriet levererade ungefär
+  **1 773 W** till huset. Detta är faktisk effekt av ändringen,
+  inte bara en patchad databasrad.
+- **Uppstartsproblem:** Att både aktivera den återkommande timern
+  (`OnBootSec=30s` på en redan körande värd) och anropa ett första
+  `--tick` samtidigt gjorde att två processer kunde skriva samma
+  statusfil. Den ursprungliga JSON-planposten för run 11547 var redan
+  ändrad när rotjournalen kontrollerades, men dess backup saknades.
+  För att återställningen ska vara tillförlitlig pausades **endast**
+  förbikopplingens 15s-timer; den ursprungliga sparmarkören
+  (`batterySaveDriftKwh=0.063`) rekonstruerades från föregående
+  matchande 19:45-plan (run 11546), och exakt patch-SHA sparades i
+  rotjournalen. Inga inverterkommandon skickades vid reparationen.
+  Övriga redan journalförda runs behölls. Timern återaktiverades,
+  och båda temp-timerarna samt 48-reservens watchdog är fortsatt aktiva.
+- **20:00 CET:** En ny appgenererad plan fick åter sin
+  `batterySaveDriftKwh`; den ordinarie dispatchern hann kort
+  återgå till 50W sparbörvärde, innan 15s-timern patchade den nya
+  run-posten. Vi ska därför följa *faktiska* Auto-/EMS-övergångar
+  och SoC, inte bara antal patchade planposter.
+- **Kodkorrigering i startskriptet:** Den första synkrona patchen
+  görs nu **innan** den återkommande timern aktiveras. Den redan
+  installerade rotägda skriptkoden ändras inte under pågående prov.
+  Detta är en korrigering för eventuella nya separata försök.
+- **20:01:28 CET:** Efter journalreparationen är det fortfarande
+  `running`, **fem** ändrade planruns har backup (inklusive
+  rekonstruerad run 11547), aktuell inverter är **General/Auto
+  0x101**, batteriet levererar cirka **1 778 W** till huset,
+  nätutbytet är cirka **26 W export** totalt och EVCC är fortfarande
+  `A1`. Senaste dispatchlogg visar `idle 0 W applied` 20:00:59.
+  Båda temporära timer-enheterna samt 48-reservens watchdog är aktiva.
+- **Ännu ej verifierat:** Att SoC når 26,5 % och 48-reservens
+  laddning sedan återhämtar till 28 %. Ingen permanent policyändring
+  är genomförd.
 
 ## Risker och begränsningar
 

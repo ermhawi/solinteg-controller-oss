@@ -176,6 +176,14 @@ class PlanBypassTests(unittest.TestCase):
         self.assertEqual(bypass.tick()["state"],"stopped")
         self.assertEqual(json.loads(self.status.read_text())["originals"],{})
 
+    def test_installer_does_not_run_first_tick_concurrently_with_timer(self):
+        import inspect
+        src=inspect.getsource(installer.start)
+        self.assertLess(src.index('_systemctl("enable","--now",policy.DEADLINE_TIMER)'),
+                        src.index("first=policy.tick()"))
+        self.assertLess(src.index("first=policy.tick()"),
+                        src.index('_systemctl("enable","--now",policy.TIMER)'))
+
     def test_only_plan_dispatch_json_is_modified(self):
         source=Path(bypass.__file__).read_text()
         for forbidden in ("pymodbus","ModbusTcpClient","write_register(",

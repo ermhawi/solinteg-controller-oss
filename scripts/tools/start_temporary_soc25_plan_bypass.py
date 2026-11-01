@@ -62,10 +62,13 @@ def start() -> dict:
         # Independent calendar stop first, then periodic patching. Neither
         # changes the current systemd dispatch process or site config.
         _systemctl("enable","--now",policy.DEADLINE_TIMER)
-        _systemctl("enable","--now",policy.TIMER)
+        # Apply the first override BEFORE enabling the recurring timer:
+        # an OnBootSec timer on an already-running host fires immediately,
+        # and two parallel ticks could overwrite the pre-commit journal.
         first=policy.tick()
         if first.get("state")!="running":
             raise RuntimeError("initial DB plan bypass not supervised")
+        _systemctl("enable","--now",policy.TIMER)
         return {"state":"started_supervised","initial":first,
                 "expires_at_utc":policy.EXPIRES.isoformat(),"device_writes":0}
     except Exception:
