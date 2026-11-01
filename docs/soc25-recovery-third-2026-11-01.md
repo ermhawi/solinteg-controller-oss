@@ -1,8 +1,11 @@
 # Tredje övervakade återhämtningsprovet, 25–26 → 28 % (2026-11-01)
 
-**Status:** Ny, fristående och tidsbegränsad providentitet implementerad.
-Fysisk status verifieras separat från provets root-journal. Detta är
-**inte ett permanent 25 %-SoC-skydd**.
+**Status: tredje fysiska provet avbrutet av säkerhetswatchdog
+2026-11-01 kl. 21:10 CET.** Återställning av originaldispatchern och
+båda egna timers verifierad. En fysiskt uppmätt negativ batterieffekt
+observerades en gång, men avläsningarna var sinsemellan inkonsekventa
+så provet kunde inte bekräfta stabil laddning eller SoC 28 %.
+Det finns **inget aktivt permanent 25 %-SoC-skydd**.
 
 ## Syfte och tidigare prov
 
@@ -93,6 +96,63 @@ Kontrollera fysisk effekt via `/opt/solinteg/live.json` och
 Försöksstatus `running` bevisar inte laddning; verifiera faktisk
 negativ `battery_w` och slutlig SoC. Efter återställning är
 det ordinarie planoptimeraren som bestämmer fortsatt drift.
+
+## Fysiskt utfall – 2026-11-01 kl. 21:09–21:10 CET
+
+Fakta verifierade mot root-journal, ursprunglig dispatchlogg och
+SQLite `readings` (samtliga tider svensk vintertid):
+
+- **21:09:30:** Tredje isolerade startgodkännandet passerade,
+  SoC **25 %**, EVCC **A1** fysiskt urkopplad med `null`-strömmar.
+  Original 48- och 49-proven var terminala, 49/49 tidigare
+  optimizer-planrader återställda. Startskriptet aktiverade endast
+  fristående root-ägt `50-`-tillägg och 60-minuters deadline.
+- **21:09:40:** Oberoende första watchdogkontrollen `running`,
+  batteri **+258 W** urladdning, SoC **25 %**, oförändrad original
+  dispatcher-SHA och båda nya systemd-timers aktiva. Den nya
+  processlokala dispatchern kördes med 30s intervall.
+- **21:09:43–21:09:51:** Originaldispatchern loggade
+  `force_charge: 1500 W` och `accepted_pending_physical_confirmation`
+  med återhämtningsmål 28 %. Detta är ett styrkommando, inte
+  i sig bevis på fysiskt stabil laddning.
+- **21:09:52:** Första efterföljande polleravläsning:
+  SoC **25 %**, faktisk batterisignal **−1 692 W** (laddning),
+  `work_mode_raw=0x303`, AC-utgång **+978 W**, PV **0 W**,
+  huslast **989 W**, netto nät **−11 W** (import),
+  L1/L2/L3 **−115/−126/+231 W**. CT/house/AC stämde:
+  `978 - (-11) - 989 = 0`, och faserna summerade till
+  `−10 W`. Men **batteri/AC-skiftet var 2 670 W**
+  (`abs(978 - (-1692))`), långt över den fristående
+  säkerhetskontrollens tolerans. Sådana värden kan inte
+  behandlas som en konsekvent samtidig batteri-/nätenergibalans.
+- **21:09:56–21:10:04:** Watchdoggen avbröt omedelbart med
+  `battery/inverter AC energy balance invalid`. Den tog bort
+  **endast** den eget SHA-verifierade 50-konfigurationen,
+  återstartade den byte-identiska ordinarie dispatchern och
+  avaktiverade båda 50-timers. Root-journalen visar
+  `state=aborted`, `charge_samples=0`,
+  `physical_control_authorized=false` och återställningstid
+  **21:10:04 CET**. Ingen SoC-28-avläsning erhölls.
+- **21:10:22:** Nästa pollervärden under originaldispatchern:
+  SoC **25 %**, batteri **+233 W** urladdning, AC **199 W**,
+  nät **−793 W**, hus **992 W** och `work_mode_raw=0x303`.
+  Ordinarie dispatcher, poller och standardwatchdog var aktiva.
+  48-/49-/50-överlagringar saknades; alla särskilda timers
+  avstängda. Äldre rotstater och EVCC orörda.
+
+**Bedömning:** Det finns ett kort batteriladdningsindicerande
+mätvärde, men det är **inte** tillräckligt för att bekräfta
+stabil och korrekt 25→28 %-laddning. En sekventiell
+Modbus-avläsning som passerat ett inverterlägebyte är en
+möjlig förklaring till den felaktiga samtidiga balansen,
+men detta är inte bekräftat. Det gamla watchdogstoppet
+skall betraktas som ett korrekt säkerhetsbeslut.
+
+**Fortsatt åtgärd:** Återanvänd aldrig 48-, 49- eller 50-status,
+och starta inte ett fjärde prov innan Modbus-avläsningens
+koherens/tidsstämpling och den föreslagna single-writer-brokern
+har granskats separat. Ändra inte hårdvarans SoC-golv som
+genväg. Detta dokument är en terminal provlogg.
 
 ## Tester
 

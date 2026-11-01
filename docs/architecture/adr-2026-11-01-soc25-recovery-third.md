@@ -1,8 +1,8 @@
 # ADR 2026-11-01: isolerat tredje 25–26→28 %-återhämtningsprov
 
-**Status:** Implementerat i källkod med en egen Providentitet.
-Fysisk aktivering, återställning och slutresultat redovisas endast
-efter faktiska root-statusar och fysiska avläsningar.
+**Status: fysiskt prov aktiverat, därefter säkerhetsavbrutet och
+återställt kl. 21:10 CET 2026-11-01.** SoC 28 % verifierades inte.
+Den nya 50-identiteten är terminal och får inte återanvändas.
 
 ## Bakgrund
 
@@ -37,6 +37,29 @@ Lyckad laddning fastställs genom två fysiska negativa batteri-W
 avläsningar minst 20 s isär under EMS 0x303, och slutlig SoC >=28%.
 Båda watchdog-timrar stoppar och återställer root-ägd 50-overlay
 vid abort eller lyckad färdigställning.
+
+## Utfall och beslut om fortsättning
+
+Den fysiska 50-som-provet startades 21:09:30 CET vid 25 % SoC
+efter godkänd root-förkontroll. Originaldispatchern loggade
+`charge 1500W`. Den första pollermätningen under EMS `0x303`
+gav `battery_w=-1692`, samtidigt som AC-utgången var +978W,
+PV 0W, hus 989W och netto nätimport 11W. Fas/house/AC stämde
+matematiskt men batteriets energibalans motsade detta med
+2 670W. Säkerhetswatchdoggen stoppade försöket omedelbart,
+återställde originaldispatchern, inaktiverade båda timers och
+lämnade `state=aborted` i den 50-root-journalen.
+En efterföljande mätning visade 25 % och 233W urladdning.
+Ingen 28 %-verifiering eller två konsistenta laddningsprover
+registrerades.
+
+Vi **vidgar inte** säkerhetsundantaget till dessa mätvärden
+under samma godkännande. Ingen ny Modbus-skrivare eller nytt
+fysiskt prov ska startas för att kompensera en motstridig
+energibalans. Nästa ändring bör först klargöra icke-atomära
+Modbus-telemetriögonblick och etablera förbättrad
+en-skrivare/serialisering via Modbus-broker. Det är ett
+separat tekniskt och fysiskt ändringsbeslut.
 
 ## Konsekvenser
 

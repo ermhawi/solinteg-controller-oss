@@ -256,6 +256,23 @@ class ReserveWatchdogDecisionTests(unittest.TestCase):
                 self.assertEqual(self.evaluate(live=sample, elapsed=10).state, "abort")
         self.assertEqual(self.evaluate(live=transient, evcc=C2, elapsed=10).state, "abort")
 
+    def test_real_charge_transition_mismatch_remains_immediate_abort(self):
+        # At 21:09:52 CET the native Modbus poller reported a real
+        # negative battery_w (-1692W) but +978W inverter AC with 0W PV.
+        # The site CT/house/AC sum was consistent, so this is not
+        # proof of a safe sustained charge; do NOT extend the special
+        # General/Auto discharge-only grace to this EMS charging case.
+        observed = {
+            **LIVE, "soc_pct": 25., "battery_w": -1692.,
+            "house_load_w": 989., "grid_w": -11.,
+            "inverter_ac_w": 978., "meter_l1_w": -115.,
+            "meter_l2_w": -126., "meter_l3_w": 231.,
+            "work_mode_raw": 0x303,
+        }
+        decision = self.evaluate(live=observed, elapsed=35)
+        self.assertEqual(decision.state, "abort")
+        self.assertIn("battery/inverter AC", decision.reason)
+
     def test_near_25_requires_real_charge(self):
         self.assertEqual(self.evaluate(live=charge_live()).state, "safe")
         x = {**LIVE, "soc_pct": 25.}

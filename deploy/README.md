@@ -280,6 +280,16 @@ success requires two distinct native charging samples then SoC >=28%.
 No new Modbus writer, EVCC writes, site-env/BMS changes or permanent
 reserve hold are deployed. **Source commits alone do not activate
 physical control.**
+**Utfall 21:10 CET:** Fysiskt 50-prov startade vid SoC 25 %.
+Dispatchern loggade 1 500 W charge-target, och en mätning visade
+`battery_w=-1692` i EMS med `inverter_ac_w=+978`, PV 0,
+nätimport 11 W och huslast 989 W. Samtidiga värden var därför
+inkonsekventa och root-watchdoggen avbröt med
+`battery/inverter AC energy balance invalid`. Originaldispatcher
+återställd och båda 50-timers inaktiva, inga root-överlagringar
+kvar. 28 % kunde inte verifieras och inget nytt försök får
+startas genom att återanvända teststatus.
+Se [fullständig provlogg](../docs/soc25-recovery-third-2026-11-01.md).
 
 **Temporary no-save plan test (2026-11-01; separately approved):**
 See [plan-bypass runbook](../docs/temporary-soc25-plan-bypass-2026-11-01.md)
