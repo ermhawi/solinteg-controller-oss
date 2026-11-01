@@ -12,6 +12,8 @@
 - [Separat EV-pauserat 25 %-prov med watchdog](temporary-soc25-evpaused-pilot-2026-11-01.md)
 - [25 %-reserv utan inkopplad Volvo – tidsbegränsat prov](soc25-reserve-no-ev-2026-11-01.md)
 - [Fristående 26→28 %-återhämtningsprov med rättad watchdog](soc25-recovery-retry-2026-11-01.md)
+- [Tredje fristående 25–26→28 %-laddprov](soc25-recovery-third-2026-11-01.md)
+- [ADR: tredje prov med egen identitet och verifierad återställning](architecture/adr-2026-11-01-soc25-recovery-third.md)
 - [ADR: nytt 26→28 %-prov utan återanvändning av gammal status](architecture/adr-2026-11-01-soc25-recovery-retry.md)
 - [Tillfällig planändring: använd batteriet fram till återhämtningsprovet](temporary-soc25-plan-bypass-2026-11-01.md)
 - [ADR: tidsbegränsat undantag från batterisparläge](architecture/adr-2026-11-01-temp-soc25-plan-bypass.md)

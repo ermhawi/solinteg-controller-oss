@@ -266,6 +266,21 @@ temperature, EVCC and excessive-power stops immediate. See
 [incident evidence](../docs/soc25-recovery-retry-2026-11-01.md).
 **No physical retry is active; source commits never activate control.**
 
+**Third independent SoC25 recovery test (2026-11-01):**
+The separate [third-trial runbook](../docs/soc25-recovery-third-2026-11-01.md)
+and [ADR](../docs/architecture/adr-2026-11-01-soc25-recovery-third.md)
+describe unique 50-prefix root-owned code, a 60-minute deadline and a
+15-second independent watchdog. The preflight permits only 25–26% SoC
+with verified unplugged EVCC A1, normal dispatcher, fresh CT, and two
+prior completed rollbacks; it never touches old 48/49 statuses. A
+narrow startup battery-vs-AC register-coherency grace is allowed only
+in General/Auto for <120 s with actual 0–1500W discharge; phase/CT,
+overcharge, temperature and EVCC hard stops are immediate. Verified
+success requires two distinct native charging samples then SoC >=28%.
+No new Modbus writer, EVCC writes, site-env/BMS changes or permanent
+reserve hold are deployed. **Source commits alone do not activate
+physical control.**
+
 **Temporary no-save plan test (2026-11-01; separately approved):**
 See [plan-bypass runbook](../docs/temporary-soc25-plan-bypass-2026-11-01.md)
 and [ADR](../docs/architecture/adr-2026-11-01-temp-soc25-plan-bypass.md).
