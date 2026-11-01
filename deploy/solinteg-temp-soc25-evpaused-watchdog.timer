@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch and restore bounded EV-paused 25% SoC recovery pilot
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solinteg-temp-soc25-evpaused-watchdog.service
+
+[Install]
+WantedBy=timers.target

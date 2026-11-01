@@ -86,6 +86,7 @@ the observed period with the EV paused still only contained existing
    watchdog, systemd or EVCC change. This design does not reuse the
    now-aborted one-off 25% pilot approval.
 
-See the [31 October pilot](temporary-soc25-adaptive-pilot-2026-10-31.md),
+See the separately approved [EV-paused one-off trial](temporary-soc25-evpaused-pilot-2026-11-01.md),
+the [31 October pilot](temporary-soc25-adaptive-pilot-2026-10-31.md),
 [EV-grid priority limitations](ev-grid-priority-permanent-2026-10-29.md)
 and [ADR](architecture/adr-2026-11-01-soc25-handoff-shadow.md).

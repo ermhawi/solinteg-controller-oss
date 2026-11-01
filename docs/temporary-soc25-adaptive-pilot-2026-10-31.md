@@ -150,3 +150,5 @@ No private IPs, credentials or utility invoices may be published.
   active. No EV/shadow gate or physical controller setting was changed.
 - Follow-up: a [standalone 25–26% SoC/Auto handoff shadow design](soc25-handoff-shadow-2026-11-01.md)
   is **proposed only**; it does not restart this aborted physical trial.
+- A new [EV-paused, independently watchdogged 25% trial](temporary-soc25-evpaused-pilot-2026-11-01.md)
+  has distinct admission criteria and ownership. Do not reuse the old 46-prefixed pilot.

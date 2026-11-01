@@ -206,6 +206,19 @@ The independent watchdog rolls back the exact drop-in at 25% SoC,
 a hard two-hour deadline or a stale/invalid/safety observation. The
 one-off pilot must not be confused with the permanent EV protection.
 
+**EV-paused, separately watchdogged 25% recovery pilot (2026-11-01):**
+See [runbook](../docs/temporary-soc25-evpaused-pilot-2026-11-01.md) and
+[ADR](../docs/architecture/adr-2026-11-01-soc25-evpaused-pilot.md).
+It has its **own** 47-prefixed drop-in and a hard read-only five-minute
+SoC/phase preflight. It never reuses the old 45/46-pilot permissions or
+EVCC charging conditions. While blocked (notably at SoC below 19%) it
+changes **nothing** in ARMED dispatch. If explicitly started, existing
+Modbus dispatch alone requests at most 1500 W, dynamically derated by
+L3 to 300 W; the independent root timer restores the original dispatcher
+at 26% SoC, after two hours, or on any safety/EVCC-pause violation.
+These soft limits are not instantaneous fuse protection, and the old
+optimizer may discharge the house battery again after rollback.
+
 **Separate solar-aware EV/L3 observer (read-only, installed 2026-10-31):**
 `scripts/services/ev_grid_priority_shadow_observer.py` is deliberately
 independent from ARMED dispatch and the root EV-grid watchdog. Its
