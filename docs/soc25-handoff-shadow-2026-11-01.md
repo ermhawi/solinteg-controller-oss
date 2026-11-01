@@ -86,6 +86,11 @@ the observed period with the EV paused still only contained existing
    watchdog, systemd or EVCC change. This design does not reuse the
    now-aborted one-off 25% pilot approval.
 
+A separate [six-hour, EV-disconnected 25% reserve prototype](soc25-reserve-no-ev-2026-11-01.md)
+now uses 26.5–28% recovery thresholds rather than claiming a verified
+zero-power hold. It has its own rollback timer and does not change the
+shadow analysis or establish permanent production behavior.
+
 See the separately approved [EV-paused one-off trial](temporary-soc25-evpaused-pilot-2026-11-01.md),
 the [31 October pilot](temporary-soc25-adaptive-pilot-2026-10-31.md),
 [EV-grid priority limitations](ev-grid-priority-permanent-2026-10-29.md)

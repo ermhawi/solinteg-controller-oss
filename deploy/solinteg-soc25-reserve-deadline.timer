@@ -1,0 +1,10 @@
+[Unit]
+Description=One-off independent reserve deadline timer (six hours)
+
+[Timer]
+OnActiveSec=6h
+AccuracySec=1s
+Unit=solinteg-soc25-reserve-deadline.service
+
+[Install]
+WantedBy=timers.target

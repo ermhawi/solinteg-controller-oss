@@ -1,0 +1,17 @@
+[Unit]
+Description=Independent six-hour hard stop for temporary Sunwoda reserve trial
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/solinteg-soc25-reserve/soc25_reserve_watchdog.py --stop
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateDevices=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/etc/systemd/system/solinteg-dispatch.service.d /var/lib/solinteg-soc25-reserve
+TimeoutStartSec=90

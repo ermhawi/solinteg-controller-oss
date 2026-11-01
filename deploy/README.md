@@ -219,6 +219,22 @@ at 26% SoC, after two hours, or on any safety/EVCC-pause violation.
 These soft limits are not instantaneous fuse protection, and the old
 optimizer may discharge the house battery again after rollback.
 
+**Unplugged Volvo, six-hour 25% house-reserve test (2026-11-01):**
+See [runbook](../docs/soc25-reserve-no-ev-2026-11-01.md) and
+[ADR](../docs/architecture/adr-2026-11-01-soc25-reserve-no-ev.md).
+The isolated 48-prefixed one-off overlay accepts fresh EVCC A1 (cable
+unplugged with *null*, not measured-zero, currents) or B2 (paused and
+measured <=1A). Reconnecting into active C2 immediately triggers the
+independent root watchdog's rollback. The original installed dispatcher
+is still the **only** inverter writer, with recovery entry <26.5% and
+exit >=28%; grid recovery is bounded to 1500W (L3 CT fallback 300W),
+while a larger PV surplus remains eligible. The root timer enforces
+3200W/phase and 6500W/site measured-stop envelopes and a **six-hour
+hard deadline**. No inverter/BMS minimum SoC, EVCC setting, private
+site env, original dispatch source or failed 0W hold is changed.
+**Committing this code does not activate the physical test.** Confirm
+root state and watchdog before claiming 25% retention is verified.
+
 **Separate solar-aware EV/L3 observer (read-only, installed 2026-10-31):**
 `scripts/services/ev_grid_priority_shadow_observer.py` is deliberately
 independent from ARMED dispatch and the root EV-grid watchdog. Its

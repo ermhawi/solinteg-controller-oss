@@ -1,0 +1,11 @@
+[Unit]
+Description=Check and restore Sunwoda 25% SoC reserve
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=solinteg-soc25-reserve-watchdog.service
+
+[Install]
+WantedBy=timers.target
