@@ -92,6 +92,13 @@ simulerade Auto-anropet. En fristående underprocess försöker
 ta samma tillfälliga lås, men nekas. Inga systemd-åtgärder
 eller fysisk Modbuskommunikation sker.
 
+`test_modbus_broker_root_adapter.py` verifierar den isolerade
+framtida root-adaptern med enbart fake-`systemctl` och
+temporära markörfiler. Den nekar olämpliga filer, fel
+systemd-unit/profil, timeouts och återkommen markör.
+Två tester kopplar adaptern till offlinekoordinatorn utan
+att skicka några verkliga systemd- eller Modbusanrop.
+
 ## Running
 
 ```

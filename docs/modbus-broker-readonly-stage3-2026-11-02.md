@@ -181,14 +181,51 @@ godkännanden och misslyckade readbacks. En separat skrivspärr
 `before_write` i `modbus_broker_fencing.py` gör att en återkommen
 godkännandemarkör stoppar försöket **även efter dubbel observation**.
 
-**Fortfarande saknas en privilegierad OS-adapter** som faktiskt
-drar tillbaka root-markören, stoppar rätt systemd-unit, tar det
-root:solinteg-ägda produktionslåset, verifierar faktisk process- och
-nätverksägare samt försöker ett verifierat General/Auto.
-Säkerhet måste också upprätthållas efter fallbackens retur;
-oanslutna direktklienter måste blockeras och aktiv dispatcher
-hantera stale-data. Ingen produktionsservice eller markerfil
-har installerats eller ändrats. **Live-cutover: NO-GO.**
+**Fortfarande saknas en installerad, självständig och privilegierad
+fallbackprocess** som kopplar samman root-adaptern nedan,
+produktionslåset, den oberoende hostobservatören och en
+verifierad fysisk General/Auto. Säkerhet måste också upprätthållas
+efter fallbackens retur; oanslutna direktklienter måste blockeras
+och aktiv dispatcher hantera stale-data. Ingen produktionsservice
+eller markerfil har installerats eller ändrats.
+**Live-cutover: NO-GO.**
+
+### Root-adapter för marker och systemd – offline verifierad
+
+`scripts/services/modbus_broker_root_adapter.py` innehåller nu
+`RootBrokerStopAdapter` med callbacks för `revoke_approval()`,
+`approval_absent()` och `stop_broker()`. Funktionen har
+**ingen CLI eller automatisk startväg** och har inte kopplats till
+driftsatt watchdog.
+
+- Återkallandet får endast radera en reguljär, **root-ägd 0600**
+  godkännandemarkör i en skyddad katalog. Symlänkar, hårdlänkar,
+  fel UID/filrättigheter och okänd katalogstatus nekas. Redan
+  frånvarande markör behandlas idempotent, men om katalogen
+  saknas eller inte kan verifieras blir resultatet **inte godkänt**.
+- Stoppet gäller endast `solinteg-broker-readonly.service`
+  och kräver borttagen markör både före och efter
+  `systemctl --system --no-ask-password stop`.
+  Både före och efter stopp kontrolleras att systemd-enheten är
+  laddad med exakt enhetsfil, `User=Group=solinteg`,
+  `KillMode=control-group`, förväntat nätverksläge och
+  godkända tillstånd. Ett lyckat `systemctl stop` räcker
+  **inte**: slutlig `ActiveState` måste vara
+  `inactive`/`failed` med `MainPID=ControlPID=0`.
+- Bortfallen behörighet, otillgängligt systemd, timeout,
+  fel enhetsidentitet eller kvarvarande process ger **False**.
+  Adaptern startar aldrig brokern igen och återskapar inte
+  godkännandemarkören.
+
+`scripts/tests/test_modbus_broker_root_adapter.py` har
+**20 offline-tester** med fake-`systemctl` och testägd
+temporär markör, däribland hela callbackkedjan genom
+`coordinated_emergency_auto` med tillfälligt `flock`.
+Det finns ingen körd root-baserad integration mot verklig
+systemd, och själva nödskrivningen för Auto är fortfarande
+**endast simulerad**. Privilegierad produktionskoppling,
+strikt TCP-åtkomstkontroll och stale/SoC-policy är separata
+NO-GO-grindar.
 
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 
@@ -221,7 +258,7 @@ har installerats eller ändrats. **Live-cutover: NO-GO.**
    (12 FC03, inga FC06), vilket testar protokollframing
    men inte leverantörsdongelns beteende.
 
-4. **Host-fencing/fallback har offlineorkestrering men ingen privilegierad driftadapter.**
+4. **Host-fencing/fallback har offlineorkestrering och en testad root-adapter, men ingen driftsatt fallback.**
    Broker-krasch och ny brokerrestart får aldrig leda till
    två samtidiga ägare. Fysisk watchdog, UPS/BMS och
    tidigare fungerande dispatcher ska behållas under en
