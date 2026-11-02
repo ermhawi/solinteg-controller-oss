@@ -9,10 +9,14 @@ Wants=network-online.target
 # Root creates this marker ONLY after approved cutover and confirmed
 # shutdown of the old direct TCP poller. Installing the unit alone is inert.
 ConditionPathExists=/run/solinteg-broker-readonly-approved
+# Requires a stable root-owned inode created by the separately installed
+# tmpfiles.d template; never create the lock inside RuntimeDirectory.
+ConditionPathExists=/run/solinteg-broker-ownership.lock
 
 [Service]
 Type=simple
 User=solinteg
+Group=solinteg
 WorkingDirectory=/opt/solinteg/app
 EnvironmentFile=/opt/solinteg/solinteg.env
 Environment=SOLINTEG_BROKER_READONLY_ENABLED=1

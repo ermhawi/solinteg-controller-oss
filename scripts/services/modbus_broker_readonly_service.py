@@ -17,6 +17,7 @@ from pathlib import Path
 
 from modbus_broker import Broker
 from modbus_broker_ipc import BrokerIpcServer
+from modbus_broker_lease import broker_ownership_lease
 from modbus_broker_readonly_transport import DEVICE_ID, ReadOnlyModbusTransport
 
 log = logging.getLogger(__name__)
@@ -83,22 +84,28 @@ def main(argv=None, environ=None) -> None:
     # Fail before publishing the socket if production dependency is missing.
     from pymodbus.client import ModbusTcpClient  # noqa: F401
 
-    broker = build_readonly_broker(env)
-    server = BrokerIpcServer(socket_path, broker)
-    stop = threading.Event()
+    # The same root-owned /run inode must be locked for the whole Modbus
+    # session. A privileged emergency fallback will hold it across its Auto
+    # attempt; any broker restart then fails BEFORE opening the TCP transport.
+    with broker_ownership_lease():
+        if not approved_cutover_marker():
+            raise PermissionError("cutover approval revoked during ownership handover")
+        broker = build_readonly_broker(env)
+        server = BrokerIpcServer(socket_path, broker)
+        stop = threading.Event()
 
-    def on_signal(_signum, _frame):
-        stop.set()
+        def on_signal(_signum, _frame):
+            stop.set()
 
-    signal.signal(signal.SIGTERM, on_signal)
-    signal.signal(signal.SIGINT, on_signal)
-    try:
-        server.start()
-        log.info("Read-only broker IPC ready; no FC06 transport available")
-        stop.wait()
-    finally:
-        server.close()
-        broker.close()
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+        try:
+            server.start()
+            log.info("Read-only broker IPC ready; no FC06 transport available")
+            stop.wait()
+        finally:
+            server.close()
+            broker.close()
 
 
 if __name__ == "__main__":

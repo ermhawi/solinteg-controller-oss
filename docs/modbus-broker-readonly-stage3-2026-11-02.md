@@ -16,6 +16,7 @@ dispatcher, watchdog och EV-vakt kör oförändrat.
 | `deploy/solinteg-broker-readonly.service` | **Ej installerad** systemd-template med `RuntimeDirectoryMode=0700`, en enda lokal Unix-socket och `ConditionPathExists=/run/solinteg-broker-readonly-approved` |
 | `deploy/solinteg-poller-broker-readonly.conf` | **Ej installerad** poller-drop-in. `Requires/After` broker; `RestrictAddressFamilies=AF_UNIX` förbjuder direkt TCP från migrerad poller |
 | `scripts/tests/test_modbus_broker_readonly.py` | Fakebaserade FC03-allowlist, FC06-denial, IPC-åtkomst, poller main, fel, stale/reject, SQLite-kontrakt, ingen extra TCP |
+| `scripts/services/modbus_broker_lease.py` och `deploy/solinteg-broker-ownership.conf` | Processlivslångt, kernel-exklusivt `flock` på en skyddad **root-ägd** `/run`-fil; boot-template **inte installerad** |
 
 ### Kontrakt och begränsningar
 
@@ -114,6 +115,46 @@ nätverksnamespace eller att brokern inte kan återstarta direkt efter
 kontrollen. En privilegierad supervisor som hindrar återstart och
 upprätthåller exklusivitet under hela överlämningen återstår.
 **Fysisk cutover är fortsatt NO-GO.**
+
+### Återstartsspärr med livstidslås – offline verifierad
+
+Den förberedda read-only-brokerprocessen håller nu
+`flock(LOCK_EX|LOCK_NB)` från **före** broker-/IPC-start tills
+transporten stängts. Låset är en vanlig, förskapad, rotägd
+`/run/solinteg-broker-ownership.lock` (föreslagen mode `0440`, ägare `root:solinteg`);
+den är **inte** placerad under systemds `RuntimeDirectory`
+som annars kan tas bort och återbildas med en *annan inode*.
+Processen skapar, byter eller raderar aldrig låsfilen och
+kontrollerar markören `/run/solinteg-broker-readonly-approved`
+**ytterligare en gång under låset**. Saknad/otillförlitlig
+inode, en befintlig låsägare eller indragen markör gör att
+starten avbryts **innan TCP-klienten skapas**.
+
+En framtida privilegierad nödfallback ska (1) dra tillbaka
+godkännandemarkören, (2) stoppa brokerprocessen, (3) ta
+**samma** lås och hålla det under **hela** självständiga
+TCP-ägarkontrollen och Auto-återställningen samt (4)
+lämna markören borttagen tills ett nytt manuellt go.
+Om brokern försöker starta medan fallbacken håller låset
+nekas uppstarten; får brokern låset först måste fallbacken
+**avbryta utan Modbus-skrivning**.
+
+`deploy/solinteg-broker-ownership.conf` är endast en
+**ej installerad systemd-tmpfiles-template** för att skapa
+samma root-ägda inode vid boot. `ConditionPathExists`
+i den ännu ej installerade broker-enheten kräver filen.
+Tester med *separata processer* verifierar konkurrens,
+releasen vid undantag och att hela broker-IPC-livscykeln
+ligger under låset. Detta ersätter **inte** hostsupervisorn,
+brandväggs-/UID-isolering av direkta klienter eller
+oberoende fysisk readback. Brokern och fallbacken är
+**ännu inte sammankopplade**. Linux låset släpper vid
+processkrasch: spärren mot återstart därefter bygger också
+på att root-markören har dragits tillbaka.
+
+**Inga** `/run`-filer, driftenheter eller Modbusförbindelser
+har skapats som del av denna källkodsändring.
+**Live-cutover är fortfarande NO-GO.**
 
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 

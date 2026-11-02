@@ -78,6 +78,13 @@ systemd-service eller öppnar ett Modbus TCP-uttag.
 **skrivskyddad** `systemctl`/`ss`-observatör med simulerade
 OS-svar. Den har inga faktiska service- eller TCP-åtgärder.
 
+`test_modbus_broker_lease.py` testar ett skyddat
+processlivslångt `flock` över separat filbeskrivning/underprocess,
+och att den framtida read-only-tjänsten vägrar starta om
+nödfallbacken redan håller låset eller godkännandemarkören
+har dragits tillbaka. Testerna använder bara egna temporära
+låsfiler, inga fysiska enheter eller drift-systemd.
+
 ## Running
 
 ```
