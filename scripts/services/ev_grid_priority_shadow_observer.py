@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ev_grid_priority_solar_shadow import assess
 from ev_grid_priority_idle_strategy import evaluate as evaluate_idle
+from battery_save_solar_shadow import assess as assess_battery_save
 
 LIVE = Path("/opt/solinteg/live.json")
 EVCC = Path("/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json")
@@ -39,7 +40,7 @@ def last_applied(controls: Path, *, now: datetime) -> tuple[str, int, dict]:
     """Unknown is safer than treating a stale row as the inverter's state."""
     with closing(sqlite3.connect(controls.resolve().as_uri() + "?mode=ro", uri=True)) as con:
         row = con.execute(
-            "SELECT timestamp, planned_action, power_w, outcome "
+            "SELECT timestamp, planned_action, power_w, outcome, armed, detail_json "
             "FROM control_actions ORDER BY id DESC LIMIT 1").fetchone()
     if row is None or row[2] is None:
         return "unknown", 0, {"dispatch_reason": "no applied decision"}
@@ -47,16 +48,25 @@ def last_applied(controls: Path, *, now: datetime) -> tuple[str, int, dict]:
     if not 0 <= age <= MAX_CONTROL_AGE_S or row[3] in (
             "error_reverted", "error_revert_failed"):
         return "unknown", 0, {"dispatch_reason": "stale or failed applied decision"}
+    try:
+        detail_json = json.loads(row[5] or "{}")
+    except (ValueError, TypeError):
+        detail_json = {}
+    save_marker = (row[1] == "discharge" and row[3] == "applied"
+                   and row[4] == 1 and isinstance(detail_json, dict)
+                   and type(detail_json.get("battery_save_w")) is int
+                   and detail_json["battery_save_w"] == row[2] and row[2] > 0)
     return row[1], int(row[2]), {
         "dispatch_at_utc": row[0],
         "dispatch_age_s": round(age, 1),
         "dispatch_outcome": row[3],
+        "battery_save_verified": save_marker,
     }
 
 
 def recent_ev_samples(history: Path, *, now: datetime) -> list[dict]:
     """Only recent read-only historian data; missing DB means no stability proof."""
-    fields = ("captured_at_utc", "inverter_fresh", "inverter_age_s",
+    fields = ("captured_at_utc", "inverter_at_utc", "inverter_fresh", "inverter_age_s",
               "evcc_record_fresh", "evcc_age_s", "evcc_read_ok", "evcc_state",
               "evcc_charging_detected", "evcc_6a_limit_verified",
               "evcc_measured_a", "battery_w", "house_soc_pct", "pv_w",
@@ -72,7 +82,10 @@ def recent_ev_samples(history: Path, *, now: datetime) -> list[dict]:
 
 def inspect(live_path: Path = LIVE, evcc_path: Path = EVCC,
             controls_path: Path = CONTROLS, gate_path: Path = GATE,
-            *, history_path: Path = HISTORY, now: datetime | None = None) -> dict:
+            *, history_path: Path = HISTORY, now: datetime | None = None,
+            planner_reserve_pct: float | None = None,
+            recovery_entry_pct: float | None = None,
+            recovery_exit_pct: float | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     result = {
         "timestamp": now.isoformat(),
@@ -91,28 +104,48 @@ def inspect(live_path: Path = LIVE, evcc_path: Path = EVCC,
             result.update(state="disabled", reason="root gate is not shadow")
             return result
         live = json.loads(live_path.read_text(encoding="utf-8"))
-        evcc = json.loads(evcc_path.read_text(encoding="utf-8"))
-        if not isinstance(live, dict) or not isinstance(evcc, dict):
+        if not isinstance(live, dict):
             raise ValueError("invalid live snapshot")
         try:
             action, power, details = last_applied(controls_path, now=now)
         except (OSError, sqlite3.Error, ValueError, TypeError):
             action, power, details = "unknown", 0, {
                 "dispatch_reason": "control history unavailable"}
+        try:
+            evcc = json.loads(evcc_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            if action != "discharge":
+                raise  # Existing EV/idle observer retains its failure behavior.
+            evcc = None  # House solar assessment does not depend on EVCC.
+        if not isinstance(evcc, dict):
+            if action != "discharge":
+                raise ValueError("invalid EVCC snapshot")
+            evcc = None
         result.update(details)
         result["observed_action"] = action
         result["observed_target_w"] = power if action != "unknown" else None
         advice = assess(action, power, live, evcc, now=now)
         result["advice"] = advice.as_dict()
         result["state"] = advice.state
-        if action == "idle":
-            try:
-                samples = recent_ev_samples(history_path, now=now)
-            except (OSError, sqlite3.Error, ValueError, TypeError):
-                samples = []  # no history is NOT evidence of a stable transition
-            result["idle_strategy"] = evaluate_idle(
-                action, live, advice, samples, now=now,
-                age_of_dispatch_s=details.get("dispatch_age_s")).as_dict()
+        if action in ("idle", "discharge"):
+            samples = []
+            if action == "idle" or details.get("battery_save_verified") is True:
+                try:
+                    samples = recent_ev_samples(history_path, now=now)
+                except (OSError, sqlite3.Error, ValueError, TypeError):
+                    pass  # no history is NOT evidence of a stable transition
+            if action == "idle":
+                result["idle_strategy"] = evaluate_idle(
+                    action, live, advice, samples, now=now,
+                    age_of_dispatch_s=details.get("dispatch_age_s")).as_dict()
+            else:
+                result["battery_save_solar"] = assess_battery_save(
+                    action, power, live, samples, now=now,
+                    dispatch_age_s=details.get("dispatch_age_s"),
+                    battery_save_confirmed=details.get("battery_save_verified") is True,
+                    planner_reserve_pct=planner_reserve_pct,
+                    recovery_entry_pct=recovery_entry_pct,
+                    recovery_exit_pct=recovery_exit_pct).as_dict()
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         result.update(state="unavailable", reason=type(exc).__name__)
     return result
@@ -143,9 +176,15 @@ def main() -> None:
     parser.add_argument("--history", type=Path, default=HISTORY)
     parser.add_argument("--gate", type=Path, default=GATE)
     parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--planner-reserve-pct", type=float)
+    parser.add_argument("--recovery-entry-pct", type=float)
+    parser.add_argument("--recovery-exit-pct", type=float)
     args = parser.parse_args()
     result = inspect(args.live, args.evcc, args.controls, args.gate,
-                     history_path=args.history)
+                     history_path=args.history,
+                     planner_reserve_pct=args.planner_reserve_pct,
+                     recovery_entry_pct=args.recovery_entry_pct,
+                     recovery_exit_pct=args.recovery_exit_pct)
     publish(args.output, result)
     print(json.dumps({"state": result["state"], "device_writes": 0}))
 

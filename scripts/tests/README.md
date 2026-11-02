@@ -40,6 +40,16 @@ and declares the export side perfect. A guard against a silent failure has to be
 it's just a second silent failure. The dashed filename means it's loaded via `importlib.util`,
 not a plain import.
 
+## Batterisparläge och solöverskott – offline
+
+`test_battery_save_solar_shadow.py` samt `test_ev_grid_priority_shadow_observer.py`
+verifierar en separat, **ej driftsatt** skuggbedömning av faktiskt
+applicerat batterisparläge (`discharge` med `battery_save_w`). Krav:
+verifierad kontrollrad, ursprungliga färska inverterprover, 4-observations-
+stabilitet, PV-/exportmarginal och angivna SoC-reserv-/recoverygränser.
+Inga Auto-kommandon, inverter-/EVCC-skrivningar eller systemd-åtgärder.
+Se [ADR](../../docs/architecture/adr-2026-11-02-battery-save-solar-shadow.md).
+
 ## Offline Modbus-broker regression
 
 `test_modbus_broker.py` covers the explicitly **non-deployed** single-owner

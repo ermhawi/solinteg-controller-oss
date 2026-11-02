@@ -138,6 +138,8 @@ and all safety timers/services were active. During `charge`,
 The systemd timer continues collecting read-only observations every
 ~30 seconds without a ChatGPT automation.
 
+See also the separate [read-only solar assessment for an *applied* battery-save discharge](adr-2026-11-02-battery-save-solar-shadow.md). It does not reuse the EV/Auto strategy or authorize a physical mode change.
+
 ## Limitations and follow-up
 
 - The historian stores a three-channel EVCC current sum, not Ict2, and
