@@ -50,6 +50,14 @@ stabilitet, PV-/exportmarginal och angivna SoC-reserv-/recoverygränser.
 Inga Auto-kommandon, inverter-/EVCC-skrivningar eller systemd-åtgärder.
 Se [ADR](../../docs/architecture/adr-2026-11-02-battery-save-solar-shadow.md).
 
+`test_replay_battery_save_solar.py` granskar separat **verkliga**
+`telemetry.db`/`ev-history.sqlite` via det rena, skrivskyddade verktyget
+`scripts/tools/replay_battery_save_solar.py`. Exakt ursprungs-tidsstämpling,
+verifierad 50 W-kontrollrad, okänt 50006, abrupt PV-bortfall och
+kontrafaktisk SoC-/responstidsmarginal testas. Verklig 50006 finns inte
+historiskt; endast uttryckligen märkta antaganden får visa solkandidater,
+aldrig driftsättningsbeslut.
+
 ## Offline Modbus-broker regression
 
 `test_modbus_broker.py` covers the explicitly **non-deployed** single-owner
