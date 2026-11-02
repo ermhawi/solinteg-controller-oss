@@ -47,6 +47,7 @@ def fenced_emergency_auto(
     observe: Callable[[], FenceObservation],
     emergency_auto: Callable[[], bool],
     alert: Callable[[str], None],
+    before_write: Callable[[], bool] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     deadline_s: float = 10.0,
 ) -> FenceResult:
@@ -92,6 +93,13 @@ def fenced_emergency_auto(
     except Exception as exc:
         notify("broker fencing failed: no exclusive Modbus release proof")
         return FenceResult(True, False, False, False, type(exc).__name__)
+    try:
+        if before_write is not None and before_write() is not True:
+            notify("emergency Auto blocked: broker approval unexpectedly present")
+            return FenceResult(True, True, False, False, "write_guard_denied")
+    except Exception as exc:
+        notify("emergency Auto blocked: authorization unverified")
+        return FenceResult(True, True, False, False, type(exc).__name__)
     try:
         verified = emergency_auto() is True
     except Exception as exc:

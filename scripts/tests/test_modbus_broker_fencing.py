@@ -91,6 +91,34 @@ class FenceTest(unittest.TestCase):
         self.assertEqual(result.error, "TypeError")
         self.assertEqual(writes, [])
 
+    def test_write_guard_blocks_after_double_observation(self):
+        writes = []
+        result = fenced_emergency_auto(
+            stop_broker=lambda: True,
+            observe=observation,
+            emergency_auto=lambda: writes.append("unsafe"),
+            before_write=lambda: False,
+            alert=lambda _: None,
+        )
+        self.assertEqual(result.error, "write_guard_denied")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(writes, [])
+
+    def test_write_guard_exception_is_fail_closed(self):
+        writes = []
+        def unavailable():
+            raise PermissionError("marker cannot be verified")
+        result = fenced_emergency_auto(
+            stop_broker=lambda: True,
+            observe=observation,
+            emergency_auto=lambda: writes.append("unsafe"),
+            before_write=unavailable,
+            alert=lambda _: None,
+        )
+        self.assertEqual(result.error, "PermissionError")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(writes, [])
+
     def test_auto_unverified_is_not_success(self):
         result, alerts, writes, _ = self.run_case(emergency=lambda: False)
         self.assertTrue(result.emergency_attempted)

@@ -156,6 +156,40 @@ på att root-markören har dragits tillbaka.
 har skapats som del av denna källkodsändring.
 **Live-cutover är fortfarande NO-GO.**
 
+### Koordinerad nödfallback – offline, inte host-ansluten
+
+`scripts/services/modbus_broker_supervisor.py` kopplar nu ihop
+den tidigare fencing-kontrollen med **samma livstidslås** som brokern
+har, men endast med **injicerade callbacks**; ingen direkt
+`systemctl`-, `/run`-, TCP- eller fysisk Modbus-implementation finns.
+
+Ordningen är strikt: **dra tillbaka godkännandemarkören → verifiera
+att den är borta → stoppa brokern → ta exklusivt `flock` → verifiera
+markören och två oberoende OS-observationer → kontrollera markören
+omedelbart före ett enda Auto-försök → släpp låset först när
+readback är klar**. Under hela övertagandet kan en återstartande
+broker som följer samma låsprotokoll inte få Modbusägarskap.
+Om markören återkommer, brokern inte stannar, låset är upptaget,
+socketägarskap är oklart eller Auto-readback misslyckas rapporteras
+explicit fel och **inga nya skriverförsök** görs. Denna kod
+**återaktiverar aldrig godkännandemarkören**.
+
+`scripts/tests/test_modbus_broker_supervisor.py` testar
+övertagandet med **18 offlinefall** inklusive konkurrerande
+underprocess, lås över simulerad fysisk återställning, förlorade
+godkännanden och misslyckade readbacks. En separat skrivspärr
+`before_write` i `modbus_broker_fencing.py` gör att en återkommen
+godkännandemarkör stoppar försöket **även efter dubbel observation**.
+
+**Fortfarande saknas en privilegierad OS-adapter** som faktiskt
+drar tillbaka root-markören, stoppar rätt systemd-unit, tar det
+root:solinteg-ägda produktionslåset, verifierar faktisk process- och
+nätverksägare samt försöker ett verifierat General/Auto.
+Säkerhet måste också upprätthållas efter fallbackens retur;
+oanslutna direktklienter måste blockeras och aktiv dispatcher
+hantera stale-data. Ingen produktionsservice eller markerfil
+har installerats eller ändrats. **Live-cutover: NO-GO.**
+
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 
 1. **Stale plan fallback i aktiv dispatcher:** `read_live_reading`
@@ -187,7 +221,7 @@ har skapats som del av denna källkodsändring.
    (12 FC03, inga FC06), vilket testar protokollframing
    men inte leverantörsdongelns beteende.
 
-4. **Host-fencing/fallback endast testprotokoll, inte beprövad driftimplementation.**
+4. **Host-fencing/fallback har offlineorkestrering men ingen privilegierad driftadapter.**
    Broker-krasch och ny brokerrestart får aldrig leda till
    två samtidiga ägare. Fysisk watchdog, UPS/BMS och
    tidigare fungerande dispatcher ska behållas under en

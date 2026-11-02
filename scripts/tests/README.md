@@ -85,6 +85,13 @@ nödfallbacken redan håller låset eller godkännandemarkören
 har dragits tillbaka. Testerna använder bara egna temporära
 låsfiler, inga fysiska enheter eller drift-systemd.
 
+`test_modbus_broker_supervisor.py` verifierar ett framtida
+nödövertagande med injicerade callbacks: indraget godkännande,
+stoppad broker, lås under hela observeringen och det **enda**
+simulerade Auto-anropet. En fristående underprocess försöker
+ta samma tillfälliga lås, men nekas. Inga systemd-åtgärder
+eller fysisk Modbuskommunikation sker.
+
 ## Running
 
 ```
