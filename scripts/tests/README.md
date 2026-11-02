@@ -74,6 +74,10 @@ att en konkurrerande Modbusägare eller okänd socketstatus
 förhindrar reservskrivning. Inget av testerna stoppar en riktig
 systemd-service eller öppnar ett Modbus TCP-uttag.
 
+`test_modbus_broker_host_observer.py` verifierar separat en
+**skrivskyddad** `systemctl`/`ss`-observatör med simulerade
+OS-svar. Den har inga faktiska service- eller TCP-åtgärder.
+
 ## Running
 
 ```

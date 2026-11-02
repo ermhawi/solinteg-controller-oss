@@ -91,6 +91,30 @@ skydda check/use-fönstret med hostnivå-policy innan cutover kan
 godkännas. Två observationer utan sådan hostpolicy ger **inte**
 tillräcklig exklusivitet.
 
+### Läs-only hostobservatör – en separat, liten delgrind
+
+`scripts/services/modbus_broker_host_observer.py` kan nu skapa en
+`FenceObservation` med hjälp av **endast** `systemctl show`,
+`ss --numeric --tcp --all` och filstatus för broker-IPC.
+För att markera release som verifierad krävs root, en laddad
+stoppad `solinteg-*.service` med `KillMode=control-group`,
+utan privat network namespace, `MainPID=ControlPID=0`,
+**inga** TCP-socketar på *denna host* till exakt konfigurerad
+numerisk inverter-IP/port och **ingen kvarvarande IPC-socketväg**.
+Okänd status, otillåtna behörigheter, kommandofel eller ofullständig
+socketlista avvisas. En `TIME-WAIT`-anslutning räknas konservativt
+som kvarvarande. Elva isolerade tester med simulerade OS-svar är
+godkända.
+
+Detta **startar eller stoppar ingen tjänst och öppnar inte TCP:502**.
+Observatören är inte ansluten till watchdog/systemd eller
+`fenced_emergency_auto`. Den bevisar **inte** att andra nätverksvärdar
+saknar anslutningar, att processer har flyttat till andra
+nätverksnamespace eller att brokern inte kan återstarta direkt efter
+kontrollen. En privilegierad supervisor som hindrar återstart och
+upprätthåller exklusivitet under hela överlämningen återstår.
+**Fysisk cutover är fortsatt NO-GO.**
+
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 
 1. **Stale plan fallback i aktiv dispatcher:** `read_live_reading`
