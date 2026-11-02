@@ -227,6 +227,38 @@ systemd, och själva nödskrivningen för Auto är fortfarande
 strikt TCP-åtkomstkontroll och stale/SoC-policy är separata
 NO-GO-grindar.
 
+### Sammanhållet offlineintegrationstest – verkliga kodvägar
+
+`scripts/tests/test_modbus_broker_host_integration.py` kör hela
+`coordinated_emergency_auto` med **de faktiska implementationerna**
+`RootBrokerStopAdapter`, `observe_host_release` och
+`broker_ownership_lease`. Därmed verifieras att samverkan mellan
+delarna fungerar, inte bara deras respektive enhetstester.
+
+Testerna använder **enbart simulerade svar** på `systemctl`
+och `ss`, dokumentationsadressen `192.0.2.25`, en tillfällig
+godkännandefil/IPC-väg och ett **riktigt kernel-`flock` på en
+temporär testfil**. Auto-anrop och readback är uttryckligen
+simulerade. Inga drifttjänster, systemets `/run` eller den
+fysiska Modbus-porten berörs. Testfilerna rensas efter varje fall.
+
+15 offlinefall täcker korrekt ordning från återkallat godkännande
+till verifierad stoppstatus, dubbla OS-observationer och ett enda
+simulerat Auto-anrop under låset, samt separata fel: återstående
+TCP/IPC-ägare, ny anslutning mellan observationerna,
+`TIME-WAIT`, otillgänglig socketlista, återkommen
+godkännandemarkör, fel systemd-identitet, utebliven processavslutning,
+misslyckat stopp, låskonkurrens, felaktiga behörigheter och
+saknad readback. Ett **separat lokalt testprocessförsök** att
+ta låset under Auto avvisas av kernel.
+
+Körning: `python3 -B -m unittest discover -s scripts/tests -p test_modbus_broker_host_integration.py`.
+
+Detta är **inte** en host-/driftprovning. Verklig root-identitet,
+`systemctl`, `ss`, fysisk Auto-readback, nätverksisolering,
+driftsatt nödfallback och säker hantering av stale telemetri/SoC
+återstår före ett separat godkänt go. **Live-cutover: NO-GO.**
+
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 
 1. **Stale plan fallback i aktiv dispatcher:** `read_live_reading`

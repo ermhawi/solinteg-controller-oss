@@ -99,6 +99,14 @@ systemd-unit/profil, timeouts och återkommen markör.
 Två tester kopplar adaptern till offlinekoordinatorn utan
 att skicka några verkliga systemd- eller Modbusanrop.
 
+`test_modbus_broker_host_integration.py` kör ett
+sammanhållet **offlineintegrationstest** av de befintliga
+root-callbackarna, den riktiga hostobservatören och
+kernel-`flock` genom nödfallback-koordinatorn. Alla
+`systemctl`-/`ss`-svar är injicerade fakes, godkännandemarkör
+och IPC är enbart testfiler och Auto/readback är simulerat.
+Detta är **inte** en fysisk eller privilegierad driftverifiering.
+
 ## Running
 
 ```
