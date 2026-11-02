@@ -70,6 +70,27 @@ och riktigt `pymodbus 3.15.0` över syntetisk localhost-TCP
 godkänt. **Inga fysiska Modbusoperationer eller produktions-
 systemd-ändringar** gjordes.
 
+## Fencing-grind testad offline (2026-11-02)
+
+`scripts/services/modbus_broker_fencing.py` tillför ett **rent
+injekterat säkerhetsprotokoll**: stoppa broker, verifiera att processen
+är död, att både broker-/andra TCP-sessioner till dongeln är noll och
+att broker-IPC inte längre lyssnar, kontrollera samma tillstånd igen
+direkt före överlämning, och anropa **högst ett** nödförsök till Auto
+som måste ge verifierad readback. Vid okänt ägarskap, misslyckat stopp,
+tidsgräns, exception, konkurrerande anslutning eller verifieringsfel:
+**ingen ny nödförbindelse** och tydligt larm/resultat.
+
+`scripts/tests/test_modbus_broker_fencing.py` verifierar tio
+offlinefall, inklusive att en ny anslutning mellan två kontrollpunkter
+blockerar nödförsöket. Protokollet har **ingen** systemd-, `ss`- eller
+Modbusimplementation och är inte anslutet till existerande watchdog.
+En verklig privilegierad supervisor måste dessutom **maskera återstart**
+av brokern under fallback, göra oberoende ägarkontroll mot OS och
+skydda check/use-fönstret med hostnivå-policy innan cutover kan
+godkännas. Två observationer utan sådan hostpolicy ger **inte**
+tillräcklig exklusivitet.
+
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 
 1. **Stale plan fallback i aktiv dispatcher:** `read_live_reading`
@@ -101,7 +122,7 @@ systemd-ändringar** gjordes.
    (12 FC03, inga FC06), vilket testar protokollframing
    men inte leverantörsdongelns beteende.
 
-4. **Avsaknad av beprövad host-fencing/fallback.**
+4. **Host-fencing/fallback endast testprotokoll, inte beprövad driftimplementation.**
    Broker-krasch och ny brokerrestart får aldrig leda till
    två samtidiga ägare. Fysisk watchdog, UPS/BMS och
    tidigare fungerande dispatcher ska behållas under en

@@ -66,6 +66,14 @@ a synthetic loopback 127.0.0.1 Modbus-TCP fake and verifies 12 FC03,
 zero FC06, slave 255 and broker read-only enforcement. No inverter is
 contacted.
 
+## Broker-fencing, ingen faktisk återställningsskrivning
+
+`test_modbus_broker_fencing.py` använder injicerade
+stop-/OS-observations-/emergency-funktioner för att säkerställa
+att en konkurrerande Modbusägare eller okänd socketstatus
+förhindrar reservskrivning. Inget av testerna stoppar en riktig
+systemd-service eller öppnar ett Modbus TCP-uttag.
+
 ## Running
 
 ```
