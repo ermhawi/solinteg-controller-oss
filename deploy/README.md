@@ -140,11 +140,12 @@ sudo systemctl enable --now solinteg-watchdog.timer solinteg-healthcheck.timer \
         solinteg-heartbeat-ping.timer
 ```
 
-**solinteg-watchdog** (every 2 min) is the safety-critical one: if `dispatch_loop.py`'s
-heartbeat goes stale while control is armed, it connects to the inverter directly and
-forces it back to auto — a hard crash (power loss, OOM kill) skips `dispatch_loop.py`'s own
-clean-exit fail-safe entirely, so this is a second, independent process watching for exactly
-that. It needs no external setup; it just needs to be running.
+**solinteg-watchdog** (every 2 min) monitors a stale heartbeat (>240 s by default)
+and **attempts** to return the inverter to General while Dell and Modbus are working.
+It covers dispatcher crashes, not total Dell power loss, a fresh-but-wrong control loop,
+or a missing/unreadable heartbeat (which its current code does not treat as stale).
+General can also drain below the economic reserve. No inverter-native EMS timeout
+has been verified. See the [EMS/General safety and failover assessment](../docs/architecture/adr-2026-11-02-ems-general-failsafe.md).
 
 **L1/L2/L3 Modbus telemetry:** The poller reads the three phase CTs from the extended
 block starting at register 10994. A transient timeout no longer disables this block

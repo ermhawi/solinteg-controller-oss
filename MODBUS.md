@@ -368,8 +368,14 @@ whole overnight run of idle slots.
 
 ## Software-only invariants (the inverter does not enforce these for us)
 
-- **No charge-target-SoC register exists** → the controller must stop charging in software
-  when SoC reaches the target ceiling.
-- **No ToU upload** → drive every 15-min slot live via 50207; there is no schedule register.
-- Clamp power to `min(battery 15.36 kW, grid 11 kW)` **before** encoding.
-- On crash/shutdown/timeout → always write `50000=0x101` (revert to auto).
+- **No target-SoC field in the local `50207` EMS command** → the controller must stop
+  charging in software when SoC reaches the target ceiling.
+- **No local Modbus ToU uploader in this controller** → it applies each planned slot
+  via `50207`. Solinteg's separate OpenAPI supports ToU on compatible firmware.
+- Clamp power to `min(SOLINTEG_BATTERY_MAX_W, SOLINTEG_GRID_CAP_W)` before encoding
+  (Sundsvall 2026-11-02: 7.5 kW and 10 kW, versus the repository defaults above).
+- On handled failure or normal shutdown, **attempt** `50000=0x101` (General).
+  When Dell is still running, its separate watchdog makes the same attempt after
+  a stale heartbeat. With **total Dell power/network loss** neither can write;
+  no native EMS timeout/automatic General takeover is verified. See the
+  [site-specific EMS safety/fallback assessment](docs/architecture/adr-2026-11-02-ems-general-failsafe.md).
