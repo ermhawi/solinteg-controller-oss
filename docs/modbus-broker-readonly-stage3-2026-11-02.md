@@ -259,6 +259,17 @@ Detta är **inte** en host-/driftprovning. Verklig root-identitet,
 driftsatt nödfallback och säker hantering av stale telemetri/SoC
 återstår före ett separat godkänt go. **Live-cutover: NO-GO.**
 
+### SoC-medveten stale-data-policy – endast offlineförslag
+
+`modbus_broker_stale_policy.py` klassificerar framtida brokerdata som
+`plan_candidate`, `recovery_candidate` eller `inhibit` utan några
+Modbus-/systemd-anrop och utan att kopplas till den aktiva dispatchern.
+16 offlinefall testar quality, ålder, fasdata, SoC och hysteres.
+En `recovery_candidate` tillåter **inte** fysisk laddning, och `inhibit`
+får inte översättas till automatisk General/Auto. Se
+[ADR och kvarstående säkerhetskrav](architecture/adr-2026-11-02-stale-telemetry-soc.md).
+**Ingen policy är aktiverad i drift. Live-cutover: NO-GO.**
+
 ## No-go: kvarstående säkerhetsgrindar före någon live-cutover
 
 1. **Stale plan fallback i aktiv dispatcher:** `read_live_reading`
@@ -267,10 +278,12 @@ driftsatt nödfallback och säker hantering av stale telemetri/SoC
    ändå behålla `planned_power_w`. `prioritize_soc_recovery`
    öppnar också en **egen** kortlivad Modbusanslutning vid stale
    SoC. Ny brokerväg som kastar fler samples kan öka risken för
-   föråldrade styrbeslut. Fail-closed-policy måste först designas,
-   testas och godkännas i kombination med BMS-/SoC-återhämtningen.
-   Att blint slå om till Auto vid lågt SoC kan vara lika skadligt
-   och är **inte** beslutat.
+   föråldrade styrbeslut. En SoC-medveten **offlineklassificerare**
+   är designad och testad, men är **inte kopplad till den aktiva
+   dispatchern**, innehåller ingen verifierad fysisk nödövergång
+   och får inte betraktas som godkänd cutover-policy. Att blint slå
+   om till Auto vid lågt eller okänt SoC kan vara skadligt och
+   är **inte** beslutat.
 
 2. **Endast *poller* äger persistent TCP i etapp 3.**
    Dispatcher och watchdog använder fortfarande direkta

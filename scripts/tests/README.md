@@ -107,6 +107,12 @@ kernel-`flock` genom nödfallback-koordinatorn. Alla
 och IPC är enbart testfiler och Auto/readback är simulerat.
 Detta är **inte** en fysisk eller privilegierad driftverifiering.
 
+`test_modbus_broker_stale_policy.py` verifierar den nya, **inte driftsatta**
+SoC-medvetna fail-closed-klassificeraren med 16 offlinefall: quality-/tidsstämplar,
+fas- och SoC-datakvalitet, återhämtningshysteres och oberoende SoC.
+Resultatet är en kandidat eller en spärr, aldrig ett fysiskt Auto-/laddkommando.
+Se [föreslagen ADR](../../docs/architecture/adr-2026-11-02-stale-telemetry-soc.md).
+
 ## Running
 
 ```
