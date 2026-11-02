@@ -8,6 +8,7 @@
 - [Repositorylayout](repository-layout.md)
 - [Plan: Modbus-broker, ensam TCP-ägare och säker migrering](plans/modbus-broker-2026-11-01.md)
 - [Modbus-broker etapp 0–2: offlineimplementation och baslinje](modbus-broker-offline-2026-11-01.md)
+- [Modbus-broker etapp 3: read-only-kod och grindar inför driftsättning](modbus-broker-readonly-stage3-2026-11-02.md)
 - [Föreslagen ADR: en Modbus-broker med oberoende nödfallback](architecture/adr-2026-11-01-single-owner-modbus-broker.md)
 - [Arkiv och avveckling av gamla drifts-/testartefakter](solinteg-archive-and-retired-artifacts-2026-11-01.md)
 - [ADR: krypterat USB-arkiv och bortstädning efter prover](architecture/adr-2026-11-01-solinteg-usb-archive.md)

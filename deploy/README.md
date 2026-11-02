@@ -17,7 +17,7 @@ a full server disaster-recovery backup; preserve independent
 Bitwarden account access and the active backup rotation.
 
 The app + Modbus poller run as two systemd services on the NUC. No Vercel, no Home Assistant.
-**Offline prototype only, not deployed:** [single-owner Modbus broker plan](../docs/plans/modbus-broker-2026-11-01.md) and [stage 0–2 baseline/implementation](../docs/modbus-broker-offline-2026-11-01.md). The new fake-backed broker does not import pymodbus or run on the host. Existing poller/dispatcher/watchdog remain the **only active** production path pending an independently approved live cutover.
+**Broker read-only integration READY IN SOURCE ONLY, NOT DEPLOYED:** [single-owner plan](../docs/plans/modbus-broker-2026-11-01.md), [offline baseline/tests](../docs/modbus-broker-offline-2026-11-01.md) and [stage 3 cutover NO-GO gates](../docs/modbus-broker-readonly-stage3-2026-11-02.md). The broker core itself imports no pymodbus; the separate allowlisted FC03 transport and read-only service template are available but **not installed or started**. Existing poller/dispatcher/watchdog remain the only active production path.
 This guide is written against the reference deployment's own hardware/network — any small
 dedicated Linux box with two NICs (or one NIC + a USB adapter) works the same way; substitute
 your own IPs/hostnames/device names throughout.

@@ -1,11 +1,9 @@
-"""Offline-only Solinteg Modbus broker core; no transport or live entry point.
+"""Solinteg single-owner Modbus broker core, with injected transport.
 
-Only a caller-supplied fake transport is accepted in phases 0-2. The installed
-poller/dispatcher/watchdog are NOT connected to this module. In particular,
-this module never imports pymodbus, opens a TCP socket or reads SOLINTEG_HOST.
-
-An eventual hardware transport and independent fenced watchdog require a
-separately approved cutover (docs/plans/modbus-broker-2026-11-01.md).
+The broker itself imports no pymodbus and opens no TCP connections directly.
+A separate opt-in read-only service/transport exists for a FUTURE approved
+poller cutover; control migration and fenced watchdog are NOT installed.
+See docs/plans/modbus-broker-2026-11-01.md.
 """
 from __future__ import annotations
 
@@ -112,14 +110,22 @@ class Broker:
         battery_kwh: float = 25.6,
         charge_sign: str | None = None,
         rejection_sink: Callable[[dict], None] | None = None,
+        runtime_mode: str = "offline",
     ):
         if not callable(transport_factory):
             raise TypeError("transport_factory required")
+        if runtime_mode not in ("offline", "readonly"):
+            raise ValueError("unsupported broker runtime mode")
+        if runtime_mode == "readonly" and (
+            armed or phase_guard is not None or allow_hold or charge_sign is not None
+        ):
+            raise PermissionError("read-only mode cannot be armed for control")
         if min_write_interval_s < 0 or max_sample_s <= 0 or battery_kwh <= 0:
             raise ValueError("invalid timing or battery capacity")
         if charge_sign not in (None, "neg_charge", "pos_charge"):
             raise ValueError("invalid confirmed 50207 polarity")
         self._factory = transport_factory
+        self._runtime_mode = runtime_mode
         self._transport = None
         self._armed = bool(armed)
         self._phase_guard = phase_guard
@@ -160,7 +166,8 @@ class Broker:
                 "rejected_samples": len(self._rejected),
                 "last_rejection": self._rejected[-1]["quality"] if self._rejected else None,
                 "owns_forced_state": self._owns_control,
-                "offline_only": True,
+                "offline_only": self._runtime_mode == "offline",
+                "read_only": self._runtime_mode == "readonly",
             }
 
     def submit(
@@ -246,7 +253,7 @@ class Broker:
             if not self._transport.connect():
                 self._transport.close()
                 self._transport = None
-                raise BrokerError("fake transport refused connection")
+                raise BrokerError("transport refused connection")
         return self._transport
 
     def _read(self, addr: int, count: int, blocks: list | None = None) -> list[int]:

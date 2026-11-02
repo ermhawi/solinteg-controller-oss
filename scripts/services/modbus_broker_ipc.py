@@ -1,8 +1,9 @@
-"""Offline Unix-domain socket adapter for the simulated Solinteg broker.
+"""Local Unix-domain socket IPC for Solinteg's injected Modbus broker.
 
-NO service unit, live transport or CLI entry point is provided in phases 0-2.
-Roles are derived from peer OS credentials, NEVER from request JSON. Production
-roles require distinct systemd UIDs (all existing services currently share one).
+Phases 0-2 used in-memory fake transport. An opt-in READ-ONLY transport and
+service entry point are staged for a future cutover, NOT installed here.
+Roles are derived from peer OS credentials, NEVER from request JSON.
+A future control/safety migration needs distinct UIDs and host fencing.
 """
 from __future__ import annotations
 

@@ -41,9 +41,12 @@ Environment variables:
   POLL_INTERVAL        Poll interval in seconds (default 30)
   POLL_PHASE_RETRY_INITIAL_S  Delay after first extended CT read failure (default 120)
   POLL_PHASE_RETRY_MAX_S      Maximum exponential retry delay (default 1800)
+  SOLINTEG_POLL_SOURCE        direct (default), broker (opt-in; no direct fallback)
+  SOLINTEG_BROKER_SOCKET      Protected UDS path for broker cutover (required)
 """
 
 import logging
+import math
 import os
 import sqlite3
 import sys
@@ -64,6 +67,7 @@ SLAVE_ID = int(os.environ.get("SOLINTEG_SLAVE_ID", "1"))
 DATA_PATH = Path(os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json"))
 DB_PATH = Path(os.environ.get("TELEMETRY_DB_PATH", "/opt/solinteg/telemetry.db"))
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "30"))
+POLL_SOURCE = os.environ.get("SOLINTEG_POLL_SOURCE", "direct")
 # An extended CT read may fail because of a transient Modbus timeout, not unsupported firmware.
 # Back off to avoid hammering an unsupported device, but ALWAYS retry so one outage cannot
 # permanently disable L1/L2/L3 until someone manually restarts the poller.
@@ -220,6 +224,58 @@ def read_inverter(client: ModbusTcpClient) -> dict:
     }
 
 
+# Exact prior live.json fields, no loss of the existing SQLite readings contract.
+BROKER_LIVE_FIELDS = (
+    "timestamp", "soc_pct", "soc_kwh", "soh_pct", "battery_temp_c",
+    "pv_w", "grid_w", "meter_l1_w", "meter_l2_w", "meter_l3_w",
+    "battery_w", "inverter_ac_w", "house_load_w", "work_mode",
+    "work_mode_raw", "grid_unbalanced_output_raw",
+)
+
+
+def read_broker_snapshot(ipc_client, now=None) -> dict:
+    """Return a compatible reading, or refuse to refresh live.json/SQLite.
+
+    Rejected/old/replayed broker samples NEVER fall back to another direct
+    Modbus TCP connection. A controlled systemd cutover must choose one owner.
+    """
+    result = ipc_client.request("read_snapshot", timeout_s=30)
+    if result.get("status") != "valid":
+        raise IOError("broker sample rejected: " + str(result.get("reason", "unknown")))
+    sample = result.get("sample")
+    if not isinstance(sample, dict) or sample.get("quality") != "valid":
+        raise IOError("broker did not supply a valid sample")
+    try:
+        data = {name: sample[name] for name in BROKER_LIVE_FIELDS}
+        measured_at = datetime.fromisoformat(data["timestamp"])
+        timestamp_now = now or datetime.now(timezone.utc)
+        age_s = (timestamp_now - measured_at).total_seconds()
+        if not -5 <= age_s <= 90:
+            raise ValueError("broker sample timestamp outside freshness bounds")
+        for name in ("soc_pct", "soc_kwh", "soh_pct", "battery_temp_c",
+                     "pv_w", "grid_w", "battery_w", "inverter_ac_w", "house_load_w",
+                     "meter_l1_w", "meter_l2_w", "meter_l3_w"):
+            value = data[name]
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError("broker sample has invalid " + name)
+        if type(data["work_mode_raw"]) is not int or not 0 <= data["work_mode_raw"] <= 65535:
+            raise ValueError("invalid broker working mode")
+        if not isinstance(data["work_mode"], str) or not data["work_mode"]:
+            raise ValueError("invalid broker mode description")
+        if data["grid_unbalanced_output_raw"] is not None and (
+            type(data["grid_unbalanced_output_raw"]) is not int
+        ):
+            raise ValueError("invalid broker grid balance")
+        if measured_at.tzinfo is None:
+            raise ValueError("broker timestamp lacks timezone")
+        data["sample_id"] = sample["sample_id"]
+        data["sample_quality"] = "valid"
+        data["sample_duration_s"] = sample["duration_s"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise IOError("broker sample missing required coherent telemetry") from exc
+    return data
+
+
 def write_atomic(path: Path, data: dict) -> None:
     """Write JSON to a temp file then rename — avoids a partial read by the dispatch loop's
     live-load tracking, which polls this file. Thin wrapper kept for the call sites; the
@@ -284,21 +340,34 @@ def log_reading(con: sqlite3.Connection, data: dict) -> None:
 
 
 def main() -> None:
-    if not INVERTER_HOST:
+    if POLL_SOURCE not in ("direct", "broker"):
+        sys.exit("SOLINTEG_POLL_SOURCE must be direct or broker")
+    if POLL_SOURCE == "direct" and not INVERTER_HOST:
         sys.exit("Set SOLINTEG_HOST to the inverter's IP address before starting.")
 
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = init_db(DB_PATH)
-    log.info("Starting poller → %s:%d (slave %d) every %ds → %s  telemetry → %s",
-             INVERTER_HOST, INVERTER_PORT, SLAVE_ID, POLL_INTERVAL, DATA_PATH, DB_PATH)
-
-    client = ModbusTcpClient(INVERTER_HOST, port=INVERTER_PORT, timeout=10)
+    if POLL_SOURCE == "broker":
+        from modbus_broker_ipc import BrokerIpcClient
+        socket_path = os.environ.get("SOLINTEG_BROKER_SOCKET")
+        if socket_path != "/run/solinteg-broker/broker.sock":
+            sys.exit("SOLINTEG_BROKER_SOCKET must be the dedicated protected broker socket")
+        client = BrokerIpcClient(Path(socket_path))
+        log.info("Starting BROKER-only poller every %ds → %s  telemetry → %s",
+                 POLL_INTERVAL, DATA_PATH, DB_PATH)
+    else:
+        client = ModbusTcpClient(INVERTER_HOST, port=INVERTER_PORT, timeout=10)
+        log.info("Starting poller → %s:%d (slave %d) every %ds → %s  telemetry → %s",
+                 INVERTER_HOST, INVERTER_PORT, SLAVE_ID, POLL_INTERVAL, DATA_PATH, DB_PATH)
 
     while True:
         try:
-            if not client.is_socket_open():
-                client.connect()
-            data = read_inverter(client)
+            if POLL_SOURCE == "broker":
+                data = read_broker_snapshot(client)
+            else:
+                if not client.is_socket_open():
+                    client.connect()
+                data = read_inverter(client)
             write_atomic(DATA_PATH, data)
             log_reading(db, data)
             log.info("SoC=%.1f%% (%.1f kWh)  SoH=%.1f%%  battTemp=%.1f°C  PV=%dW  grid=%+dW  "
@@ -308,10 +377,11 @@ def main() -> None:
                      data["battery_w"], data["house_load_w"], data["work_mode"])
         except Exception as exc:
             log.error("Poll failed: %s — will retry in %ds", exc, POLL_INTERVAL)
-            try:
-                client.close()
-            except Exception:
-                pass
+            if POLL_SOURCE == "direct":
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
         time.sleep(POLL_INTERVAL)
 

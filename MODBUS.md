@@ -1,6 +1,6 @@
 # Solinteg Modbus reference (read + control)
 
-**Offline broker prototype implemented (2026-11-01):** [single-owner migration plan](docs/plans/modbus-broker-2026-11-01.md), [offline baseline and tests](docs/modbus-broker-offline-2026-11-01.md), and [proposed production ADR](docs/architecture/adr-2026-11-01-single-owner-modbus-broker.md). No broker is installed; the connection model documented below remains the current design until an explicitly approved staged cutover.
+**Broker source implemented, read-only cutover NOT deployed (2026-11-02):** [single-owner migration plan](docs/plans/modbus-broker-2026-11-01.md), [offline baseline and tests](docs/modbus-broker-offline-2026-11-01.md), [staged read-only adapter/poller with NO-GO safety gates](docs/modbus-broker-readonly-stage3-2026-11-02.md), and [proposed production ADR](docs/architecture/adr-2026-11-01-single-owner-modbus-broker.md). Existing installed poller/dispatcher/watchdog and their direct Modbus access remain unchanged.
 
 Source-verified against `plugin_solinteg.py` @ commit `350266f`
 (wills106/homeassistant-solax-modbus), cross-checked with the official Solinteg

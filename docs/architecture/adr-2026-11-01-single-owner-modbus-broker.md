@@ -69,6 +69,9 @@ att IPC-tillgänglighet ensam garanterar fysisk Auto.
   **Inget fjärde fysiskt SoC25-test ingår i detta beslut.**
 
 **Offlineunderlag:** [genomförande, baslinje och begränsningar](../modbus-broker-offline-2026-11-01.md).
+**Etapp 3-kod (2026-11-02):** [FC03-only adapter, opt-in poller och utestående
+live-säkerhetsgrindar](../modbus-broker-readonly-stage3-2026-11-02.md).
+ADR:n är fortfarande **föreslagen för fysisk cutover**, inte godkänd.
 
 **Relaterat:** [migrationsplan](../plans/modbus-broker-2026-11-01.md),
 [Modbusregister](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/MODBUS.md),

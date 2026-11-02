@@ -1,6 +1,6 @@
 # Plan: Modbus-broker med ensam ägare och säker migrering
 
-**Status:** Etapp **0–2 implementerad och testad offline** 2026-11-01; etapp 3–6 är fortfarande förslag. **Ingen broker är installerad, ingen fysisk styrning ändrad.** Se [genomföranderapport](../modbus-broker-offline-2026-11-01.md).
+**Status:** Etapp **0–2 klar offline**, etapp **3 kod och systemd-templates förberedda/testade 2026-11-02 men NO-GO för fysisk cutover**; etapp 4–6 planerade. **Ingen broker installerad och ingen fysisk styrning ändrad.** Se [offlinerapport](../modbus-broker-offline-2026-11-01.md) och [etapp 3-grindar](../modbus-broker-readonly-stage3-2026-11-02.md).
 **Repository/branch:** `ermhawi/solinteg-controller-oss` / `Sundsvall` – får aldrig mergas till `main`/upstream.
 **Omfattning:** Solintegs Modbus-TCP-dongel. **EVCC/Waveshare RS-485 är ett separat system.**
 **Beslut:** Planen godkänner bara analys och dokumentation, inte fysiska Modbus-skrivningar, ändrat SoC-golv eller nya SoC25-prov.
@@ -58,12 +58,14 @@ Brokerprocessen äger enda **ordinarie** TCP-sessionen. IPC över lokal Unix-dom
 | **0 – Baslinje** ✅ offline | Inventera alla direkta FC03/FC06-konsumenter (inkl. `inverter_control` CLI och fysiska prober), kör read-only mätning av pollcykler, svarstider, lägesbyten och observerade fel. Fastställ installerade service-/kodhachar och rollbackväg. | Inventeringsmatris och uppmätta basvärden, inga writes |
 | **1 – Broker offline** ✅ prototyp | Ny separat broker + smal IPC-client, serialiseringskö och fake Modbus-TCP-dongel. Hela kontrollsekvenser testas enbart mot fake; `ARMED=0` är default. | Testad kod, inga nya driftprocesser |
 | **2 – Telemetrikvalitet offline** ✅ fake-tester | Reproducera alla tre SoC25-felbilder och lägesbyte mitt i FC03-serie. Testa kvalitet, samplingslatens, 4–8 s cloud-stall, backoff och separata reject-loggar. | Osäkra samplar avvisas, ingen CT-/temperatur-/fassäkerhet försvagas |
-| **3 – Läs-only driftsättning** | Separat godkänd cutover: stäng gamla pollerns TCP-session **innan** en read-only broker tar dess plats. Pollern får data via UDS; ingen extra poller parallellt. Dispatcher/watchdog har ännu sin tidigare kortlivade reservväg, så full exklusivitet påstås inte här. | Samma `live.json`/SQLite-resultat, acceptabel latens/bortfall och verifierad enkel rollback |
+| **3 – Läs-only driftsättning** ⚠️ adapter klar, ej aktiverad | Separat godkänd cutover: stäng gamla pollerns TCP-session **innan** en read-only broker tar dess plats. Pollern får data via UDS; ingen extra poller parallellt. Dispatcher/watchdog har ännu sin tidigare kortlivade reservväg, så full exklusivitet påstås inte här. | Samma `live.json`/SQLite-resultat, acceptabel latens/bortfall och verifierad enkel rollback |
 | **4 – Styrväg och nödfallback** | Flytta dispatcher till brokertransaktioner och watchdog till prioriterad `safety_auto`, implementera/testa exklusiv nödfallback och begär **separat klartecken** före varje fysisk write/cutover. | Verifierad write-ordning, fysisk readback/effekt, safe Auto vid delstegsfel/brokerkrasch |
 | **5 – Tvinga exklusivitet** | Spärra direkt TCP:502 för migrerade systemd-tjänster, endast broker och kontrollerad nödfallback får ansluta. Lägg till observability och drift-/avinstallationsrutiner. | En enda ordinarie TCP-owner verifierad och säker reservväg omtestad |
 | **6 – Uppföljning** | Jämför latens, giltiga/ogiltiga samples, watchdog-latens och fellarm mot baslinjen. | Dokumenterad go/no-go innan **ett separat nytt** SoC25-försök |
 
-**Etapp 0–2 levererad:** endast offlinekällkod med injicerad minnesbaserad fake-dongel, verifierad UDS, kvalitetsmodell och felinjektionstester. Ingen riktig pymodbus-adapter, TCP-simulator på wire-nivå, systemd-unit eller driftsättning. Baslinjen kommer från historiskt SQLite-material; tidsupplösning per FC03-block och fysisk rollback återstår. Se [resultat och kvarstående säkerhetsgrindar](../modbus-broker-offline-2026-11-01.md).
+**Etapp 0–2 levererad och etapp 3 förberedd:** offlinekärna med fake-dongel, verifierad UDS, kvalitet och felinjektionstester; dessutom en riktig allowlistad **FC03-only** pymodbus-adapter, skyddad read-only service-entrypoint, opt-in brokerläge för pollern och **ej installerade** systemd-templates. En **lokal** loopback fake-Modbus-TCP-server har nu dessutom verifierat
+riktig `pymodbus 3.15.0` och 12 FC03 utan writes; ingen fysisk
+dongelkommunikation eller driftsättning. Baslinjen kommer från historiskt SQLite-material; tidsupplösning per FC03-block och fysisk rollback återstår. Se [offlinegranskning](../modbus-broker-offline-2026-11-01.md) och [NO-GO-grindar för live cutover](../modbus-broker-readonly-stage3-2026-11-02.md).
 
 ## 4. Obligatoriska fel- och acceptanstester
 

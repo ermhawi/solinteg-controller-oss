@@ -50,6 +50,22 @@ mode flips and rejection of the contradictory SoC25 sample. Current
 `modbus_poller.py`/`dispatch_loop.py`/`watchdog.py` are unchanged;
 see [baseline and limitations](../../docs/modbus-broker-offline-2026-11-01.md).
 
+`test_modbus_broker_readonly.py` additionally verifies the opt-in
+stage 3 transport and poller compatibility **without inverter connections**:
+strict FC03 allowlist/slave ID, all FC06 refused, startup arming gates,
+read-only IPC and original `live.json`/SQLite schema, plus deliberate
+broker/rejection failure without opening the direct TCP fallback.
+The service templates are **not installed**; the stage 3
+[cutover blockers](../../docs/modbus-broker-readonly-stage3-2026-11-02.md)
+must be resolved before any physical migration.
+
+`wire_smoke_readonly.py` is an **explicit standalone real-pymodbus
+integration smoke** (not included in default unittest discovery).
+Run it only with an environment containing pymodbus>=3.13; it uses
+a synthetic loopback 127.0.0.1 Modbus-TCP fake and verifies 12 FC03,
+zero FC06, slave 255 and broker read-only enforcement. No inverter is
+contacted.
+
 ## Running
 
 ```
