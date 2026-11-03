@@ -12,6 +12,14 @@ Follow [engineering-standards v1.3.0](https://github.com/ermhawi/engineering-sta
 
 **Before Definition of Done:** update impacted architecture, feature, operations, known-issues and plan-status documents in the same branch as the change, using actual code/test/runtime evidence. Record major decisions as ADRs, distinguish proposed from implemented and deployed functionality, and explain when no documentation update is needed. Never publish private installation data or internal docs without verified access control.
 
+## Tool-call diagnostics
+
+This applies to all MCP tools. If a tool attempt appears to stop before the MCP server records metrics, do not retry the same raw payload or route it through another tool.
+
+Use `mcpsh_call_diagnostic` to record metadata only: attempted tool, operation/data class, argument hash if already known, observed symptom and whether a matching metrics entry exists. Set `not_received_by_server=true` only if the server has no matching metrics entry. Do not include raw arguments, file contents or secrets.
+
+Before retrying, check `mcpsh_metrics_summary` or `mcpsh_recent_diagnostics` when relevant; use `mcpsh_tool_schema` for schema mismatches. Narrow inputs and prefer the smallest structured alternative over repeating a blocked call.
+
 ## Branch ownership and mandatory Git DoD
 
 `Sundsvall` is a **permanent independent development branch** in the public `ermhawi/solinteg-controller-oss` fork. It tracks **only `origin/Sundsvall`**. **Never merge `Sundsvall` into `main`, `upstream/main` or the original `hspolander` repository.** Reviewed, sanitized commits are published directly to `origin/Sundsvall` only; never force-push.
