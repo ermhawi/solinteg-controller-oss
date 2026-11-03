@@ -139,6 +139,18 @@ Ingen separat FC03-session utfördes; aktuell firmware kan hämtas via
 OEM System Info/monitorering. **Beteende med kvarhängande `0x303`
 vid nätbortfall är fortfarande NO-GO för automatisk fallback.**
 
+### Uppföljning: nätverksorsak och tillverkarunderlag 2026-11-03
+
+[Separat nätverksutredning](../solinteg-network-incident-2026-11-03.md)
+identifierade ASUS-routerns **dagliga 03:00-omstart** som orsak till
+Dells Wi-Fi-bortfall sju nätter i följd. Routerns omstartsschema
+är nu avaktiverat och persistensverifierat, utan routeromstart eller
+Modbus-/EMS-förändring. Ett andra fel 03:13 sammanfaller med
+WAN-återställning men exakt lokal Modbuspåverkan är ännu okänd.
+[Tillverkarspecifika frågor](../solinteg-vendor-ems-questions-2026-11-03.md)
+är förberedda men ännu inte skickade. ARM-/DSP-/BMS-versionerna
+är fortfarande okända. Detta ändrar inte **NO-GO** för fysisk fallback.
+
 ## 6. Beslutade nästa steg (ingen fysisk ändring godkänd)
 
 1. Få **skriftligt svar från Solinteg för MHT-10K-25 och exakta ARM-/DSP-/dataloggerversioner**: finns en lokal EMS-börvärdes-TTL eller watchdog? Är den inställbar? Vilka paket/register återställer klockan? Vilken mode/effekt används vid timeout? Fungerar `CommsWatchDog` bara master/slav? Respekteras `52502/52503` i EMS med ett gammalt `50207`? Hur fungerar BMS-current-limits i samma felläge?

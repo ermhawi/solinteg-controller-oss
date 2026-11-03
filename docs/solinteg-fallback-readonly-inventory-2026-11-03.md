@@ -142,13 +142,19 @@ Inget test provocerar BMS-låsning, SoC under säker nivå eller
 1. **Komplettera firmware och modell** via OEM OLED/monitorering
    (read-only), samt BMS-identitet. Undvik osäkra `100xx`-prober.
 2. **Tillverkarsvar specifikt för MHT-10K-25 och firmware**:
-   gäller `52502/52503` under `0x303` vid uteblivet `50207`?
+   [tekniskt frågeunderlag till Solinteg](solinteg-vendor-ems-questions-2026-11-03.md)
+   är förberett men inte skickat; gäller `52502/52503` under
+   `0x303` vid uteblivet `50207`?
    Är det någon *lokal* Modbus TTL/EMS-watchdog? Vad gör
    `CommsWatchDog` i en ensam inverter? Vilken neutral mode-/caps-
    sekvens är verifierat säker efter partiell FC06?
-3. **Utred nätverksavbrotten 03:02/03:13 CET separat.** Orsaken kan
-   vara Wi-Fi, dongelns cloud-blockering, TCP-sessionskonkurrens
-   eller annan nätväg. Det är inte identifierat i denna rapport.
+3. **Nätverkets åtgärd och uppföljning:** Den separata
+   [rotorsaksanalysen](solinteg-network-incident-2026-11-03.md)
+   fastställer att ASUS startade om varje dag kl. 03:00 och att Dell
+   förlorade Wi-Fi. Det dagliga omstartsschemat har nu avaktiverats
+   och sparats utan att starta om utrustning. Det andra felet 03:13
+   sammanföll med WAN/DHCP-återställning, men dess lokala Modbusorsak
+   är **inte verifierad**. Bekräfta först efter nästa natt.
 4. **Offlineprova samtliga failure cases**, särskilt gamla tvingade
    `0x303`-mål och timeout efter första/andra FC06.
 5. **Separat Go/No-Go för hög-SoC-fysiska prov**, med
