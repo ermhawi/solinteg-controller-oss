@@ -390,3 +390,26 @@ den säkra single-owner-brokerns NO-GO-grindar. Befintlig
 övervakning och fysisk failsafe förblir aktiva. Ingen
 Modbus-förbindelse, brandväggsregel, routingtabell eller
 produktionsbroker ändrades i undersökningen.
+
+## Replay- och tidskontroll i brokerpollern (2026-11-03, endast källkod)
+
+Brokerlägets `read_broker_snapshot` avvisar nu okänt/tomt `sample_id`,
+ogiltig/icke-ändlig samplingsduration (tillåtet 0–60 s) och tidsstämplar
+som ligger i framtiden eller mer än 90 s bakåt. Den jämför också med
+den **senast publicerade, godkända brokersamplen** i `live.json`:
+samma `sample_id` eller en tidpunkt som inte är strikt senare ger fel.
+Pollern läser denna baslinje även efter omstart. Fel innebär att
+`live.json` och `readings` inte uppdateras; ingen direkt TCP-fallback
+sker. Direktpollern och dess befintliga telemetrikontrakt är oförändrade.
+
+Verifiering 2026-11-03: **25 riktade read-only-tester, 1 280 Python-tester
+och 703 Vitest-tester passerade** (ett manuellt test överhoppat);
+ESLint, TypeScript och Zensical-dokumentationsbygget passerade också.
+Offline-testerna täcker återspelat ID, äldre tidsstämpel efter
+brokeromstart, ogiltig identitet/duration och att en omstartad poller
+inte skriver om den gamla sampeln. Detta är **inte** verifiering
+mot den fysiska Modbus-dongeln och inte en integration av
+`modbus_broker_stale_policy` med den armerade dispatchern.
+Övriga NO-GO-grindar (host-fencead, privilegierad nödfallback,
+SoC-medveten stale-data-hantering och kalibrering på riktig dongel)
+kvarstår. Ingen fysisk cutover eller driftsättning ingår.

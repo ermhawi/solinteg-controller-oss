@@ -311,6 +311,47 @@ class PollerBrokerCutoverTest(unittest.TestCase):
             poller.read_broker_snapshot(fake)
         self.assertEqual(self.device.writes, [])
 
+    def test_replayed_broker_sample_is_rejected(self):
+        first = poller.read_broker_snapshot(self.client)
+        fake = mock.Mock()
+        fake.request.return_value = {"status": "valid", "sample": {
+            **first, "quality": "valid", "duration_s": first["sample_duration_s"],
+        }}
+        with self.assertRaisesRegex(IOError, "coherent telemetry"):
+            poller.read_broker_snapshot(fake, previous_sample=first)
+        self.assertEqual(self.device.writes, [])
+
+    def test_sample_timestamp_must_advance_across_broker_restarts(self):
+        first = poller.read_broker_snapshot(self.client)
+        prior = dict(first)
+        prior["sample_id"] = "previous-broker-boot"
+        prior["timestamp"] = (
+            datetime.fromisoformat(first["timestamp"]) + timedelta(seconds=1)
+        ).isoformat()
+        fake = mock.Mock()
+        fake.request.return_value = {"status": "valid", "sample": {
+            **first, "quality": "valid", "duration_s": first["sample_duration_s"],
+        }}
+        with self.assertRaisesRegex(IOError, "coherent telemetry"):
+            poller.read_broker_snapshot(fake, previous_sample=prior)
+
+    def test_invalid_broker_identity_and_duration_fail_closed(self):
+        first = poller.read_broker_snapshot(self.client)
+        for field, value in (
+            ("sample_id", None), ("sample_id", ""), ("sample_id", "x" * 81),
+            ("duration_s", -1), ("duration_s", float("nan")),
+            ("duration_s", float("inf")), ("duration_s", True),
+            ("duration_s", 61),
+        ):
+            with self.subTest(field=field, value=value):
+                sample = {**first, "quality": "valid",
+                          "duration_s": first["sample_duration_s"]}
+                sample[field] = value
+                fake = mock.Mock()
+                fake.request.return_value = {"status": "valid", "sample": sample}
+                with self.assertRaises(IOError):
+                    poller.read_broker_snapshot(fake)
+
     def test_broker_ipc_failure_does_not_open_fallback_direct_connection(self):
         with mock.patch.object(poller, "ModbusTcpClient") as tcp:
             disconnected = BrokerIpcClient(self.path / "missing.sock")
@@ -352,6 +393,33 @@ class PollerBrokerCutoverTest(unittest.TestCase):
         self.assertEqual(db.execute("SELECT COUNT(*) FROM readings").fetchone()[0], 1)
         db.close()
         self.assertEqual(self.device.clients, 1)
+
+    def test_poller_restart_does_not_republish_last_accepted_snapshot(self):
+        previous = poller.read_broker_snapshot(self.client)
+        live_path = self.path / "previous-broker.json"
+        poller.write_atomic(live_path, previous)
+        db = poller.init_db(self.path / "previous-broker.db")
+        replay = mock.Mock()
+        replay.request.return_value = {"status": "valid", "sample": {
+            **previous, "quality": "valid", "duration_s": previous["sample_duration_s"],
+        }}
+        with mock.patch.object(poller, "init_db", return_value=db), \
+             mock.patch.object(poller, "POLL_SOURCE", "broker"), \
+             mock.patch.object(poller, "DATA_PATH", live_path), \
+             mock.patch.object(poller, "DB_PATH", self.path / "previous-broker.db"), \
+             mock.patch.object(poller, "ModbusTcpClient", side_effect=AssertionError("direct TCP forbidden")) as tcp, \
+             mock.patch("modbus_broker_ipc.BrokerIpcClient", return_value=replay), \
+             mock.patch.dict(os.environ, {"SOLINTEG_BROKER_SOCKET": "/run/solinteg-broker/broker.sock"}), \
+             mock.patch.object(poller.time, "sleep", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                poller.main()
+            tcp.assert_not_called()
+        self.assertEqual(
+            __import__("json").loads(live_path.read_text())["sample_id"], previous["sample_id"]
+        )
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM readings").fetchone()[0], 0)
+        db.close()
+        self.assertEqual(self.device.writes, [])
 
     def test_poller_main_rejection_keeps_last_file_and_never_opens_direct_tcp(self):
         self.device.load(grid=-11, battery=-1692, ac=978, pv=0, mode=0x303)

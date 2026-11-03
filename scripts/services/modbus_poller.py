@@ -233,11 +233,12 @@ BROKER_LIVE_FIELDS = (
 )
 
 
-def read_broker_snapshot(ipc_client, now=None) -> dict:
+def read_broker_snapshot(ipc_client, now=None, *, previous_sample: dict | None = None) -> dict:
     """Return a compatible reading, or refuse to refresh live.json/SQLite.
 
     Rejected/old/replayed broker samples NEVER fall back to another direct
-    Modbus TCP connection. A controlled systemd cutover must choose one owner.
+    Modbus TCP connection. The previous accepted live sample is checked even
+    after a poller restart. A controlled systemd cutover must choose one owner.
     """
     result = ipc_client.request("read_snapshot", timeout_s=30)
     if result.get("status") != "valid":
@@ -250,8 +251,20 @@ def read_broker_snapshot(ipc_client, now=None) -> dict:
         measured_at = datetime.fromisoformat(data["timestamp"])
         timestamp_now = now or datetime.now(timezone.utc)
         age_s = (timestamp_now - measured_at).total_seconds()
-        if not -5 <= age_s <= 90:
+        if measured_at.utcoffset() is None or not 0 <= age_s <= 90:
             raise ValueError("broker sample timestamp outside freshness bounds")
+        sample_id = sample["sample_id"]
+        if not isinstance(sample_id, str) or not sample_id or len(sample_id) > 80:
+            raise ValueError("invalid broker sample ID")
+        duration_s = sample["duration_s"]
+        if (type(duration_s) not in (int, float) or not math.isfinite(duration_s)
+                or not 0 <= duration_s <= 60):
+            raise ValueError("invalid broker sample duration")
+        if isinstance(previous_sample, dict) and previous_sample.get("sample_quality") == "valid":
+            previous_at = datetime.fromisoformat(previous_sample["timestamp"])
+            if (previous_at.utcoffset() is None or measured_at <= previous_at
+                    or sample_id == previous_sample.get("sample_id")):
+                raise ValueError("replayed or non-monotonic broker sample")
         for name in ("soc_pct", "soc_kwh", "soh_pct", "battery_temp_c",
                      "pv_w", "grid_w", "battery_w", "inverter_ac_w", "house_load_w",
                      "meter_l1_w", "meter_l2_w", "meter_l3_w"):
@@ -266,11 +279,9 @@ def read_broker_snapshot(ipc_client, now=None) -> dict:
             type(data["grid_unbalanced_output_raw"]) is not int
         ):
             raise ValueError("invalid broker grid balance")
-        if measured_at.tzinfo is None:
-            raise ValueError("broker timestamp lacks timezone")
-        data["sample_id"] = sample["sample_id"]
+        data["sample_id"] = sample_id
         data["sample_quality"] = "valid"
-        data["sample_duration_s"] = sample["duration_s"]
+        data["sample_duration_s"] = duration_s
     except (KeyError, TypeError, ValueError) as exc:
         raise IOError("broker sample missing required coherent telemetry") from exc
     return data
@@ -347,6 +358,7 @@ def main() -> None:
 
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = init_db(DB_PATH)
+    previous_broker_sample = common.read_json(DATA_PATH) if POLL_SOURCE == "broker" else None
     if POLL_SOURCE == "broker":
         from modbus_broker_ipc import BrokerIpcClient
         socket_path = os.environ.get("SOLINTEG_BROKER_SOCKET")
@@ -363,13 +375,15 @@ def main() -> None:
     while True:
         try:
             if POLL_SOURCE == "broker":
-                data = read_broker_snapshot(client)
+                data = read_broker_snapshot(client, previous_sample=previous_broker_sample)
             else:
                 if not client.is_socket_open():
                     client.connect()
                 data = read_inverter(client)
             write_atomic(DATA_PATH, data)
             log_reading(db, data)
+            if POLL_SOURCE == "broker":
+                previous_broker_sample = data
             log.info("SoC=%.1f%% (%.1f kWh)  SoH=%.1f%%  battTemp=%.1f°C  PV=%dW  grid=%+dW  "
                      "batt=%+dW  load=%dW  mode=%s",
                      data["soc_pct"], data["soc_kwh"], data["soh_pct"], data["battery_temp_c"],
