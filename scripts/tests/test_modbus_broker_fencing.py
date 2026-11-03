@@ -30,6 +30,7 @@ class FenceTest(unittest.TestCase):
 
         result = fenced_emergency_auto(stop_broker=stop_once, observe=observe,
                                        emergency_auto=write, alert=alerts.append,
+                                       before_write=lambda: True,  # synthetic safety proof
                                        deadline_s=deadline, monotonic=clock)
         return result, alerts, writes, stops
 
@@ -89,6 +90,36 @@ class FenceTest(unittest.TestCase):
     def test_wrong_observer_contract_fails_closed(self):
         result, alerts, writes, _ = self.run_case(states=[{"broker_alive": False}])
         self.assertEqual(result.error, "TypeError")
+        self.assertEqual(writes, [])
+
+    def test_missing_write_guard_fails_closed_even_with_exclusive_release(self):
+        writes = []
+        result = fenced_emergency_auto(
+            stop_broker=lambda: True,
+            observe=observation,
+            emergency_auto=lambda: writes.append("unsafe"),
+            alert=lambda _: None,
+        )
+        self.assertEqual(result.error, "write_guard_missing")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(writes, [])
+
+    def test_deadline_expiring_during_final_safety_check_blocks_write(self):
+        writes = []
+        elapsed = {"expired": False}
+        def slow_authorization():
+            elapsed["expired"] = True
+            return True
+        result = fenced_emergency_auto(
+            stop_broker=lambda: True,
+            observe=observation,
+            emergency_auto=lambda: writes.append("unsafe"),
+            before_write=slow_authorization, alert=lambda _: None,
+            monotonic=lambda: 100.0 if elapsed["expired"] else 0.0,
+            deadline_s=10,
+        )
+        self.assertEqual(result.error, "deadline_exceeded_before_write")
+        self.assertFalse(result.emergency_attempted)
         self.assertEqual(writes, [])
 
     def test_write_guard_blocks_after_double_observation(self):

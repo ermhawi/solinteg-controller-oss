@@ -1,6 +1,8 @@
 # Modbus-broker: Dell-baserad säkerhetsobservatör (2026-11-03)
 
-**Driftstatus:** Installerad på Dell, **endast observation**. Den ordinarie
+**Driftstatus:** Installerad på Dell, **endast observation**. Det finns en
+[separat offlinegrind för framtida privilegierad nödfallback](modbus-broker-emergency-policy-offline-2026-11-03.md);
+den är **inte** kopplad till denna tjänst. Den ordinarie
 pollern, dispatchern, webbappen och den befintliga `solinteg-watchdog.timer`
 kör oförändrat. Modbus-brokern är **inte driftsatt** och den nya observatören
 är **inte en privilegierad nödfallback**.

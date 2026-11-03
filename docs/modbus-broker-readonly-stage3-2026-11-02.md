@@ -48,6 +48,15 @@ dispatcher, watchdog och EV-vakt kör oförändrat.
   De extra fälten är additiva; kvalitet och tid verifieras innan
   filen eller databasen uppdateras.
 
+## Kompletterande nödfallbackspärr (2026-11-03, endast offline)
+
+Den befintliga kombinerade root-/host-/flock-testkedjan kräver nu
+oberoende **post-fence**-evidens och ett native EndSOC-golv som minst
+motsvarar 20 %-reserven innan ett simulerat General-anrop kan gå vidare.
+Saknad källa, lägre golv, sen evidens eller överskriden deadline
+blockerar skrivning. Ingen privilegierad tjänst eller Modbusoperation
+har installerats. Se [safety-grind och felmatris](modbus-broker-emergency-policy-offline-2026-11-03.md).
+
 ## Offlineverifiering
 
 ```bash

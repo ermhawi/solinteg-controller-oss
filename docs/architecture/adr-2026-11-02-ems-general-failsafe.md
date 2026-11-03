@@ -11,6 +11,18 @@
 - Dell-baserad watchdog är inte oberoende av Dell-strömförsörjning. General som blind fallback kan fortsätta urladda mot ett lägre SoC-golv. Nya fysiska övergångar kräver skriftlig tillverkarspecifikation, oberoende supervision och verifierad readback.
 - Den solmedvetna modellen och nya Modbus-brokern är **endast read-only/offline**; ingen produktionsaktivering godkänns här.
 
+### Uppföljning 2026-11-03: säkerhetsgrind endast offline
+
+Den framtida privilegierade broker-fallbackens samordnare kräver nu
+syntetiskt testad, **oberoende post-fence** SoC-/BMS-verifiering,
+bekräftat exklusivt TCP-ägarskap och en native EndSOC-gräns **minst
+lika hög** som den begärda mjukvarureserven. Med dokumenterade
+10 % native kontra 20 % ekonomisk reserv är automatisk General
+fortsatt **NO-GO**. Detta är inte en implementerad fysisk nödfallback:
+ett tidigare EMS-börvärde kan kvarstå, verifierad neutralisering
+och oberoende datakälla saknas. Se
+[offlinegrinden](../modbus-broker-emergency-policy-offline-2026-11-03.md).
+
 ## 1. General kontra EMS
 
 | `50000` | Namn | Styrprincip / status |

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,9 +17,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 from modbus_broker_root_adapter import (
     APPROVAL_MARKER, BROKER_UNIT, BROKER_UNIT_FILE, RootBrokerStopAdapter,
 )
+from modbus_broker_emergency_policy import GeneralFallbackEvidence
 from modbus_broker_fencing import FenceObservation
 from modbus_broker_lease import LeaseBusy, broker_ownership_lease
 from modbus_broker_supervisor import coordinated_emergency_auto
+
+def synthetic_post_fence_evidence():
+    return GeneralFallbackEvidence(
+        soc_pct=45.0, native_end_soc_pct=22.0, mode_raw=0x303,
+        observed_at=datetime.now(timezone.utc), verified=True,
+        native_floor_enforced=True, bms_healthy=True,
+        source="independent_post_fence",
+    )
+
 
 RUNNING = {
     "LoadState": "loaded", "ActiveState": "active",
@@ -292,6 +303,7 @@ class RootAdapterTest(unittest.TestCase):
             ownership_lease=lease,
             observe=observe,
             emergency_auto=emergency,
+            read_independent_evidence=synthetic_post_fence_evidence,
             alert=lambda _: self.fail("unexpected alarm"),
             monotonic=lambda: 0.0,
         )
@@ -313,6 +325,7 @@ class RootAdapterTest(unittest.TestCase):
             ownership_lease=lambda: self.fail("unexpected lease"),
             observe=lambda: self.fail("unexpected observation"),
             emergency_auto=lambda: writes.append("unsafe"),
+            read_independent_evidence=synthetic_post_fence_evidence,
             alert=lambda _: None,
             monotonic=lambda: 0.0,
         )

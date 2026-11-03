@@ -10,12 +10,23 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
+from modbus_broker_emergency_policy import GeneralFallbackEvidence
 from modbus_broker_fencing import FenceObservation
 from modbus_broker_lease import LeaseBusy, broker_ownership_lease
 from modbus_broker_supervisor import coordinated_emergency_auto
+
+
+def synthetic_post_fence_evidence():
+    return GeneralFallbackEvidence(
+        soc_pct=45.0, native_end_soc_pct=22.0, mode_raw=0x303,
+        observed_at=datetime.now(timezone.utc), verified=True,
+        native_floor_enforced=True, bms_healthy=True,
+        source="independent_post_fence",
+    )
 
 
 def released() -> FenceObservation:
@@ -85,6 +96,7 @@ class SupervisorTest(unittest.TestCase):
             ownership_lease=self.lease,
             observe=self.observe,
             emergency_auto=self.emergency,
+            read_independent_evidence=synthetic_post_fence_evidence,
             alert=self.alerts.append,
             monotonic=lambda: 0.0,
         )

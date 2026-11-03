@@ -11,11 +11,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 
+from modbus_broker_emergency_policy import GeneralFallbackEvidence
 from modbus_broker_host_observer import observe_host_release
 from modbus_broker_lease import LeaseBusy, broker_ownership_lease
 from modbus_broker_root_adapter import BROKER_UNIT, BROKER_UNIT_FILE, RootBrokerStopAdapter
@@ -111,6 +114,15 @@ class CompleteHostTakeoverTest(unittest.TestCase):
         self.events = []
         self.writes = []
         self.alerts = []
+        self.safety_now = datetime(2026, 11, 3, 15, 0, tzinfo=timezone.utc)
+        self.fenced_at = self.safety_now - timedelta(seconds=3)
+        self._clock_reads = 0
+        self.safety_evidence = GeneralFallbackEvidence(
+            soc_pct=40.0, native_end_soc_pct=22.0, mode_raw=0x303,
+            observed_at=self.safety_now - timedelta(seconds=1),
+            verified=True, native_floor_enforced=True,
+            bms_healthy=True, source="independent_post_fence",
+        )
 
     def tearDown(self):
         self.temp.cleanup()
@@ -139,6 +151,17 @@ class CompleteHostTakeoverTest(unittest.TestCase):
         self.writes.append("fake_auto_readback")
         return True
 
+    def read_independent_evidence(self):
+        self.events.append("evidence")
+        with self.assertRaises(LeaseBusy):
+            with self.lock():
+                self.fail("SoC proof was checked without exclusive ownership")
+        return self.safety_evidence
+
+    def now_utc(self):
+        self._clock_reads += 1
+        return self.fenced_at if self._clock_reads == 1 else self.safety_now
+
     def takeover(self, **overrides):
         callbacks = {
             "revoke_approval": self.root.revoke_approval,
@@ -147,6 +170,8 @@ class CompleteHostTakeoverTest(unittest.TestCase):
             "ownership_lease": self.lock,
             "observe": self.observe,
             "emergency_auto": self.fake_auto,
+            "read_independent_evidence": self.read_independent_evidence,
+            "now_utc": self.now_utc,
             "alert": self.alerts.append,
             "monotonic": lambda: 0.0,
         }
@@ -157,7 +182,7 @@ class CompleteHostTakeoverTest(unittest.TestCase):
         result = self.takeover()
         self.assertTrue(result.auto_readback_verified)
         self.assertEqual(self.writes, ["fake_auto_readback"])
-        self.assertEqual(self.events, ["observe", "observe", "auto"])
+        self.assertEqual(self.events, ["observe", "observe", "evidence", "auto"])
         self.assertEqual(self.host.ss_calls, 2)
         commands = self.host.calls
         stop_index = next(i for i, cmd in enumerate(commands) if "stop" in cmd)
@@ -276,6 +301,96 @@ class CompleteHostTakeoverTest(unittest.TestCase):
         self.assertTrue(result.emergency_attempted)
         self.assertFalse(result.auto_readback_verified)
         self.assertEqual(self.writes, ["attempted_fake_auto"])
+
+    def test_missing_general_authorization_fails_closed_after_fencing(self):
+        result = self.takeover(read_independent_evidence=None)
+        self.assertEqual(result.error, "independent_evidence_source_missing")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.events.count("observe"), 0)
+        self.assertNotIn("auto", self.events)
+        self.assertEqual(self.writes, [])
+        self.assertTrue(self.marker.exists())  # no gratuitous approval revocation
+        self.assertEqual(self.host.calls, [])
+
+    def test_realistic_native_floor_below_reserve_blocks_fallback(self):
+        # Production-like 10% native floor versus 20% economic reserve.
+        self.safety_evidence = replace(self.safety_evidence, native_end_soc_pct=10)
+        result = self.takeover()
+        self.assertEqual(result.error, "write_guard_denied")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.events, ["observe", "observe", "evidence"])
+        self.assertEqual(self.writes, [])
+        self.assertTrue(self.root.approval_absent())
+
+    def test_unverified_independent_soc_blocks_fallback(self):
+        self.safety_evidence = replace(self.safety_evidence, verified=False)
+        result = self.takeover()
+        self.assertEqual(result.error, "write_guard_denied")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.writes, [])
+
+    def test_pre_fence_soc_snapshot_blocks_fallback(self):
+        self.safety_evidence = replace(
+            self.safety_evidence, observed_at=self.fenced_at - timedelta(seconds=1))
+        result = self.takeover()
+        self.assertEqual(result.error, "write_guard_denied")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.writes, [])
+
+    def test_boolean_cannot_impersonate_verified_soc_evidence(self):
+        result = self.takeover(read_independent_evidence=lambda: True)
+        self.assertEqual(result.error, "write_guard_denied")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.writes, [])
+
+    def test_stale_soc_readback_cannot_authorize_general(self):
+        self.safety_evidence = replace(
+            self.safety_evidence,
+            observed_at=self.safety_now - timedelta(seconds=20))
+        result = self.takeover()
+        self.assertEqual(result.error, "write_guard_denied")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.writes, [])
+
+    def test_slow_soc_readback_expires_emergency_deadline(self):
+        timed_out = {"value": False}
+        def delayed_evidence():
+            result = self.read_independent_evidence()
+            timed_out["value"] = True
+            return result
+        result = self.takeover(
+            read_independent_evidence=delayed_evidence,
+            monotonic=lambda: 100.0 if timed_out["value"] else 0.0,
+        )
+        self.assertEqual(result.error, "deadline_exceeded_before_write")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.writes, [])
+
+    def test_authorization_exception_cannot_issue_general(self):
+        def unavailable():
+            raise TimeoutError("independent SoC reader offline")
+        result = self.takeover(read_independent_evidence=unavailable)
+        self.assertEqual(result.error, "TimeoutError")
+        self.assertFalse(result.emergency_attempted)
+        self.assertEqual(self.writes, [])
+        self.assertEqual(self.host.ss_calls, 2)
+
+    def test_competing_socket_blocks_approval_callback_entirely(self):
+        self.host.other_peer_state = "SYN-SENT"
+        result = self.takeover()
+        self.assertEqual(result.error, "FenceFailure")
+        self.assertNotIn("evidence", self.events)
+        self.assertEqual(self.writes, [])
+
+    def test_fallback_callback_invoked_once_only_after_safety_proof(self):
+        checks = []
+        def permit():
+            checks.append("post_fence_proof")
+            return self.read_independent_evidence()
+        result = self.takeover(read_independent_evidence=permit)
+        self.assertTrue(result.auto_readback_verified)
+        self.assertEqual(checks, ["post_fence_proof"])
+        self.assertEqual(self.writes, ["fake_auto_readback"])
 
     def test_uncertain_root_or_host_identity_denies_takeover(self):
         denied = RootBrokerStopAdapter(

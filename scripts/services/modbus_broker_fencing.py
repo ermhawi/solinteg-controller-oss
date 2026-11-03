@@ -94,12 +94,20 @@ def fenced_emergency_auto(
         notify("broker fencing failed: no exclusive Modbus release proof")
         return FenceResult(True, False, False, False, type(exc).__name__)
     try:
-        if before_write is not None and before_write() is not True:
-            notify("emergency Auto blocked: broker approval unexpectedly present")
+        if before_write is None:
+            notify("emergency Auto blocked: no final safety authorization gate")
+            return FenceResult(True, True, False, False, "write_guard_missing")
+        if before_write() is not True:
+            notify("emergency Auto blocked: final ownership or safety authorization denied")
             return FenceResult(True, True, False, False, "write_guard_denied")
     except Exception as exc:
         notify("emergency Auto blocked: authorization unverified")
         return FenceResult(True, True, False, False, type(exc).__name__)
+    # A slow independent SoC/BMS read must not silently extend the fenced
+    # handover deadline; recheck immediately before any physical command.
+    if monotonic() - began > deadline_s:
+        notify("emergency Auto blocked: deadline expired during safety authorization")
+        return FenceResult(True, True, False, False, "deadline_exceeded_before_write")
     try:
         verified = emergency_auto() is True
     except Exception as exc:
