@@ -357,7 +357,7 @@ samtliga säkerhetsinställningar.
    färsk telemetri, fysisk batteri-/näteffekt,
    dispatcher och watchdog. **Inga dubbla pollers.**
 6. Följ DoD enligt central
-   [artefakthygien](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/artifact-hygiene.md).
+   [artefakthygien](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/artifact-hygiene.md).
    Avinstallera endast egna **inaktiva** provresurser,
    bevara installerad originalkod och driftbevis,
    dokumentera kvarstående risker.

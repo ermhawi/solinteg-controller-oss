@@ -83,7 +83,7 @@ dongelkommunikation eller driftsättning. Baslinjen kommer från historiskt SQLi
 - **Före cutover:** verifiera fysisk status/SoC, BMS-/fas-/EV-skydd, aktuell drift och en byteverifierad känd rollback. Spara den gamla servicekonfigurationen och exakta kontrollregistrens mode/target/cap-readback.
 - **Vid avbrott:** stoppa och fence:a den ena ägaren innan den andra får startas. Återställ säkert Auto och sedan originaltjänster i beprövad ordning; verifiera fysisk effekt, ordinarie poller och aktiv watchdog. Om återställning inte kan bekräftas: **stoppa ytterligare styrning och larma**.
 - **Mät och larma:** `request_id`, kö-/FC03-latenser, modeepoch, snapshot-spann/kvalitet, reconnects, command readback, fysisk effekt, time-to-safe-Auto och överhoppade kommandon – utan hemligheter, privata IP-adresser eller privata förbrukningsvärden i Git.
-- **DoD:** verifierad kod/test/dokumentation/ADR + agentägd temporär systemd-/script-/loggstädning enligt [v1.2.2](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/artifact-hygiene.md). Endast `origin/Sundsvall`, inga opushade commits, omergade grenar eller extra worktrees.
+- **DoD:** obligatorisk [dokumentationspreflight](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/documentation-hygiene.md) före implementation, därefter verifierad kod/test/dokumentation/ADR, uppdaterad planstatus och agentägd temporär systemd-/script-/loggstädning enligt [v1.3.0](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/artifact-hygiene.md). Endast `origin/Sundsvall`, inga opushade commits, omergade grenar eller extra worktrees.
 
 ### Beslut att låsa före drift
 

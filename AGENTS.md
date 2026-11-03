@@ -4,9 +4,13 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
-## Documentation standard v1.2.2
+## Documentation standard v1.3.0
 
-Follow [engineering-standards v1.2.2](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/policy.md), including [Git hygiene and Definition of Done](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/git-hygiene.md) and [artifact cleanup/archival](https://github.com/ermhawi/engineering-standards/blob/v1.2.2/docs/artifact-hygiene.md). Before relevant code changes read `docs/index.md`; update affected feature, architecture and operations documentation together with code and record major decisions as ADRs. Distinguish proposed and implemented behavior; report why no documentation change was needed when applicable. Never publish internal docs without verified access control.
+Follow [engineering-standards v1.3.0](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/policy.md), including mandatory [documentation preflight](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/documentation-hygiene.md), [Git hygiene and Definition of Done](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/git-hygiene.md) and [artifact cleanup/archival](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/artifact-hygiene.md).
+
+**Before code or configuration changes:** read `docs/index.md`, relevant system/component architecture and design, requirements/ADRs, documented known issues and limitations, and relevant plans with their implementation status. Reconcile claims with current code, configuration, tests and, when appropriate, observed runtime. Report inconsistencies, unverified claims, existing blockers and affected documents in the task/plan *before* editing. Plans and memory are not evidence of deployment; a prepared broker is not a deployed broker.
+
+**Before Definition of Done:** update impacted architecture, feature, operations, known-issues and plan-status documents in the same branch as the change, using actual code/test/runtime evidence. Record major decisions as ADRs, distinguish proposed from implemented and deployed functionality, and explain when no documentation update is needed. Never publish private installation data or internal docs without verified access control.
 
 ## Branch ownership and mandatory Git DoD
 
