@@ -14,6 +14,7 @@ Run: python3 -m unittest scripts.tests.test_dispatch_loop -v   (from the repo ro
 """
 import json
 import os
+import signal
 import sqlite3
 import sys
 import tempfile
@@ -1832,6 +1833,229 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
 
             a, w, *_ = self.run_decision(11.5, action="freeze", power_w=0)
             self.assertEqual((a, w), ("charge", dl.SOC_FLOOR_RECOVERY_W))
+
+
+class BrokerDispatchGuardTests(unittest.TestCase):
+    """Broker gate: fake files/clients only, no physical Modbus operations."""
+
+    def setUp(self):
+        self.now = datetime.now(UTC)
+        self.sample = {
+            "timestamp": self.now.isoformat(), "sample_id": "boot-1",
+            "sample_quality": "valid", "sample_duration_s": 0.5,
+            "soc_pct": 35.0, "pv_w": 600, "house_load_w": 1000,
+            "grid_w": -400, "meter_l1_w": -100, "meter_l2_w": -100,
+            "meter_l3_w": -200, "work_mode_raw": 0x101,
+        }
+        self.patcher = mock.patch.multiple(
+            dl, BROKER_STALE_GUARD_ENABLED=True, _soc_recovery_active=False,
+            SOC_RECOVERY_ENTRY_PCT=19.5, SOC_RECOVERY_EXIT_PCT=21.0)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+        self.con = sqlite3.connect(":memory:")
+        self.addCleanup(self.con.close)
+        self.con.execute("""
+            CREATE TABLE control_actions (
+                id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, slot_time TEXT,
+                planned_action TEXT NOT NULL, power_w INTEGER, armed INTEGER NOT NULL,
+                outcome TEXT NOT NULL, detail TEXT, detail_json TEXT)
+        """)
+
+    def sample_guard(self, sample=None, *, now=None, **kwargs):
+        with mock.patch.object(dl.common, "read_json",
+                               return_value=self.sample if sample is None else sample):
+            return dl.require_fresh_broker_sample(now or self.now, **kwargs)
+
+    def test_fresh_sample_allows_reuse_without_false_replay(self):
+        token = self.sample_guard()
+        self.assertEqual(token, self.sample_guard(previous_sample=token, expected_sample=token))
+
+    def test_missing_stale_invalid_and_low_soc_samples_are_inhibited(self):
+        for changes in (
+            {"timestamp": (self.now - timedelta(seconds=121)).isoformat()},
+            {"timestamp": (self.now + timedelta(seconds=1)).isoformat()},
+            {"sample_quality": "rejected"},
+            {"sample_id": ""},
+            {"soc_pct": 19.0},
+            {"meter_l3_w": 900},
+            {"work_mode_raw": 0x400},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(dl.BrokerTelemetryInhibited):
+                    self.sample_guard({**self.sample, **changes})
+        with mock.patch.object(dl.common, "read_json", return_value=None):
+            with self.assertRaises(dl.BrokerTelemetryInhibited):
+                dl.require_fresh_broker_sample(self.now)
+
+    def test_old_sample_replay_and_mutated_id_are_inhibited(self):
+        token = self.sample_guard()
+        cases = (
+            {"timestamp": (self.now - timedelta(seconds=1)).isoformat(),
+             "sample_id": "boot-2"},
+            {"sample_id": "boot-2"},  # new ID without later timestamp
+            {"timestamp": (self.now + timedelta(milliseconds=10)).isoformat()},
+        )
+        for changes in cases:
+            with self.subTest(changes=changes):
+                with self.assertRaises(dl.BrokerTelemetryInhibited):
+                    self.sample_guard({**self.sample, **changes},
+                                      now=self.now + timedelta(milliseconds=11),
+                                      previous_sample=token)
+
+    def test_new_sample_requires_recomputing_old_decision(self):
+        token = self.sample_guard()
+        later = {**self.sample, "sample_id": "boot-2",
+                 "timestamp": (self.now + timedelta(milliseconds=10)).isoformat()}
+        with mock.patch.object(dl.common, "read_json", return_value=later):
+            with self.assertRaisesRegex(dl.BrokerTelemetryInhibited,
+                                        "changed_during_decision"):
+                dl.require_fresh_broker_sample(self.now + timedelta(milliseconds=11),
+                                               expected_sample=token)
+        self.assertEqual(self.sample_guard(later, now=self.now + timedelta(milliseconds=11),
+                                          previous_sample=token), (
+            "boot-2", datetime.fromisoformat(later["timestamp"])))
+
+    def test_apply_refuses_missing_or_stale_evidence_without_modbus_or_auto(self):
+        with mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl, "return_to_auto") as revert, \
+             mock.patch.object(dl.common, "read_json", return_value=None):
+            result = dl.apply_decision(
+                self.con, "slot", "discharge", 4500, None, False, "", {},
+                loop_in_auto=False)
+        self.assertEqual(result, ("inhibited_broker_telemetry", False))
+        inverter.assert_not_called()
+        revert.assert_not_called()
+        self.assertEqual(self.con.execute(
+            "SELECT outcome FROM control_actions").fetchone()[0],
+            "inhibited_broker_telemetry")
+        self.assertIsNone(dl.next_last_target(result[0], ("slot", "discharge", 4500)))
+
+    def test_apply_detects_sample_change_at_last_prewrite_check(self):
+        token = self.sample_guard()
+        newer = {**self.sample, "sample_id": "boot-2",
+                 "timestamp": (self.now + timedelta(milliseconds=10)).isoformat()}
+        with mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl, "return_to_auto") as revert, \
+             mock.patch.object(dl.common, "read_json",
+                               side_effect=[self.sample, newer]):
+            result = dl.apply_decision(
+                self.con, "slot", "discharge", 4500, None, False, "", {},
+                loop_in_auto=False, broker_sample=token)
+        self.assertEqual(result, ("inhibited_broker_telemetry", False))
+        inverter.assert_not_called()
+        revert.assert_not_called()
+
+    def test_sample_goes_stale_during_readback_without_any_register_write(self):
+        token = self.sample_guard()
+        inverter = mock.MagicMock()
+        inverter.soc_pct.return_value = 50.0
+        with mock.patch.object(dl, "Inverter", return_value=inverter), \
+             mock.patch.object(dl, "return_to_auto") as revert, \
+             mock.patch.object(dl, "apply_target") as applied, \
+             mock.patch.object(dl.common, "read_json",
+                               side_effect=[self.sample, None]):
+            result = dl.apply_decision(
+                self.con, "slot", "discharge", 4500, dl.BATTERY_KWH / 2,
+                False, "", {}, loop_in_auto=False, broker_sample=token)
+        self.assertEqual(result, ("inhibited_broker_telemetry", False))
+        inverter.close.assert_called_once()
+        applied.assert_not_called()
+        revert.assert_not_called()
+
+    def test_apply_with_fresh_bound_sample_can_proceed_through_fake(self):
+        token = self.sample_guard()
+        with mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl, "apply_target") as applied, \
+             mock.patch.object(dl.common, "read_json", return_value=self.sample):
+            outcome, in_auto = dl.apply_decision(
+                self.con, "slot", "discharge", 350, None, False, "", {},
+                loop_in_auto=False, broker_sample=token)
+        self.assertEqual((outcome, in_auto), ("applied", False))
+        applied.assert_called_once_with(inverter.return_value, "discharge", 350)
+        inverter.return_value.close.assert_called_once()
+
+    def test_broker_heartbeat_exposes_supervisor_required_without_hiding_liveness(self):
+        with mock.patch.object(dl.common, "write_json_atomic") as write:
+            dl.write_heartbeat(self.now, broker_policy="inhibit")
+            self.assertEqual(write.call_args.args[1], {
+                "timestamp": self.now.isoformat(), "broker_policy": "inhibit",
+                "supervisor_required": True,
+            })
+            dl.write_heartbeat(self.now)
+            self.assertEqual(write.call_args.args[1], {"timestamp": self.now.isoformat()})
+
+    def test_armed_broker_guard_is_blocked_before_any_service_start(self):
+        with mock.patch.object(dl, "ARMED", True), \
+             mock.patch.object(dl, "init_db") as init_db, \
+             mock.patch.object(dl, "apply_import_limit") as apply_limit:
+            with self.assertRaisesRegex(RuntimeError, "offline-only"):
+                dl.main()
+        init_db.assert_not_called()
+        apply_limit.assert_not_called()
+
+    def test_decide_exception_in_broker_mode_inhibits_instead_of_auto(self):
+        callbacks = {}
+        beats = []
+
+        def stop_after_second_beat(now, **kwargs):
+            beats.append(kwargs["broker_policy"])
+            if len(beats) == 2:
+                callbacks[signal.SIGTERM]()
+
+        token = self.sample_guard()
+        with mock.patch.object(dl, "ARMED", False), \
+             mock.patch.object(dl, "init_db", return_value=self.con), \
+             mock.patch.object(dl, "apply_import_limit"), \
+             mock.patch.object(dl, "decide", side_effect=ValueError("bad plan")) as decide, \
+             mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl, "revert_best_effort") as revert, \
+             mock.patch.object(dl, "require_fresh_broker_sample", return_value=token) as check, \
+             mock.patch.object(dl, "record_broker_inhibit") as inhibit, \
+             mock.patch.object(dl, "LOOP_INTERVAL_S", 1), \
+             mock.patch.object(dl.signal, "signal",
+                               side_effect=lambda sig, fn: callbacks.__setitem__(sig, fn)), \
+             mock.patch.object(dl.time, "sleep"), \
+             mock.patch.object(dl, "write_heartbeat",
+                               side_effect=stop_after_second_beat):
+            dl.main()
+        self.assertEqual(beats, ["inhibit", "inhibit"])
+        decide.assert_called_once()
+        check.assert_called_once()
+        self.assertEqual(inhibit.call_count, 2)
+        inverter.assert_not_called()
+        revert.assert_not_called()
+
+    def test_inhibit_latches_without_running_decide_or_reverting_to_general(self):
+        callbacks = {}
+        beats = []
+        def stop_after_second_beat(now, **kwargs):
+            beats.append(kwargs["broker_policy"])
+            if len(beats) == 2:
+                callbacks[signal.SIGTERM]()
+
+        with mock.patch.object(dl, "ARMED", False), \
+             mock.patch.object(dl, "init_db", return_value=self.con), \
+             mock.patch.object(dl, "apply_import_limit"), \
+             mock.patch.object(dl, "decide") as decide, \
+             mock.patch.object(dl, "prioritize_soc_recovery") as recovery, \
+             mock.patch.object(dl, "Inverter") as inverter, \
+             mock.patch.object(dl, "revert_best_effort") as revert, \
+             mock.patch.object(dl, "require_fresh_broker_sample",
+                               side_effect=dl.BrokerTelemetryInhibited("stale")) as check, \
+             mock.patch.object(dl, "record_broker_inhibit"), \
+             mock.patch.object(dl, "LOOP_INTERVAL_S", 1), \
+             mock.patch.object(dl.signal, "signal",
+                               side_effect=lambda sig, fn: callbacks.__setitem__(sig, fn)), \
+             mock.patch.object(dl.time, "sleep"), \
+             mock.patch.object(dl, "write_heartbeat",
+                               side_effect=stop_after_second_beat):
+            dl.main()
+        self.assertEqual(beats, ["inhibit", "inhibit"])
+        check.assert_called_once()
+        decide.assert_not_called()
+        recovery.assert_not_called()
+        inverter.assert_not_called()
+        revert.assert_not_called()
 
 
 if __name__ == "__main__":

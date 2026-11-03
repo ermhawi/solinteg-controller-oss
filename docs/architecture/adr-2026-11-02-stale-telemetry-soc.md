@@ -1,7 +1,7 @@
 # ADR 2026-11-02: stale brokertelemetri och SoC-medveten dispatch
 
-**Status:** proposed för driftsättning, klassificerare verifierad **endast offline**.
-**Live-cutover:** **NO-GO**. Inga befintliga dispatcher-, watchdog- eller systemd-vägar har ändrats.
+**Status:** klassificerare och opt-in-integration i dispatcher verifierade **endast offline** (2026-11-03).
+**Live-cutover:** **NO-GO**. Ingen installerad dispatcher, watchdog, broker eller systemd-enhet har ändrats.
 
 ## Bakgrund
 
@@ -60,28 +60,64 @@ hantera okänt fysiskt läge, larm, timeout, verifierad exklusiv
 anslutning, säker övergång och readback. Modellen **löser inte**
 detta utan markerar behovet av en sådan säkerhetsväg.
 
-En senare integration måste verifiera färskhet och brokerägarskap
-omedelbart före varje fysisk transaktion, övervaka återanvändning av
-`sample_id`/generation, förbjuda ny direkt Modbus-SoC-läsning vid
-stale data, samt dokumentera hur redan aktiva tvångsbörvärden stoppas
-utan BMS-/SoC-risk. Detta steg får inte ta över den fristående watchdoggen.
+## Opt-in-koppling i dispatchern (källkod 2026-11-03)
+
+`DISPATCH_BROKER_STALE_GUARD=1` kopplar nu in samma klassificerare i
+`dispatch_loop.py`, **avstängd som standard** och explicit spärrad när
+`SOLINTEG_CONTROL_ARMED=1`. Denna kod är avsedd för isolerade tester
+tills oberoende supervisor, säker övergång och ensam Modbus-skrivare finns.
+
+- Före `decide()` kontrolleras brokersample, inklusive giltig tidsstämpel,
+  kvalitetsstatus, SoC/hysteres och CT-/modekonsistens. Inget ekonomiskt
+  beslut och ingen direkt SoC-fallback körs när kontrollen misslyckas.
+- `sample_id` och tidsstämpel måste gå monotont framåt; identiskt färskt
+  sample kan återanvändas. En annan mätning under beräkningen innebär att
+  börvärdet måste beräknas om, inte appliceras med gammalt underlag.
+- Samma mätning verifieras igen efter beslutsberäkningen, vid ingången
+  till `apply_decision()` och omedelbart före den befintliga skrivvägen.
+  Misslyckat test resulterar i `inhibited_broker_telemetry`, **utan nya
+  registerskrivningar** eller implicit General/Auto-fallback. I detta
+  offlineprototypsteg kan en läsning från en tidigare godkänd fas redan ha
+  öppnat en Modbusklient, men ingen fysisk styrning är armerad.
+- `recovery_candidate` är ännu **inte** tillstånd att ladda; även färsk
+  låg SoC spärrar automatiska åtgärder i brokerprototypen. Spärrat läge
+  kvarstår under processens livstid. `dispatch-heartbeat.json` behåller
+  tidsstämpeln men får även `broker_policy=inhibit` och
+  `supervisor_required=true`. Dagens watchdog läser fortfarande
+  **endast tidsstämpeln** och reagerar inte på dessa nya fält.
+- Vid oväntade dispatchfel i opt-in-läge används ingen blind Auto-fallback;
+  vid avslut gäller samma försiktighet. Den gamla direktlägesvägen och
+  dess revert/watchdog är helt oförändrade när flaggan saknas.
+
+**Viktig kvarstående säkerhetslucka:** att inhibera nya börvärden kan
+lämna ett redan aktivt EMS-börvärde kvar. Latchen är dessutom endast i
+processminne och ersätter inte en persistent, oberoende supervisor.
+Denna etapp **får inte** aktiveras för skarp styrning; den fristående
+watchdoggen, brokerägarskap, fysiskt säkert stopp/readback och
+verifierad SoC-källa återstår fortfarande.
 
 ## Offlineverifiering
 
 ```sh
 python3 -B -m unittest discover -s scripts/tests -p test_modbus_broker_stale_policy.py
+python3 -B -m unittest discover -s scripts/tests -p test_dispatch_loop.py
 ```
 
-16 testfall täcker tidsgräns/future/naiv tidsstämpel, kvalitetsstatus,
-fas-/effektdata, ogiltig SoC, provgränser, underkända legacy-samples,
-SoC-entry/exit-hysteres och oberoende SoC-källa. Inga anrop sker mot
-systemd, fysisk Modbus, växelriktare eller produktionsfiler.
+16 klassificerartestfall täcker tidsgräns/future/naiv tidsstämpel,
+kvalitetsstatus, fas-/effektdata, ogiltig SoC, provgränser, underkända
+legacy-samples, SoC-entry/exit-hysteres och oberoende SoC-källa.
+Därtill 12 nya dispatcherregressionstester 2026-11-03: replay, monotonicitet,
+SoC-/CT-spärr, kontroll efter läsning och före write, heartbeat,
+fail-closed vid gammal data och beslutsfel, processlatch och armed-spärr.
+Alla tester använder fake/inmemory; inga anrop till systemd, fysisk
+Modbus, växelriktare eller produktionsfiler. Hela Python-sviten:
+**1 292 tester OK**.
 
-**Återstår:** utarbeta en säker koppling i en isolerad dispatcher-testhärva,
-oberoende verifiering av SoC-källan, färskhets-/replaykontroll vid
-användningsögonblicket, säkert avslut av tidigare aktiv tvångsstyrning,
-driftsatt safety-supervisor med exklusiv ägare och fysisk readback.
-Inget av detta är godkänt av denna ADR. **NO-GO kvarstår**.
+**Återstår:** driftsatt oberoende SoC-verifiering, persistent säkerhetslatch,
+säker hantering av redan aktiva EMS-börvärden, supervisor med exklusivt
+TCP-ägarskap, reell registerläsning/readback och kontrollerad fysisk
+rollback. Grinden är endast testad mot fake-klienter, inte fysisk
+inverter. **NO-GO kvarstår**.
 
 Relaterat: [etapp 3-grindar](../modbus-broker-readonly-stage3-2026-11-02.md)
 och [migrationsplanen](../plans/modbus-broker-2026-11-01.md).

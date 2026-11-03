@@ -1,6 +1,6 @@
-"""Offline-only stale-telemetry gate proposed for a future broker dispatcher.
+"""Offline-only stale-telemetry gate for the opt-in broker dispatcher prototype.
 
-This is NOT imported by the installed dispatcher, watchdog or broker service.
+The installed dispatcher, watchdog and broker services are unchanged.
 It performs no I/O and does not choose a physical power target or General/Auto.
 A "candidate" still requires the existing independent SoC, phase, BMS, arming
 and control/readback gates before any physical operation can be considered.

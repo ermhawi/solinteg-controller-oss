@@ -1,6 +1,6 @@
 # Plan: Modbus-broker med ensam ägare och säker migrering
 
-**Status:** Etapp **0–2 klar offline**, etapp **3 kod och systemd-templates förberedda/testade; pollerns replay- och tidskontroll förstärkt 2026-11-03, men NO-GO för fysisk cutover**; etapp 4–6 planerade. **Ingen broker installerad och ingen fysisk styrning ändrad.** Se [offlinerapport](../modbus-broker-offline-2026-11-01.md) och [etapp 3-grindar](../modbus-broker-readonly-stage3-2026-11-02.md).
+**Status:** Etapp **0–2 klar offline**, etapp **3 kod och systemd-templates förberedda/testade**, inklusive pollerns replaykontroll och **opt-in SoC-/stale-grind i dispatcher (2026-11-03, endast offline)**. Fysisk cutover fortfarande **NO-GO**; etapp 4–6 planerade. **Ingen broker installerad och ingen fysisk styrning ändrad.** Se [offlinerapport](../modbus-broker-offline-2026-11-01.md), [stale-SoC ADR](../architecture/adr-2026-11-02-stale-telemetry-soc.md) och [etapp 3-grindar](../modbus-broker-readonly-stage3-2026-11-02.md).
 **Repository/branch:** `ermhawi/solinteg-controller-oss` / `Sundsvall` – får aldrig mergas till `main`/upstream.
 **Omfattning:** Solintegs Modbus-TCP-dongel. **EVCC/Waveshare RS-485 är ett separat system.**
 **Beslut:** Planen godkänner bara analys och dokumentation, inte fysiska Modbus-skrivningar, ändrat SoC-golv eller nya SoC25-prov.
@@ -63,7 +63,7 @@ Brokerprocessen äger enda **ordinarie** TCP-sessionen. IPC över lokal Unix-dom
 | **5 – Tvinga exklusivitet** | Spärra direkt TCP:502 för migrerade systemd-tjänster, endast broker och kontrollerad nödfallback får ansluta. Lägg till observability och drift-/avinstallationsrutiner. | En enda ordinarie TCP-owner verifierad och säker reservväg omtestad |
 | **6 – Uppföljning** | Jämför latens, giltiga/ogiltiga samples, watchdog-latens och fellarm mot baslinjen. | Dokumenterad go/no-go innan **ett separat nytt** SoC25-försök |
 
-**Etapp 0–2 levererad och etapp 3 förberedd:** offlinekärna med fake-dongel, verifierad UDS, kvalitet och felinjektionstester; dessutom en riktig allowlistad **FC03-only** pymodbus-adapter, skyddad read-only service-entrypoint, opt-in brokerläge för pollern och **ej installerade** systemd-templates. En **lokal** loopback fake-Modbus-TCP-server har nu dessutom verifierat
+**Etapp 0–2 levererad och etapp 3 förberedd:** offlinekärna med fake-dongel, verifierad UDS, kvalitet och felinjektionstester; dessutom en riktig allowlistad **FC03-only** pymodbus-adapter, skyddad read-only service-entrypoint, opt-in brokerläge för pollern, opt-in SoC-/stale-grind i dispatchern med **armed NO-GO** och **ej installerade** systemd-templates. En **lokal** loopback fake-Modbus-TCP-server har nu dessutom verifierat
 riktig `pymodbus 3.15.0` och 12 FC03 utan writes; ingen fysisk
 dongelkommunikation eller driftsättning. Baslinjen kommer från historiskt SQLite-material; tidsupplösning per FC03-block och fysisk rollback återstår. Se [offlinegranskning](../modbus-broker-offline-2026-11-01.md) och [NO-GO-grindar för live cutover](../modbus-broker-readonly-stage3-2026-11-02.md).
 

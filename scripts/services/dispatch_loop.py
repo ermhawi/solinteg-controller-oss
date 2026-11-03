@@ -130,7 +130,14 @@ SAFETY:
     cadence as "loop alive", see lib/oracle.ts's ARMED_SEGMENT_CAP_MS), but no longer
     re-poke General mode every 15 min, which would blindly overwrite a mode the owner set
     by hand via the inverter's own app.
-  - SIGTERM/SIGINT and normal shutdown always revert to auto.
+  - In legacy/direct mode, SIGTERM/SIGINT and normal shutdown revert to auto.
+    Broker-gated mode refuses blind Auto and leaves recovery to a supervisor.
+  - Broker-mode dispatch can opt into an OFFLINE-ONLY stale/SoC gate with
+    DISPATCH_BROKER_STALE_GUARD=1 (default 0). It requires a valid, monotonic
+    broker snapshot before calculating and applying any new target. Unknown/low
+    SoC inhibits plan control and requires an independent supervisor; inhibit is
+    never silently mapped to General. Armed opt-in is rejected until independent
+    supervision and exclusive TCP ownership exist. Legacy/direct mode is unchanged.
   - Every loop iteration — idle or not, successful or not — touches a heartbeat file
     (DISPATCH_HEARTBEAT_PATH). This is deliberately NOT the same signal as a fresh
     control_actions row: those are only written on an actual target change or the periodic
@@ -266,6 +273,7 @@ from zoneinfo import ZoneInfo
 
 import common  # sibling module (scripts/services/) — script dir is sys.path[0]
 from l3_battery_policy import observe_l3, suggest_battery_target
+from modbus_broker_stale_policy import assess_stale_dispatch
 from ev_grid_priority_guard import guard_dispatch as guard_ev_grid_priority
 from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
@@ -441,6 +449,9 @@ if L3_CHARGE_BUDGET_W < 300 or L3_CHARGE_BUDGET_W > 4600:
     raise ValueError("DISPATCH_L3_CHARGE_BUDGET_W must be between 300 and 4600 W")
 LIVE_JSON_PATH = os.environ.get("INVERTER_DATA_PATH", "/opt/solinteg/live.json")
 LIVE_MAX_AGE_S = 120  # same staleness rule as lib/inverter.ts
+# Opt-in offline integration only. Armed broker control remains NO-GO without a
+# separate safety supervisor and exclusive TCP ownership.
+BROKER_STALE_GUARD_ENABLED = os.environ.get("DISPATCH_BROKER_STALE_GUARD", "0") == "1"
 # House battery L3 economic coordination, never EVCC control or a fuse safety device.
 # "shadow" computes/logs proposed battery targets but writes NOTHING differently.
 # "1" may change battery-only setpoints. Before every active interval it verifies
@@ -916,6 +927,45 @@ def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
     if limited:
         log.info("L3 charge guard limited battery charging: %s", reason)
     return capped_w, f"{detail}; L3 charge guard: {reason}", numbers, limited
+
+
+class BrokerTelemetryInhibited(RuntimeError):
+    """A broker decision needs independent safety review, never implicit Auto."""
+
+
+def require_fresh_broker_sample(now: datetime, *, previous_sample=None, expected_sample=None):
+    """Return (sample_id, timestamp) only for a trusted, monotonic broker snapshot.
+
+    Reusing the SAME sample is allowed while it is fresh. Reverting to an older
+    sample or switching sample_id without increasing time is not. An expected
+    token fences a target calculated before the poller updated live.json.
+    This is evidence validation, not a lease or a replacement for TCP fencing.
+    """
+    sample = common.read_json(LIVE_JSON_PATH)
+    decision = assess_stale_dispatch(
+        sample, now=now, recovery_active=_soc_recovery_active,
+        recovery_entry_pct=SOC_RECOVERY_ENTRY_PCT,
+        recovery_exit_pct=SOC_RECOVERY_EXIT_PCT,
+    )
+    if not decision.plan_eligible:
+        raise BrokerTelemetryInhibited(f"{decision.disposition}: {decision.reason}")
+    token = (sample["sample_id"], datetime.fromisoformat(sample["timestamp"]))
+    if previous_sample is not None and token != previous_sample:
+        if token[1] <= previous_sample[1] or token[0] == previous_sample[0]:
+            raise BrokerTelemetryInhibited("replayed_or_nonmonotonic_broker_sample")
+    if expected_sample is not None and token != expected_sample:
+        raise BrokerTelemetryInhibited("broker_sample_changed_during_decision")
+    return token
+
+
+def record_broker_inhibit(con, slot_time, action, power_w, reason, numbers=None):
+    """Record a blocked action without creating a Modbus client or choosing Auto."""
+    log.error("broker dispatch inhibited: %s; physical EMS state requires supervisor review", reason)
+    try:
+        log_action(con, slot_time, action, power_w, "inhibited_broker_telemetry",
+                   reason, detail_json={**(numbers or {}), "supervisor_required": True})
+    except Exception as exc:  # noqa: BLE001 - logging must never cause a physical revert
+        log.error("failed to record broker inhibit: %s", exc)
 
 
 def read_live_reading(now: datetime):
@@ -1629,12 +1679,18 @@ def apply_target(inv: Inverter, action: str, power_w: int) -> None:
         return_to_auto(inv)
 
 
-def write_heartbeat(now: datetime) -> None:
-    """Touched every loop iteration regardless of outcome — see the module docstring's
-    SAFETY note on why this, not control_actions freshness, is watchdog.py's liveness
-    signal. Atomic write (temp file + rename) matching modbus_poller.py's live.json pattern."""
+def write_heartbeat(now: datetime, *, broker_policy: str | None = None) -> None:
+    """Record liveness and optional broker safety state separately.
+
+    Existing watchdog.py only observes timestamp; a future supervisor must
+    explicitly inspect broker_policy and supervisor_required.
+    """
+    data = {"timestamp": now.isoformat()}
+    if broker_policy is not None:
+        data["broker_policy"] = broker_policy
+        data["supervisor_required"] = broker_policy != "plan_candidate"
     try:
-        common.write_json_atomic(HEARTBEAT_PATH, {"timestamp": now.isoformat()})
+        common.write_json_atomic(HEARTBEAT_PATH, data)
     except OSError as exc:
         # Swallowed on purpose: failing to write the heartbeat must not kill the tick. The
         # resulting staleness is exactly what watchdog.py is for — it will force auto itself.
@@ -1722,7 +1778,7 @@ def needs_apply(target, last_target, effective_action: str, effective_power: int
 # Outcomes after which the inverter is NOT at `target` — the apply failed and the loop either
 # reverted to auto or could not confirm what state it left behind. Recording `target` for these
 # would tell needs_apply() the target is already satisfied.
-_UNAPPLIED_OUTCOMES = ("error_reverted", "error_revert_failed")
+_UNAPPLIED_OUTCOMES = ("error_reverted", "error_revert_failed", "inhibited_broker_telemetry")
 
 
 def next_last_target(outcome: str, target):
@@ -1796,7 +1852,7 @@ def check_soc_divergence(inv: Inverter, expected_soc_kwh: float, slot_time, acti
 
 def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int,
                     expected_soc_kwh, solar_skipped_now: bool, detail: str, numbers: dict,
-                    loop_in_auto: bool):
+                    loop_in_auto: bool, *, broker_sample=None):
     """Run the guards, write the register, log the control_actions row. Returns
     (outcome, loop_in_auto).
 
@@ -1805,6 +1861,14 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
     Ordering inside the failure path matters and is load-bearing — revert FIRST, log second, so
     a telemetry.db write error (shared WAL, contention is realistic) can never skip the revert.
     """
+    if BROKER_STALE_GUARD_ENABLED:
+        try:
+            if broker_sample is None:
+                raise BrokerTelemetryInhibited("no_broker_sample_bound_to_decision")
+            require_fresh_broker_sample(datetime.now(UTC), expected_sample=broker_sample)
+        except BrokerTelemetryInhibited as exc:
+            record_broker_inhibit(con, slot_time, action, power_w, str(exc), numbers)
+            return "inhibited_broker_telemetry", loop_in_auto
     inv = None  # opened lazily — an idle→idle slot boundary needs no connection
     applied_action, applied_power = action, power_w
     outcome = "applied"
@@ -1829,6 +1893,14 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
                 applied_action, applied_power = "idle", 0
                 outcome = "skipped_divergence"
                 maybe_request_replan("divergence_skip")
+        # Recheck the SAME snapshot directly before any possible register write.
+        # No physical fallback on failure: General might discharge a low battery.
+        if BROKER_STALE_GUARD_ENABLED:
+            try:
+                require_fresh_broker_sample(datetime.now(UTC), expected_sample=broker_sample)
+            except BrokerTelemetryInhibited as exc:
+                record_broker_inhibit(con, slot_time, action, power_w, str(exc), numbers)
+                return "inhibited_broker_telemetry", loop_in_auto
         # Never stomp an owner-set mode: when the loop's own last write already left the
         # inverter in auto, an idle decision (planned, or a guard demotion above) needs no
         # register write. The row below is STILL logged — it carries the skip outcomes, and
@@ -1961,6 +2033,9 @@ def apply_import_limit() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if BROKER_STALE_GUARD_ENABLED and ARMED:
+        raise RuntimeError("broker stale guard is offline-only until independent safety supervision "
+                           "and exclusive Modbus ownership have been verified")
     con = init_db(DB_PATH)
     log.info("Dispatch loop starting. ARMED=%s interval=%ds reassert=%ds",
               ARMED, LOOP_INTERVAL_S, REASSERT_S)
@@ -1987,6 +2062,8 @@ def main() -> None:
     # failure streak is enough; the fail-safe state doesn't need re-asserting on a timer any
     # more than a normal idle slot does (see the reassert comment below).
     decide_failure_reverted = False
+    last_broker_sample = None
+    broker_fault_latched = False
     stop = {"flag": False}
 
     def _request_shutdown(*_args):
@@ -1997,7 +2074,14 @@ def main() -> None:
 
     while not stop["flag"]:
         iteration_now = datetime.now(UTC)
+        broker_policy = "plan_candidate" if BROKER_STALE_GUARD_ENABLED else None
+        slot_time, action, power_w, numbers = None, "unknown", 0, {}
         try:
+            if BROKER_STALE_GUARD_ENABLED:
+                if broker_fault_latched:
+                    raise BrokerTelemetryInhibited("broker_inhibit_latched_pending_supervisor_review")
+                last_broker_sample = require_fresh_broker_sample(
+                    iteration_now, previous_sample=last_broker_sample)
             slot_time, action, power_w, expected_soc_kwh, solar_skip, detail, numbers = decide(con, iteration_now)
             # decide() just succeeded — any prior failure streak is over. Reset last_target
             # to None too, matching the restart self-heal behaviour: the failure streak's
@@ -2044,43 +2128,69 @@ def main() -> None:
                 expected_soc_kwh = None
             effective_action, effective_power, solar_skipped_now = effective_target(
                 action, power_w, solar_skip)
+            if BROKER_STALE_GUARD_ENABLED:
+                require_fresh_broker_sample(
+                    datetime.now(UTC), previous_sample=last_broker_sample,
+                    expected_sample=last_broker_sample)
             target = (slot_time, effective_action, effective_power)
             due_for_reassert = (time.monotonic() - last_write_monotonic) >= REASSERT_S
             if needs_apply(target, last_target, effective_action, effective_power, due_for_reassert,
                            soc_recovery=bool(numbers.get("soc_recovery"))):
                 outcome, loop_in_auto = apply_decision(
                     con, slot_time, action, power_w, expected_soc_kwh, solar_skipped_now,
-                    detail, numbers, loop_in_auto)
-                # Only record the target when the inverter is actually AT it — see
-                # next_last_target() for why both error outcomes (not just the failed revert)
-                # must leave it unset so the next tick retries.
-                last_target = next_last_target(outcome, target)
-                last_write_monotonic = time.monotonic()
-            monitor_soc_recovery_enforcement(con, iteration_now, target, last_target,
-                                             last_write_monotonic, numbers)
+                    detail, numbers, loop_in_auto, broker_sample=last_broker_sample)
+                if outcome == "inhibited_broker_telemetry":
+                    broker_fault_latched = True
+                    broker_policy = "inhibit"
+                    last_target = None
+                    loop_in_auto = False
+                else:
+                    # Only record a target confirmed as applied; broker inhibits are never applied.
+                    last_target = next_last_target(outcome, target)
+                    last_write_monotonic = time.monotonic()
+            if not broker_fault_latched:
+                monitor_soc_recovery_enforcement(con, iteration_now, target, last_target,
+                                                 last_write_monotonic, numbers)
+        except BrokerTelemetryInhibited as exc:
+            # Inhibit is not Auto; a prior EMS setpoint might still be active.
+            # Latch until an operator/supervisor has reviewed the physical state.
+            broker_fault_latched = True
+            broker_policy = "inhibit"
+            last_target = None
+            loop_in_auto = False
+            record_broker_inhibit(con, slot_time, action, power_w, str(exc), numbers)
         except Exception as exc:  # noqa: BLE001
-            # decide() itself failed (e.g. a corrupt dispatch_json row) — we don't know
-            # the intended action, but we must not leave a previous slot's forced setpoint
-            # running indefinitely just because this iteration couldn't compute a new one.
-            # Only revert on the FIRST failure of a streak — see decide_failure_reverted's
-            # definition above for why a persistent failure must not re-revert every tick.
-            if not decide_failure_reverted:
+            if BROKER_STALE_GUARD_ENABLED:
+                broker_fault_latched = True
+                broker_policy = "inhibit"
+                last_target = None
+                loop_in_auto = False
+                record_broker_inhibit(con, slot_time, action, power_w,
+                                      f"dispatch_iteration_failed: {exc}", numbers)
+            # Legacy/direct mode retains its existing one-revert-per-failure behaviour.
+            elif not decide_failure_reverted:
                 log.error("loop iteration failed: %s — falling back to auto", exc)
                 revert_best_effort()
                 decide_failure_reverted = True
             else:
                 log.error("loop iteration still failing (%s) — already reverted, not re-writing", exc)
 
-        # Always touched, success or failure — see write_heartbeat's docstring.
-        write_heartbeat(datetime.now(UTC))
+        # Liveness and safety are separate. The existing watchdog checks only timestamp.
+        if BROKER_STALE_GUARD_ENABLED:
+            write_heartbeat(datetime.now(UTC), broker_policy=broker_policy)
+        else:
+            write_heartbeat(datetime.now(UTC))
 
         for _ in range(LOOP_INTERVAL_S):
             if stop["flag"]:
                 break
             time.sleep(1)
 
-    log.info("Shutting down — reverting to auto.")
-    revert_best_effort()
+    if BROKER_STALE_GUARD_ENABLED:
+        log.warning("Broker-gated dispatcher stopped: no blind Auto; supervisor review required")
+    else:
+        log.info("Shutting down — reverting to auto.")
+        revert_best_effort()
 
 
 if __name__ == "__main__":
