@@ -49,7 +49,6 @@ const ONE_WAY_EFF = EFF_ONE_WAY;
 // Economic decisions may discharge down to the PLANNING reserve, never merely
 // to the inverter/BMS hard floor. The executor's emergency floor stays separate.
 const DEFAULT_MIN_SOC_KWH = Math.max(BATTERY_MIN_SOC_KWH, BATTERY_PLANNER_RESERVE_KWH);
-const PLANNER_RESERVE_ENABLED = BATTERY_PLANNER_RESERVE_KWH > BATTERY_MIN_SOC_KWH + 1e-9;
 /**
  * The highest SoC a FORCED charge may plan for. `inverter_control.force_charge` refuses to charge
  * above `SOLINTEG_SOC_CEILING_PCT` and returns to auto instead, so a plan that assumes the full pack
@@ -411,6 +410,8 @@ export function optimizeDispatch(
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    /** Physical recovery entry for unavoidable EMS standby drain below the economic reserve. */
+    batterySaveRecoveryEntryKwh?: number;
     /** Site-specific economic reserve. Never lowers the physical safety minimum. */
     minSocKwh?: number;
     /** öre per stored kWh above the floor at the horizon's end (see terminalEnergyValueOre).
@@ -528,6 +529,7 @@ function dpCore(
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    batterySaveRecoveryEntryKwh?: number;
     minSocKwh?: number;
     terminalValueOrePerKwh?: number;
   },
@@ -536,12 +538,20 @@ function dpCore(
   if (n === 0) return [];
   const MIN_SOC_KWH = Math.max(BATTERY_MIN_SOC_KWH, Math.min(BATTERY_KWH, opts?.minSocKwh ?? DEFAULT_MIN_SOC_KWH));
 
-  const floorSoc = Math.min(MIN_SOC_KWH, startSoc); // allow a start below the floor; never discharge below it
+  // Under the economic reserve, EMS standby still consumes real energy. Give
+  // those physical idle transitions room below 20% without permitting intentional
+  // arbitrage discharge below the economic reserve. Keep other plans unchanged.
+  const modelReserveStandby = MIN_SOC_KWH > BATTERY_MIN_SOC_KWH + 1e-9
+    && (opts?.batterySaveDriftW ?? 0) > 0 && startSoc <= MIN_SOC_KWH + 1e-9;
+  const floorSoc = Math.min(modelReserveStandby ? BATTERY_MIN_SOC_KWH : MIN_SOC_KWH, startSoc);
   const step = (BATTERY_KWH - floorSoc) / (SOC_LEVELS - 1);
   const socOf = (i: number) => floorSoc + i * step;
   const idxOf = (soc: number) =>
     Math.max(0, Math.min(SOC_LEVELS - 1, Math.round((soc - floorSoc) / step)));
   const minSocLevel = Math.ceil((MIN_SOC_KWH - floorSoc) / step - 1e-9); // lowest level that is ≥ MIN_SOC
+  const recoveryEntryKwh = Math.max(BATTERY_MIN_SOC_KWH,
+    Math.min(MIN_SOC_KWH, opts?.batterySaveRecoveryEntryKwh ?? BATTERY_MIN_SOC_KWH));
+  const recoveryEntryLevel = Math.ceil((recoveryEntryKwh - floorSoc) / step - 1e-9);
   const maxDelta = Math.max(1, Math.floor(BATTERY_SLOT_KWH / step)); // reachable SoC levels per slot
   // The auto-charge floor below rounds `soc + autoInput·η` to the nearest level, which must stay
   // within maxDelta of `soc` or the search would find NO legal j ≥ s on a bright slot and be
@@ -750,26 +760,14 @@ function dpCore(
           : 0;
       let best = Infinity;
       let bestJ = s;
-      // An initially depleted battery must actively climb back toward the
-      // PLANNING reserve, even on a flat-price day. The old guard only
-      // prevented j<s below the floor: it allowed j=s forever at 12%, so the
-      // planner displayed a permanently empty battery and fought recovery.
-      // If the reserve cannot be reached within this 15-minute slot, require
-      // only the maximum FEASIBLE charge after house load, never a fake target.
-      const availableChargeInput = Math.min(
-        BATTERY_SLOT_KWH, Math.max(0, GRID_SLOT_KWH - lr) + sr,
-      );
-      const maxChargeLevel = Math.min(
-        SOC_LEVELS - 1,
-        Math.floor((soc + availableChargeInput * ONE_WAY_EFF - floorSoc) / step + 1e-9),
-      );
-      const minAllowedLevel = s < minSocLevel
-        ? (PLANNER_RESERVE_ENABLED
-          ? Math.min(minSocLevel, Math.max(s, maxChargeLevel))
-          : s) // legacy behavior: never discharge below physical floor, but don't force a buy
-        : minSocLevel;
+      // Below the economic reserve, an idle EMS save still drains the battery.
+      // Never compare a fictitious zero-loss idle against an actual grid charge.
+      const reserveStandby = modelReserveStandby && s <= minSocLevel
+        && lr > BATTERY_SAVE_HOLD_LOAD_KWH && sr <= 0.025; // <=100 W net solar surplus
+      // Intentional discharge remains prohibited below the economic reserve.
       for (let j = lo; j <= hi; j++) {
-        if (j < minAllowedLevel) continue; // protect reserve, including when starting below it
+        if (j < s && j < minSocLevel) continue;
+        if (j === s && reserveStandby) continue;
         if (j >= s && j < naturalFloor && !holdOK) continue; // auto-charge floor; relaxed when hold is gated ON
         // No FORCED charge above the safety ceiling — force_charge would refuse it and return to
         // auto. Anything up to naturalFloor is free solar the inverter absorbs on its own, so it is
@@ -821,24 +819,27 @@ function dpCore(
           bestJ = j;
         }
       }
-      const holdOutput = batterySaveHoldOutputKwh(soc, lr, opts?.batterySaveDriftW ?? 0, MIN_SOC_KWH);
+      const holdOutput = batterySaveHoldOutputKwh(soc, lr, opts?.batterySaveDriftW ?? 0,
+        reserveStandby ? recoveryEntryKwh : MIN_SOC_KWH);
       if (holdOutput > 0) {
         const requestedSocAfter = soc - holdOutput / ONE_WAY_EFF;
         const holdJ = Math.max(0, Math.floor((requestedSocAfter - floorSoc) / step));
         const holdSocAfter = socOf(holdJ);
         const actualHoldOutput = Math.max(0, soc - holdSocAfter) * ONE_WAY_EFF;
         const holdF = computeFlows(soc, holdSocAfter, sr, lr, curtail);
-        // The battery-save hold is an empirical correction for physical inverter behaviour.
-        // It is not an optional arbitrage action: represent it whenever the economic choice is
-        // idle, while a genuinely better active charge/discharge decision still wins.
-        if (holdJ >= minSocLevel && holdJ < s && actualHoldOutput > 0 && holdF.feasible && bestJ === s) {
-          best =
-            holdF.gridImport * buy -
-            holdF.gridExport * sell +
-            wearOreFor(holdSocAfter - soc) +
-            costToGo[holdJ];
-          bestJ = holdJ;
-          driftCh[s] = 1;
+        // Existing above-reserve save behaviour is unchanged. Below reserve,
+        // compare unavoidable physical standby loss to buying power now; stop
+        // allowing it before it would cross the executor's recovery entry.
+        if (holdJ >= (reserveStandby ? recoveryEntryLevel : minSocLevel)
+            && holdJ < s && actualHoldOutput > 0 && holdF.feasible
+            && (reserveStandby || bestJ === s)) {
+          const holdCost = holdF.gridImport * buy - holdF.gridExport * sell +
+            wearOreFor(holdSocAfter - soc) + costToGo[holdJ];
+          if (!reserveStandby || holdCost < best) {
+            best = holdCost;
+            bestJ = holdJ;
+            driftCh[s] = 1;
+          }
         }
       }
       cur[s] = best;

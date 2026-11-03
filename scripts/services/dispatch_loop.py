@@ -253,6 +253,7 @@ Environment variables (beyond inverter_control.py's own SOLINTEG_* / SOLINTEG_CO
 
 import json
 import logging
+import math
 import os
 import signal
 import sqlite3
@@ -279,6 +280,7 @@ from inverter_control import (
     clamp_power_w,
     set_import_limit,
     SOC_FLOOR_RECOVERY_W,
+    SOC_CEILING_PCT,
     REG_BATT_POWER_TARGET,
     target_raw_for_action,
 )
@@ -312,7 +314,7 @@ AUTO_ACTIONS = ("hold", "idle")
 # — Auto, the ~220 W battery-save emulation, or a real freeze (see FREEZE_HOLDS). Keeping it out of
 # the shared vocabulary is what stops lib/__tests__/action-contract.test.ts from demanding a TS
 # counterpart for a purely local execution strategy.
-EXECUTOR_ACTIONS = ("freeze", "reserve_hold")
+EXECUTOR_ACTIONS = ("freeze", "reserve_hold", "solar_charge")
 
 # One real source of truth: same env var name lib/constants.ts reads, matching hardcoded
 # fallback default (kept in sync by lib/__tests__/constants-cross-language.test.ts).
@@ -351,6 +353,14 @@ LIVE_LOAD_TRACKING_ENABLED = os.environ.get("DISPATCH_LIVE_LOAD_TRACKING", "1") 
 # Shadow by default on purpose: this writes a power target during grid-funded charging, so it should
 # be reviewed against a few days of real control_actions rows before it is allowed to act.
 LIVE_LOAD_TRACKING_CHARGE = os.environ.get("DISPATCH_LIVE_LOAD_TRACKING_CHARGE", "shadow")
+# During an expensive-hour support charge, limit live-load amplification to
+# the small planned charge (never above this cap) until prices improve. 0 disables.
+PRICE_WAIT_SUPPORT_MAX_W = max(0, int(os.environ.get("DISPATCH_PRICE_WAIT_SUPPORT_MAX_W", "500"))) // 10 * 10
+# Only with fresh L3 and import headroom: keep the physical low-SoC support
+# charge from collapsing to EMS battery-save discharge. 0 keeps cap-only mode.
+PRICE_WAIT_SUPPORT_MIN_W = min(
+    PRICE_WAIT_SUPPORT_MAX_W, max(0, int(os.environ.get("DISPATCH_PRICE_WAIT_SUPPORT_MIN_W", "0"))) // 10 * 10
+)
 # Round the live-tracked target to the nearest this-many watts — keeps the written
 # setpoint from carrying meaningless single-watt precision. The write-frequency control is
 # the DEADBAND below, not this rounding (first night's data: 100 W rounding alone produced
@@ -371,6 +381,10 @@ BATTERY_SAVE_W = max(0, int(os.environ.get(
     "SOLINTEG_BATTERY_SAVE_DRIFT_W",
     os.environ.get("DISPATCH_BATTERY_SAVE_W", "220"),
 ))) // 10 * 10
+# Optional direct EMS solar capture during battery-save slots (no General handoff).
+# Off until this installation's solar-only import behaviour has been physically verified.
+BATTERY_SAVE_SOLAR_ENABLED = os.environ.get("DISPATCH_BATTERY_SAVE_SOLAR", "0") == "1"
+BATTERY_SAVE_SOLAR_MARGIN_W = 500  # leave headroom for PV/load variation between poller samples
 # Realise a planned hold as a REAL freeze (50207/50208/50209 = 0, see inverter_control.freeze_battery)
 # instead of the ~220 W battery-save emulation. "1" enables it; anything else (the default) keeps the
 # emulation. Off by default because the three registers' behaviour in this combination is not
@@ -399,11 +413,8 @@ SOC_RECOVERY_ENTRY_PCT = (BATTERY_FLOOR_KWH + SOC_FLOOR_GUARD_HEADROOM_KWH) / BA
 # Reserve hold is an UNVERIFIED, separately gated actuator. A planning reserve
 # must not require enabling unverified zero-power hardware control.
 RESERVE_HOLD_VERIFIED = os.environ.get("DISPATCH_RESERVE_HOLD_VERIFIED", "0") == "1"
-if PLANNER_RESERVE_PCT > SOC_FLOOR_PCT:
-    # At a 20% planning reserve, recovery begins below 19.5% and
-    # continues to >=21%, without changing the physical safety floor.
-    SOC_RECOVERY_ENTRY_PCT = max(SOC_RECOVERY_ENTRY_PCT, PLANNER_RESERVE_PCT - 0.5)
-    SOC_RECOVERY_EXIT_PCT = max(SOC_RECOVERY_EXIT_PCT, PLANNER_RESERVE_PCT + 1.0)
+# Economic reserve does not activate emergency grid charging: the safety band
+# depends only on the physical floor, headroom and configured recovery exit.
 if not SOC_RECOVERY_ENTRY_PCT < SOC_RECOVERY_EXIT_PCT < 98:
     raise ValueError("DISPATCH_SOC_RECOVERY_EXIT_PCT must exceed the recovery entry and be below 98%")
 # Start conservatively: after a restart the old process may have been recovering between the
@@ -796,6 +807,76 @@ def coordinate_l3_battery(action: str, power_w: int, expected_soc_kwh, solar_ski
     return suggested.action, suggested.power_w, None, False, detail, numbers
 
 
+def capture_battery_save_solar(action: str, power_w: int, expected_soc_kwh,
+                               solar_skip: bool, detail: str, numbers: dict,
+                               now: datetime):
+    """Use only measured PV left after house demand for an EMS battery-save charge.
+
+    The existing recovery and EV/L3 decisions run first. Missing, stale or
+    inconsistent inverter/CT telemetry keeps the original small EMS discharge.
+    This software estimate cannot physically guarantee zero grid import when
+    sunlight or house load changes between measurements.
+    """
+    if (not BATTERY_SAVE_SOLAR_ENABLED or L3_CHARGE_GUARD_MODE != "1"
+            or action != "discharge" or not numbers.get("battery_save_w")
+            or numbers.get("soc_recovery")):
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    reading = common.read_json(LIVE_JSON_PATH)
+    if (not isinstance(reading, dict)
+            or reading.get("work_mode_raw") != 0x303
+            or type(reading.get("grid_unbalanced_output_raw")) is not int
+            or reading["grid_unbalanced_output_raw"] != 0
+            or observe_l3_house_w(reading, now, max_age_s=45) is None):
+        numbers["battery_save_solar_status"] = "telemetry_unverified"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+    try:
+        soc_pct = float(reading["soc_pct"])
+        pv_w = float(reading["pv_w"])
+        house_w = float(reading["house_load_w"])
+        grid_w = float(reading["grid_w"])  # positive means export
+        battery_w = float(reading["battery_w"])  # negative means charging
+        if not all(math.isfinite(v) for v in (soc_pct, pv_w, house_w, grid_w, battery_w)):
+            raise ValueError("non-finite telemetry")
+    except (KeyError, ValueError, TypeError):
+        numbers["battery_save_solar_status"] = "telemetry_invalid"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    surplus_w = pv_w - house_w
+    numbers.update({
+        "battery_save_solar_pv_w": round(pv_w),
+        "battery_save_solar_house_w": round(house_w),
+        "battery_save_solar_grid_w": round(grid_w),
+        "battery_save_solar_battery_w": round(battery_w),
+        "battery_save_solar_surplus_w": round(surplus_w),
+        "battery_save_solar_soc_pct": round(soc_pct, 2),
+    })
+    # Require actual export to initiate; continue an already-physical charge at
+    # zero export only when its own battery-power telemetry confirms charging.
+    if (soc_pct < SOC_FLOOR_PCT or soc_pct >= SOC_CEILING_PCT
+            or surplus_w < BATTERY_SAVE_SOLAR_MARGIN_W + 200
+            or grid_w < 0 or battery_w > 500
+            or (grid_w < 250 and battery_w > -200)):
+        numbers["battery_save_solar_status"] = "reserve_or_surplus_unavailable"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    # Two independent estimates: the PV/house balance, and actual meter export
+    # plus charge already flowing into the battery. Leave 500 W of headroom.
+    meter_available_w = grid_w + max(0.0, -battery_w) / ONE_WAY_EFF
+    available_w = max(0.0, min(surplus_w, meter_available_w))
+    charge_w = int(clamp_power_w((available_w - BATTERY_SAVE_SOLAR_MARGIN_W) * ONE_WAY_EFF) // 10 * 10)
+    if charge_w < 200:
+        numbers["battery_save_solar_status"] = "insufficient_headroom"
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
+
+    numbers["battery_save_solar_status"] = "capture"
+    numbers["battery_save_solar_target_w"] = charge_w
+    detail = (f"battery-save solar capture: PV {pv_w:.0f} W, house {house_w:.0f} W, "
+              f"export {grid_w:.0f} W, battery {battery_w:.0f} W -> "
+              f"EMS charge {charge_w} W (500 W headroom); {detail}")
+    return "solar_charge", charge_w, None, False, detail, numbers
+
+
 def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
                     now: datetime):
     """Limit high-power charging using *verified* fresh L3 readings, never EVCC.
@@ -803,7 +884,8 @@ def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
     The independent Sunwoda low-SoC recovery stays at 300 W when phase data is
     unknown. This is not a fuse protection system (CT updates are not instant).
     """
-    if action != "charge" or power_w <= SOC_FLOOR_RECOVERY_W or L3_CHARGE_GUARD_MODE == "0":
+    if (action not in ("charge", "solar_charge") or L3_CHARGE_GUARD_MODE == "0"
+            or power_w <= (0 if action == "solar_charge" else SOC_FLOOR_RECOVERY_W)):
         return power_w, detail, numbers, False
 
     reading = common.read_json(LIVE_JSON_PATH)
@@ -820,7 +902,7 @@ def guard_l3_charge(action: str, power_w: int, detail: str, numbers: dict,
         balanced_output=balanced_output,
         budget_w=L3_CHARGE_BUDGET_W,
         efficiency=ONE_WAY_EFF,
-        min_charge_w=SOC_FLOOR_RECOVERY_W,
+        min_charge_w=0 if action == "solar_charge" else SOC_FLOOR_RECOVERY_W,
     )
     numbers["l3_charge_guard_mode"] = L3_CHARGE_GUARD_MODE
     numbers["l3_charge_guard_balanced"] = balanced_output
@@ -1017,6 +1099,91 @@ def live_charge_power_w(dispatch: list, idx: int, now: datetime, planned_power_w
         f"(plan-only would be {planned_power_w} W)"
     )
     return tracked_w, detail, numbers
+
+
+def price_wait_support_headroom_w(now: datetime) -> float | None:
+    """Read-only phase/import budget for restoring a missing low-SoC support charge.
+
+    Unlike the independent physical SoC recovery, this economic floor must
+    fail closed on stale CT data, unknown inverter phase balance or an
+    unconfigured site import cap; never open a new Modbus connection here.
+    """
+    if L3_CHARGE_GUARD_MODE != "1" or IMPORT_LIMIT_W <= 0:
+        return None
+    reading = common.read_json(LIVE_JSON_PATH)
+    house_l3_w = observe_l3_house_w(reading, now, max_age_s=45)
+    if (house_l3_w is None or not isinstance(reading, dict)
+            or type(reading.get("grid_unbalanced_output_raw")) is not int
+            or reading["grid_unbalanced_output_raw"] != 0):
+        return None
+    try:
+        load_w = float(reading["house_load_w"])
+        pv_w = float(reading["pv_w"])
+        if not (math.isfinite(load_w) and math.isfinite(pv_w)
+                and load_w >= 0 and pv_w >= 0):
+            return None
+    except (TypeError, ValueError, KeyError):
+        return None
+    phase_budget_w = max(0.0, (L3_CHARGE_BUDGET_W - house_l3_w) * 3 * ONE_WAY_EFF)
+    import_budget_w = max(0.0, (IMPORT_LIMIT_W - (load_w - pv_w)) * ONE_WAY_EFF)
+    return min(phase_budget_w, import_budget_w)
+
+
+def price_wait_support_charge_target(tracked_w: int, planned_w: int, live_soc_kwh,
+                                     surplus_w, inputs: list | None, idx: int,
+                                     *, floor_budget_w: float | None = None):
+    """Cap a minimal grid-funded support charge while waiting for cheaper hours.
+
+    A charge slot already sized by the optimizer to offset unavoidable battery
+    standby must not inflate to follow a forecast house-grid position when the
+    actual house load drops. Below the economic reserve, do not LET the same
+    tracker collapse an essential support charge to zero if verified phase and
+    import headroom permits it. Physical recovery, bulk charging and genuine
+    PV surplus remain independent.
+    """
+    if (PRICE_WAIT_SUPPORT_MAX_W <= 0 or planned_w <= 0
+            or planned_w > PRICE_WAIT_SUPPORT_MAX_W
+            or PLANNER_RESERVE_PCT <= SOC_FLOOR_PCT or live_soc_kwh is None
+            or live_soc_kwh <= BATTERY_KWH * SOC_RECOVERY_ENTRY_PCT / 100
+            or surplus_w is None or surplus_w > 100
+            or not inputs or idx < 0 or idx >= len(inputs)):
+        return tracked_w, None
+
+    try:
+        current_price = float(inputs[idx]["buyPrice"])
+        future_min = min(
+            float(slot["buyPrice"]) for slot in inputs[idx + 1:idx + 49]
+            if slot.get("buyPrice") is not None
+        )
+    except (KeyError, TypeError, ValueError):
+        return tracked_w, None
+    if not (future_min + 1.0 <= current_price):
+        return tracked_w, None
+
+    capped_w = min(planned_w, PRICE_WAIT_SUPPORT_MAX_W) // 10 * 10
+    result_w = min(tracked_w, capped_w)
+    support_floor_w = 0
+    if (PRICE_WAIT_SUPPORT_MIN_W > 0
+            and live_soc_kwh <= BATTERY_KWH * PLANNER_RESERVE_PCT / 100
+            and floor_budget_w is not None and math.isfinite(floor_budget_w)):
+        proposed_floor_w = max(capped_w, PRICE_WAIT_SUPPORT_MIN_W)
+        # Never increase import without independently verified L3 AND site
+        # import headroom. The emergency SoC recovery remains separate.
+        if floor_budget_w >= proposed_floor_w:
+            result_w = max(result_w, proposed_floor_w)
+            if result_w > tracked_w:
+                support_floor_w = proposed_floor_w
+    if result_w == tracked_w:
+        return tracked_w, None
+    numbers = {
+        "support_price_wait": True,
+        "support_charge_cap_w": max(capped_w, support_floor_w),
+        "support_charge_before_w": tracked_w,
+        "support_cheaper_future_ore": round(future_min, 2),
+    }
+    if support_floor_w:
+        numbers["support_charge_floor_w"] = support_floor_w
+    return result_w, numbers
 
 
 def check_solar_funding(inputs: list, idx: int, charge_kwh: float, surplus_w,
@@ -1220,6 +1387,18 @@ def decide(con: sqlite3.Connection, now: datetime):
             detail = f"{detail}; {charge_detail}" if detail else charge_detail
         except Exception as exc:  # noqa: BLE001
             log.warning("live-load charge tracking failed (%s) — using plan-only power", exc)
+        # While awaiting cheaper hours, avoid BOTH inflated charge targets
+        # and vanishing low-SoC support caused by live house-load tracking.
+        # The independent physical recovery still runs later in main().
+        power_w, support_numbers = price_wait_support_charge_target(
+            power_w, planned_power_w, read_live_soc_kwh(now),
+            read_live_solar_surplus_w(now), inputs, idx,
+            floor_budget_w=price_wait_support_headroom_w(now),
+        )
+        if support_numbers:
+            numbers.update(support_numbers)
+            detail = (f"price-wait support charge limited to {power_w} W "
+                      f"(plan/minimum/max); {detail}")
         if power_w == 0:
             # The plan's grid position is already met without charging (e.g. the house is drawing
             # more than forecast, so the planned import is already happening on its own). Auto still
@@ -1360,6 +1539,19 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
             detail = (f"Planner reserve hold at {live_pct:.2f}% <= {PLANNER_RESERVE_PCT:.1f}%: "
                       f"grid covers house, no discharge; previously {action} {power_w} W; {detail}")
             return "reserve_hold", 0, None, False, detail, numbers
+        # General/Auto would self-discharge into the house even when the
+        # economic plan says idle. Reuse the existing bounded EMS save action
+        # while below the economic reserve and no PV surplus is verified.
+        # With measured solar surplus, leave General free to charge the pack.
+        if (action == "idle" and BATTERY_SAVE_W > 0
+                and PLANNER_RESERVE_PCT > SOC_FLOOR_PCT
+                and live_soc_kwh <= BATTERY_KWH * PLANNER_RESERVE_PCT / 100):
+            surplus = read_live_solar_surplus_w(now)
+            if surplus is None or surplus <= 100:
+                numbers["economic_reserve_save_w"] = BATTERY_SAVE_W
+                detail = (f"economic reserve idle at {live_soc_kwh / BATTERY_KWH * 100:.1f}%: "
+                          f"EMS save {BATTERY_SAVE_W} W until solar surplus/cheap charging; {detail}")
+                return "discharge", BATTERY_SAVE_W, None, False, detail, numbers
         return action, power_w, expected_soc_kwh, solar_skip, detail, numbers
 
     surplus_w = read_live_solar_surplus_w(now)
@@ -1400,6 +1592,8 @@ def apply_target(inv: Inverter, action: str, power_w: int) -> None:
         log.warning("legacy planner hold is not a physical freeze — falling back to auto")
         return_to_auto(inv)
     elif action == "charge":
+        force_charge(inv, power_w)
+    elif action == "solar_charge":
         force_charge(inv, power_w)
     elif action == "discharge":
         force_discharge(inv, power_w)
@@ -1517,6 +1711,8 @@ def needs_apply(target, last_target, effective_action: str, effective_power: int
         and target[:2] == last_target[:2]
         and effective_action != "idle"
         and abs(effective_power - last_target[2]) < LIVE_LOAD_DEADBAND_W
+        # Never hold an excessive solar-only charge target for up to REASSERT_S.
+        and not (effective_action == "solar_charge" and effective_power < last_target[2])
     )
     return (target != last_target and not small_power_move) or (
         due_for_reassert and effective_action != "idle"
@@ -1646,7 +1842,7 @@ def apply_decision(con: sqlite3.Connection, slot_time, action: str, power_w: int
             # emulation, and a freeze (whose three-register combination is not probe-verified — the
             # expected failure is "stored but not enforced", which only a readback plus the measured
             # battery power can distinguish).
-            if (applied_action in ("freeze", "reserve_hold")
+            if (applied_action in ("freeze", "reserve_hold", "solar_charge")
                     or (applied_action == "discharge" and "battery_save_w" in numbers)
                     or numbers.get("soc_recovery")):
                 try:
@@ -1827,11 +2023,21 @@ def main() -> None:
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now,
                 live_path=Path(LIVE_JSON_PATH),
                 evcc_path=Path("/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json"))
+            # Capture otherwise-exported solar in EMS without exposing the 20% reserve
+            # to General's automatic discharge when clouds arrive. Disabled until approved.
+            action, power_w, expected_soc_kwh, solar_skip, detail, numbers = capture_battery_save_solar(
+                action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
             # Independent charge-side guard runs last, so it can cap a high charge
             # recommended by either the optimizer or L3 battery coordination.
             # Missing/old phase data never means spare L3 capacity.
             power_w, detail, numbers, l3_limited = guard_l3_charge(
                 action, power_w, detail, numbers, iteration_now)
+            if action == "solar_charge" and power_w < 200:
+                # No validated phase budget: return to the pre-existing 50 W EMS save,
+                # never turn a solar-only request into a grid-funded recovery trickle.
+                numbers["battery_save_solar_status"] = "l3_budget_unavailable"
+                action, power_w = "discharge", numbers["battery_save_w"]
+                detail = f"solar capture refused by L3 budget; {detail}"
             if l3_limited:
                 # The cap intentionally slows the plan's SoC trajectory. Do not
                 # reject the safer setpoint or fall back to battery-draining Auto.

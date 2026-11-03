@@ -30,6 +30,7 @@ import {
   FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
   BATTERY_SAVE_FORECAST_DRAIN_W,
+  BATTERY_MIN_SOC_KWH,
   BATTERY_PLANNER_RESERVE_KWH,
   TERMINAL_VALUE_FACTOR,
 } from './constants';
@@ -256,6 +257,7 @@ export async function producePlan(): Promise<PlanResult> {
       // with the prices instead of being a tuned constant; SOLINTEG_TERMINAL_VALUE_FACTOR=0 is the
       // kill switch. Live plans only, like the knobs above.
       const terminalValueOrePerKwh = terminalEnergyValueOre(optimizerSlots) * TERMINAL_VALUE_FACTOR;
+      const recoveryHeadroom = Number(process.env.DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH ?? '0.5');
       const options = {
         loadFactor: LOAD_FORECAST_MARGIN,
         deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
@@ -268,6 +270,8 @@ export async function producePlan(): Promise<PlanResult> {
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
         batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+        batterySaveRecoveryEntryKwh: BATTERY_MIN_SOC_KWH +
+          (Number.isFinite(recoveryHeadroom) && recoveryHeadroom >= 0 ? recoveryHeadroom : 0.5),
         minSocKwh: BATTERY_PLANNER_RESERVE_KWH,
         terminalValueOrePerKwh,
       };

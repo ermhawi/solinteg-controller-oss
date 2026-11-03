@@ -68,6 +68,9 @@ describe('actionLabel', () => {
     expect(actionLabel('charge', 'applied')).toBe('Laddning');
     expect(actionLabel('discharge', 'applied')).toBe('Urladdning');
   });
+  it('labels solar capture separately from regular grid-funded charge', () => {
+    expect(actionLabel('solar_charge', 'applied')).toBe('Solelsladdning');
+  });
   it('labels an applied idle as Auto', () => {
     expect(actionLabel('idle', 'applied')).toBe('Auto');
   });
@@ -137,6 +140,15 @@ describe('buildDispatchCardData', () => {
     expect(result?.current.reason).toContain('Laddar 5.9 kW');
     expect(result?.current.reason).toContain('helt täckt av solöverskott');
     expect(result?.current.warning).toBeUndefined();
+  });
+
+  it('describes a solar-only EMS target as a request, not proof of grid-free charging', () => {
+    const result = buildDispatchCardData(
+      [action({ outcome: 'applied', plannedAction: 'solar_charge', powerW: 800 })], now,
+    );
+    expect(result?.current.reason).toContain('EMS BattCtrl');
+    expect(result?.current.reason).toContain('begär 0.8 kW');
+    expect(result?.recentDecisions[0].action).toBe('Solelsladdning');
   });
 
   it('flags a partially grid-funded charge differently from a fully solar-funded one', () => {

@@ -46,13 +46,86 @@ describe('separate Sundsvall planner reserve from physical BMS floor', () => {
     expect(result.at(-1)!.socAfter).toBeGreaterThanOrEqual(reserveKwh - 0.000001);
   });
 
-  it('replenishes a battery that starts below 20% instead of leaving it at 12%', async () => {
+  it('waits for cheaper grid charging below the economic reserve', async () => {
     const { optimizer } = await siteOptimizer('20');
-    const slots = Array.from({ length: 12 }, (_, i) => slot(i, 91));
-    const result = optimizer.optimizeDispatch(slots, physicalFloorKwh + 0.3);
-    expect(result[0].action).toBe('charge');
-    expect(result[0].socAfter).toBeGreaterThanOrEqual(reserveKwh - 0.000001);
-    expect(result.every((x) => x.socAfter >= reserveKwh - 0.000001)).toBe(true);
+    const start = physicalFloorKwh + 0.3;
+    const slots = Array.from({ length: 24 }, (_, i) =>
+      slot(i, i < 8 ? 220 : i < 12 ? 50 : 240, i < 12 ? 0.1 : 0.5),
+    );
+    const result = optimizer.optimizeDispatch(slots, start);
+    expect(result.slice(0, 8).every((x) => x.action !== 'charge')).toBe(true);
+    expect(result.slice(8, 12).some((x) => x.action === 'charge')).toBe(true);
+    expect(Math.min(...result.map((x) => x.socAfter))).toBeGreaterThanOrEqual(start - 0.000001);
+  });
+
+  it('accounts for EMS standby discharge below 20% and buys before the safety threshold', async () => {
+    const { optimizer } = await siteOptimizer('20');
+    const start = batteryKwh * 0.18;
+    const emergencyEntry = physicalFloorKwh + 0.15;
+    const slots = Array.from({ length: 32 }, (_, i) =>
+      slot(i, i < 24 ? 180 : 75, 0.45),
+    );
+    const result = optimizer.optimizeDispatch(slots, start, {
+      minSocKwh: reserveKwh,
+      batterySaveDriftW: 220,
+      batterySaveRecoveryEntryKwh: emergencyEntry,
+    });
+    expect(result.slice(0, 24).some((x) => (x.batterySaveDriftKwh ?? 0) > 0)).toBe(true);
+    expect(result.some((x) => x.socAfter < start)).toBe(true);
+    expect(Math.min(...result.map((x) => x.socAfter))).toBeGreaterThanOrEqual(emergencyEntry - 1e-6);
+    expect(result.slice(0, 24).some((x) => x.action === 'charge')).toBe(true);
+  });
+
+  it('waits for a reachable cheap hour while modelling the real standby loss', async () => {
+    const { optimizer } = await siteOptimizer('20');
+    const start = batteryKwh * 0.18;
+    const slots = Array.from({ length: 20 }, (_, i) =>
+      slot(i, i < 8 ? 210 : 55, 0.45),
+    );
+    const result = optimizer.optimizeDispatch(slots, start, {
+      minSocKwh: reserveKwh,
+      batterySaveDriftW: 220,
+      batterySaveRecoveryEntryKwh: physicalFloorKwh + 0.15,
+    });
+    expect(result.slice(0, 8).every((x) => x.action !== 'charge')).toBe(true);
+    expect(result.slice(0, 8).some((x) => (x.batterySaveDriftKwh ?? 0) > 0)).toBe(true);
+    expect(result.slice(8).some((x) => x.action === 'charge')).toBe(true);
+  });
+
+  it('keeps natural solar charging available below the planning reserve', async () => {
+    const { optimizer } = await siteOptimizer('20');
+    const start = batteryKwh * 0.18;
+    const slots = Array.from({ length: 8 }, (_, i) => ({
+      ...slot(i, 180, 0.2),
+      solarKwh: 0.9,
+    }));
+    const result = optimizer.optimizeDispatch(slots, start, {
+      minSocKwh: reserveKwh,
+      batterySaveDriftW: 220,
+      batterySaveRecoveryEntryKwh: physicalFloorKwh + 0.15,
+    });
+    expect(result[0].action).toBe('idle');
+    expect(result[0].socAfter).toBeGreaterThan(start);
+    expect(result[0].batterySaveDriftKwh).toBeUndefined();
+  });
+
+  it('never emits a free zero-drift idle below reserve during a dark night', async () => {
+    const { optimizer } = await siteOptimizer('20');
+    const start = batteryKwh * 0.18;
+    const slots = Array.from({ length: 32 }, (_, i) => slot(i, 110, 0.45));
+    const result = optimizer.optimizeDispatch(slots, start, {
+      minSocKwh: reserveKwh,
+      batterySaveDriftW: 220,
+      batterySaveRecoveryEntryKwh: physicalFloorKwh + 0.15,
+    });
+    let previous = start;
+    for (const item of result) {
+      if (previous <= reserveKwh + 1e-6 && item.action === 'idle') {
+        expect(item.batterySaveDriftKwh).toBeGreaterThan(0);
+        expect(item.socAfter).toBeLessThan(previous);
+      }
+      previous = item.socAfter;
+    }
   });
 
   it('still charges in cheap hours and discharges for dear household use', async () => {

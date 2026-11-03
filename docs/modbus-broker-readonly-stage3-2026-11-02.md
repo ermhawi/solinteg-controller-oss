@@ -366,3 +366,27 @@ samtliga säkerhetsinställningar.
 cutover*.** Nästa nödvändiga arbetssteg är en verifierad,
 SoC-medveten stale-data-policy och därefter host-fencead
 rollback/failoverdesign med offline-tester.
+
+## Driftobservation efter natten 2–3 november 2026 (read-only)
+
+Två tillfällen med `error_revert_failed` under nattens
+högre laddningseffekt sammanföll med förlorad Modbuskontakt.
+Den första störningen har en konkret värdorsak: Dell använder
+Wi-Fi-gränssnittet `wlp6s0` för rutten till växelriktaren,
+och NetworkManager loggade länk-/SSID-förlust ca 03:00:27,
+`ssid-not-found` 03:00:42 och återanslutning/DHCP 03:02:21.
+Dispatchern rapporterade `Network is unreachable` 03:02:09;
+pollern hade samtidiga TCP-svarsfel. Detta är ett **bekräftat
+trådlöst nätavbrott**, inte ett verifierat Modbus-broker-race.
+
+Den andra störningen vid cirka 03:12–03:14 gav inga svar efter
+flera Modbusförsök och trasiga/odekoderbara svar i pollern.
+Det finns ingen motsvarande dokumenterad Wi-Fi-länknedgång
+vid den tidpunkten; multi-klientinterferens, transportstörning
+och inverter/datalogger-beteende är fortfarande hypoteser.
+Nästa åtgärd är att utvärdera stabil trådbunden Modbusväg
+utan att ändra aktiv route på distans, och att fortsätta
+den säkra single-owner-brokerns NO-GO-grindar. Befintlig
+övervakning och fysisk failsafe förblir aktiva. Ingen
+Modbus-förbindelse, brandväggsregel, routingtabell eller
+produktionsbroker ändrades i undersökningen.

@@ -18,6 +18,55 @@ Bitwarden account access and the active backup rotation.
 
 The app + Modbus poller run as two systemd services on the NUC. No Vercel, no Home Assistant.
 **Broker read-only integration READY IN SOURCE ONLY, NOT DEPLOYED:** [single-owner plan](../docs/plans/modbus-broker-2026-11-01.md), [offline baseline/tests](../docs/modbus-broker-offline-2026-11-01.md) and [stage 3 cutover NO-GO gates](../docs/modbus-broker-readonly-stage3-2026-11-02.md). The broker core itself imports no pymodbus; the separate allowlisted FC03 transport and read-only service template are available but **not installed or started**. Existing poller/dispatcher/watchdog remain the only active production path.
+**Batterisparläge/solöverskott (2026-11-02):** Den direkta EMS-varianten `solar_charge`
+är endast implementerad i `Sundsvall`-källkoden, **inte driftsatt eller aktiverad**.
+Flaggan `DISPATCH_BATTERY_SAVE_SOLAR` är av som standard. Innan driftsättning krävs
+separat granskning av skillnaderna mellan installerad `dispatch_loop.py` och Git,
+samt fysisk verifiering av nätimport och BMS-gränser. Eftersom `force_charge`
+öppnar nätimport går det inte att garantera noll nätköp vid snabba PV-/laständringar
+med enbart den nuvarande 30 s pollern och 60 s dispatchern. Se
+[beslut och kvarstående NO-GO](../docs/architecture/adr-2026-11-02-battery-save-solar-shadow.md).
+
+**Ekonomisk reserv/återhämtning (2026-11-02):** Den prisstyrda 20 %-reserven
+är inte ett tvingande krav på omedelbar nätladdning. Under 20 % får
+optimeraren avvakta billigare timmar men inte planera ytterligare
+urladdning under reserven. Dispatcherns separata säkerhetsåterhämtning
+följer 12 % mjukvarugräns + 0,15 kWh marginal (inträde ~13 %) och
+site-konfigurerad återhämtning till 16 %. När planen säger `idle`
+vid/under 20 % utan mätt solöverskott används befintligt 50 W EMS-sparläge
+i stället för General; vid faktiskt överskott prioriteras General/solupptagning.
+Det är inte ett exakt nollurladdningsläge. Ändra inte inverterns/BMS
+skyddsregister. Den opt-in-avstängda `solar_charge`-funktionen är fortsatt
+avaktiverad; inga nya watchdogs eller EVCC-skrivningar ingår.
+
+**Nattlig standbyprognos:** Under 20 % tar optimeraren nu även hänsyn till
+det uppmätta EMS-standbyuttaget (~220 W), i stället för att anta gratis
+`idle`. Den kan köpa tidigare än billigaste fönstret när fortsatt
+väntan annars skulle korsa säkerhetsåterhämtningens ~13 % inträde.
+Driftmodellen använder samma `DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH`
+som den installerade dispatchern. Detta är en prognos, inte ett hårt SoC-stopp.
+
+**Minimal stödladdning vid prisväntan:** Om optimeraren planerar en liten
+laddning (högst 500 W) men det finns el minst 1 öre/kWh billigare inom
+12 timmar, får live-lastkompenseringen inte höja laddningen över den
+planerade nivån. Gäller vid separat ekonomisk reserv, verifierat mörker/
+inget netto-PV-överskott (>100 W) och ovan fysisk återhämtningströskel;
+gäller även om SoC hunnit över 20 % innan billigare timmar.
+`DISPATCH_PRICE_WAIT_SUPPORT_MAX_W=0` återställer tidigare beteende.
+Vid låg SoC kan `DISPATCH_PRICE_WAIT_SUPPORT_MIN_W=300` **aktiveras
+per installation** (standard 0) så att en nödvändig liten stödladdning
+inte blir 0 W och återgår till batteridränerande EMS-sparläge när
+huslasten ökar. Den verifierar först färska L3-fas-/nätmätningar,
+balanserad effekt (`50006=0`), aktiv L3-vakt samt ett konfigurerat
+importtak med tillräcklig kapacitet. Om telemetri eller marginal
+saknas behålls gamla live-beslutet; fysisk nödladdning är separat.
+Börvärdet kan då bli högre än planens watt-tal, men aldrig över 500 W
+under prisväntan. `DISPATCH_PRICE_WAIT_SUPPORT_MIN_W=0` återgår till
+tak utan miniminivå. Fysisk säkerhetsåterhämtning, äkta högre planerad
+billig-timmesladdning och verifierat solöverskott behåller företräde.
+Effektbörvärde är inte garanti för exakt uppmätt batteri-W.
+Se [ADR](../docs/architecture/adr-2026-11-02-economic-reserve-recovery.md).
+
 This guide is written against the reference deployment's own hardware/network — any small
 dedicated Linux box with two NICs (or one NIC + a USB adapter) works the same way; substitute
 your own IPs/hostnames/device names throughout.

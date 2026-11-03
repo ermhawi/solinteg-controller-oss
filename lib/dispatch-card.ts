@@ -73,6 +73,7 @@ export function decisionOutcomeFor(outcome: string): DecisionOutcome {
 export function actionLabel(action: LatestControlAction['plannedAction'], outcome: string): string {
   if (outcome === 'error_reverted' || outcome === 'error_revert_failed') return 'Fel';
   if (action === 'charge') return 'Laddning';
+  if (action === 'solar_charge') return 'Solelsladdning';
   if (action === 'discharge') return 'Urladdning';
   if (action === 'freeze') return 'Frysning';
   // The plan's intent, not the hardware's state — the inverter does sit in auto during a hold
@@ -99,6 +100,9 @@ function buildReason(a: LatestControlAction): { reason: string; warning?: string
   const powerKw = (a.powerW ?? 0) / 1000;
 
   if (a.outcome === 'applied') {
+    if (a.plannedAction === 'solar_charge') {
+      return { reason: `EMS BattCtrl: begär ${powerKw.toFixed(1)} kW batteriladdning från uppmätt solöverskott (huslast prioriteras).` };
+    }
     if (a.plannedAction === 'charge') {
       const fundedBySolar = d.solarShortfallKwh != null && d.solarShortfallKwh <= 0.02;
       const priceNote = d.sellOre != null ? ` (säljpris just nu ${d.sellOre.toFixed(1)} öre/kWh)` : '';

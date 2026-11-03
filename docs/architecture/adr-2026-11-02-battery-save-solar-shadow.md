@@ -160,3 +160,47 @@ watchdoggen, EVCC, gate eller systemd. Read-only-implementationen
 Relaterat: [SoC-handoff](../soc25-handoff-shadow-2026-11-01.md),
 [brokerstale/SoC](adr-2026-11-02-stale-telemetry-soc.md),
 [EV/L3-skuggmodell](adr-2026-10-31-ev-solar-shadow.md).
+
+## Tillägg 2026-11-02: direkt EMS-solupptagning (endast källkod)
+
+En separat ändring i `scripts/services/dispatch_loop.py` ger ett
+**valfritt, direkt** `solar_charge`-beslut under en redan vald
+`battery_save_w`-urladdning. Detta är **inte** ett nytt shadow-läge,
+en ny timer eller en separat styrprocess. Tidigare read-only-modell
+och dess NO-GO för automatisk övergång till General är oförändrade.
+
+Beslutet bevarar EMS BattCtrl (`0x303`) och begär en **negativ**
+`50207`-laddning via befintlig `force_charge`, utan övergången
+till General. Det kräver `DISPATCH_BATTERY_SAVE_SOLAR=1`, aktivt
+`DISPATCH_L3_CHARGE_GUARD_MODE=1`, högst 45 s gamla,
+konsistenta fas-/nätmätningar, balanserad utgång (`50006=0`),
+bekräftat EMS-läge, faktisk export, överskott `pv_w-house_load_w`
+och SoC under befintligt tak. Laddbegäran begränsas av minsta
+PV/hus- respektive nät-/batterimätning minus **500 W marginal**,
+av verkningsgrad och av befintliga effekt-/L3-gränser.
+Nedjustering och övergången tillbaka till ordinarie 50 W-sparläge
+kan ske i samma 15-minutersslot; SoC-recovery och planerad laddning
+har fortsatt företräde. `solar_charge` och ingångsvärdena loggas
+till `control_actions.detail_json` och namnges separat på webben.
+
+**Säkerhetsbegränsning (fortsatt NO-GO för produktion):**
+`force_charge` öppnar nätimport och arbetar med ett fast börvärde
+fram till nästa dispatch-/pollerprov. En 500 W-marginal kan **inte**
+garantera noll nätfinansierad laddning om moln eller huslast ändras
+snabbare än samplings-/styrintervallet (30 s poller + 60 s dispatcher,
+plus skrivlatens). I sju dagars historiska mätningar fanns 103
+relevanta export-/EMS-observationer med ca 60 s efterföljande mätning;
+22 av dem tappade mer än 500 W PV-minus-huslast på en minut, med
+ett största tapp på 4 095 W. Detta är en offline-riskindikator,
+inte ett test av det nya börvärdets fysiska beteende.
+BMS egna dynamiska strömgränser måste fortfarande
+bekräftas på hårdvarunivå; denna ändring läser inte ut dem som en
+oberoende programvarubegränsning. Den nätbaserade site-importgränsen
+skyddar huvudsäkringen, inte den ekonomiska regeln `endast sol`.
+
+Därmed är **`DISPATCH_BATTERY_SAVE_SOLAR` av som standard** och
+varken installerad dispatcher, env-fil, kontrollregister, EVCC eller
+systemd har ändrats. En fysisk aktivering förutsätter att dessa
+konkreta begränsningar kan accepteras/lösas och att den installerade
+kodens separata avvikelser mot Git granskas. Det finns inga krav på
+en obligatorisk shadow-fas eller ny watchdog.

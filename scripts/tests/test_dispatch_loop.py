@@ -367,6 +367,229 @@ class LiveChargePowerWTests(unittest.TestCase):
         self.assertEqual(power_w, 0)
 
 
+class PriceWaitSupportChargeTests(unittest.TestCase):
+    """Do not turn a tiny expensive-hour SoC support buy into house-load arbitrage."""
+
+    def setUp(self):
+        self._cap = dl.PRICE_WAIT_SUPPORT_MAX_W
+        self._floor = dl.PRICE_WAIT_SUPPORT_MIN_W
+        self._reserve = dl.PLANNER_RESERVE_PCT
+        dl.PRICE_WAIT_SUPPORT_MAX_W = 500
+        dl.PRICE_WAIT_SUPPORT_MIN_W = 300
+        dl.PLANNER_RESERVE_PCT = 20
+        self.soc = dl.BATTERY_KWH * 0.17
+        self.inputs = [{"buyPrice": 90.65}] + [{"buyPrice": 85.5}] * 12
+
+    def tearDown(self):
+        dl.PRICE_WAIT_SUPPORT_MAX_W = self._cap
+        dl.PRICE_WAIT_SUPPORT_MIN_W = self._floor
+        dl.PLANNER_RESERVE_PCT = self._reserve
+
+    def check(self, tracked=1000, planned=350, soc=None, surplus=0,
+              inputs=None, idx=0, floor_budget_w=None):
+        return dl.price_wait_support_charge_target(
+            tracked, planned, self.soc if soc is None else soc,
+            surplus, self.inputs if inputs is None else inputs, idx,
+            floor_budget_w=floor_budget_w,
+        )
+
+    def test_caps_live_load_amplification_to_plan_when_waiting_for_cheaper_price(self):
+        result, details = self.check()
+        self.assertEqual(result, 350)
+        self.assertEqual(details["support_price_wait"], True)
+        self.assertEqual(details["support_charge_cap_w"], 350)
+        self.assertEqual(details["support_charge_before_w"], 1000)
+
+    def test_never_increases_a_smaller_live_tracking_request(self):
+        power, details = self.check(tracked=200)
+        self.assertEqual(power, 200)
+        self.assertIsNone(details)
+
+    def test_verified_headroom_prevents_zero_power_and_auto_when_low_soc(self):
+        power, details = self.check(tracked=0, planned=170, floor_budget_w=500)
+        self.assertEqual(power, 300)
+        self.assertTrue(details["support_price_wait"])
+        self.assertEqual(details["support_charge_floor_w"], 300)
+        self.assertEqual(details["support_charge_before_w"], 0)
+
+    def test_preserves_planned_target_if_above_minimum(self):
+        power, details = self.check(tracked=100, planned=350, floor_budget_w=600)
+        self.assertEqual(power, 350)
+        self.assertEqual(details["support_charge_floor_w"], 350)
+
+    def test_insufficient_phase_headroom_does_not_force_extra_import(self):
+        for budget in (None, 0, 150, 299):
+            power, details = self.check(tracked=0, planned=170, floor_budget_w=budget)
+            self.assertEqual((power, details), (0, None))
+
+    def test_minimum_is_not_imposed_after_economic_reserve(self):
+        power, details = self.check(tracked=0, planned=170,
+                                    soc=dl.BATTERY_KWH * 0.24, floor_budget_w=600)
+        self.assertEqual((power, details), (0, None))
+
+    def test_disabling_minimum_preserves_upper_cap(self):
+        dl.PRICE_WAIT_SUPPORT_MIN_W = 0
+        power, details = self.check(tracked=1000, planned=170, floor_budget_w=600)
+        self.assertEqual(power, 170)
+        self.assertNotIn("support_charge_floor_w", details)
+        power, details = self.check(tracked=0, planned=170, floor_budget_w=600)
+        self.assertEqual((power, details), (0, None))
+
+    def test_no_support_floor_for_solar_or_safety_recovery(self):
+        for soc, surplus in (
+            (self.soc, 250),
+            (dl.BATTERY_KWH * dl.SOC_RECOVERY_ENTRY_PCT / 100, 0),
+        ):
+            power, details = self.check(tracked=0, planned=170, soc=soc,
+                                        surplus=surplus, floor_budget_w=600)
+            self.assertEqual((power, details), (0, None))
+
+    def test_remains_capped_above_reserve_until_price_improves(self):
+        power, details = self.check(soc=dl.BATTERY_KWH * 0.23)
+        self.assertEqual(power, 350)
+        self.assertTrue(details["support_price_wait"])
+
+    def test_no_cap_without_a_separate_economic_reserve(self):
+        dl.PLANNER_RESERVE_PCT = dl.SOC_FLOOR_PCT
+        power, details = self.check()
+        self.assertEqual((power, details), (1000, None))
+
+    def test_no_cap_at_physical_recovery_entry(self):
+        power, details = self.check(soc=dl.BATTERY_KWH * dl.SOC_RECOVERY_ENTRY_PCT / 100)
+        self.assertEqual((power, details), (1000, None))
+
+    def test_no_cap_for_genuine_higher_power_charging(self):
+        power, details = self.check(planned=1500)
+        self.assertEqual((power, details), (1000, None))
+
+    def test_no_cap_for_verified_solar_surplus(self):
+        power, details = self.check(surplus=1000)
+        self.assertEqual((power, details), (1000, None))
+
+    def test_no_cap_if_no_meaningfully_cheaper_slot_ahead(self):
+        power, details = self.check(inputs=[{"buyPrice": 85.5}, {"buyPrice": 85.0}])
+        self.assertEqual((power, details), (1000, None))
+
+    def test_missing_or_invalid_price_data_does_not_invent_a_price_advantage(self):
+        for inputs in ([], [{"buyPrice": 100}], [{"buyPrice": "bad"}, {"buyPrice": 85}]):
+            power, details = self.check(inputs=inputs)
+            self.assertEqual((power, details), (1000, None))
+
+    def test_cap_can_be_disabled_without_altering_other_charge_tracking(self):
+        dl.PRICE_WAIT_SUPPORT_MAX_W = 0
+        power, details = self.check()
+        self.assertEqual((power, details), (1000, None))
+
+
+class PriceWaitSupportHeadroomTests(unittest.TestCase):
+    def test_valid_phase_telemetry_allows_small_charge(self):
+        now = datetime.now(UTC)
+        reading = {"grid_unbalanced_output_raw": 0,
+                   "house_load_w": 2000, "pv_w": 0}
+        with mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", "1"), \
+             mock.patch.object(dl, "L3_CHARGE_BUDGET_W", 4000), \
+             mock.patch.object(dl, "IMPORT_LIMIT_W", 10500), \
+             mock.patch.object(dl.common, "read_json", return_value=reading), \
+             mock.patch.object(dl, "observe_l3_house_w", return_value=3600):
+            self.assertGreater(dl.price_wait_support_headroom_w(now), 300)
+
+    def test_no_floor_if_phase_data_unverified_or_over_budget(self):
+        now = datetime.now(UTC)
+        reading = {"grid_unbalanced_output_raw": 0,
+                   "house_load_w": 2000, "pv_w": 0}
+        for balance, l3 in ((None, 3000), (1, 3000), (0, None), (0, 4100)):
+            reading["grid_unbalanced_output_raw"] = balance
+            with mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", "1"), \
+                 mock.patch.object(dl, "L3_CHARGE_BUDGET_W", 4000), \
+                 mock.patch.object(dl, "IMPORT_LIMIT_W", 10500), \
+                 mock.patch.object(dl.common, "read_json", return_value=reading), \
+                 mock.patch.object(dl, "observe_l3_house_w", return_value=l3):
+                budget = dl.price_wait_support_headroom_w(now)
+            self.assertTrue(budget is None or budget < 300)
+
+    def test_total_import_cap_is_a_second_independent_budget(self):
+        now = datetime.now(UTC)
+        reading = {"grid_unbalanced_output_raw": 0,
+                   "house_load_w": 10400, "pv_w": 0}
+        with mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", "1"), \
+             mock.patch.object(dl, "IMPORT_LIMIT_W", 10500), \
+             mock.patch.object(dl.common, "read_json", return_value=reading), \
+             mock.patch.object(dl, "observe_l3_house_w", return_value=1000):
+            self.assertLess(dl.price_wait_support_headroom_w(now), 300)
+
+
+class PriceWaitSupportDecideTests(unittest.TestCase):
+    def test_decide_caps_house_load_tracking_for_a_small_expensive_hour_charge(self):
+        now = stockholm("2026-11-02T21:31:00").astimezone(UTC)
+        soc = dl.BATTERY_KWH * 0.17
+        dispatch = [{
+            "startTime": "2026-11-02T21:30:00", "action": "charge",
+            "socAfter": soc + 0.088, "gridKwh": 0.719,
+            "gridToBatteryKwh": 0.073,
+        }, {
+            "startTime": "2026-11-02T21:45:00", "action": "charge",
+            "socAfter": soc + 0.176, "gridKwh": 0.719,
+            "gridToBatteryKwh": 0.073,
+        }]
+        inputs = [{"buyPrice": 90.65}, {"buyPrice": 85.5}]
+        con = sqlite3.connect(":memory:")
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 20), \
+             mock.patch.object(dl, "PRICE_WAIT_SUPPORT_MAX_W", 500), \
+             mock.patch.object(dl, "load_latest_plan", return_value=(soc, dispatch, inputs, 1)), \
+             mock.patch.object(dl, "live_charge_power_w", return_value=(1000, "load tracking", {})), \
+             mock.patch.object(dl, "read_live_soc_kwh", return_value=soc), \
+             mock.patch.object(dl, "read_live_solar_surplus_w", return_value=0), \
+             mock.patch.object(dl, "check_solar_funding", return_value=(False, "", {})):
+            slot, action, power_w, _, solar_skip, detail, numbers = dl.decide(con, now)
+        con.close()
+        self.assertEqual(slot, "2026-11-02T21:30:00")
+        self.assertEqual(action, "charge")
+        self.assertFalse(solar_skip)
+        self.assertLessEqual(power_w, 500)
+        self.assertGreater(power_w, 0)
+        self.assertTrue(numbers["support_price_wait"])
+        self.assertIn("support charge limited", detail)
+
+    def test_decide_preserves_minimum_battery_charge_when_live_tracker_is_zero(self):
+        now = stockholm("2026-11-02T21:31:00").astimezone(UTC)
+        soc = dl.BATTERY_KWH * 0.17
+        dispatch = [{
+            "startTime": "2026-11-02T21:30:00", "action": "charge",
+            "socAfter": soc + 0.05, "gridKwh": 0.719,
+            "gridToBatteryKwh": 0.05,
+        }]
+        inputs = [{"buyPrice": 91}, {"buyPrice": 85}]
+        con = sqlite3.connect(":memory:")
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 20), \
+             mock.patch.object(dl, "PRICE_WAIT_SUPPORT_MAX_W", 500), \
+             mock.patch.object(dl, "PRICE_WAIT_SUPPORT_MIN_W", 300), \
+             mock.patch.object(dl, "load_latest_plan", return_value=(soc, dispatch, inputs, 1)), \
+             mock.patch.object(dl, "live_charge_power_w", return_value=(0, "live target 0", {})), \
+             mock.patch.object(dl, "read_live_soc_kwh", return_value=soc), \
+             mock.patch.object(dl, "read_live_solar_surplus_w", return_value=0), \
+             mock.patch.object(dl, "price_wait_support_headroom_w", return_value=500), \
+             mock.patch.object(dl, "check_solar_funding", return_value=(False, "", {})):
+            _, action, power, _, solar_skip, detail, numbers = dl.decide(con, now)
+        con.close()
+        self.assertEqual(action, "charge")
+        self.assertEqual(power, 300)
+        self.assertFalse(solar_skip)
+        self.assertEqual(numbers["support_charge_floor_w"], 300)
+        self.assertNotIn("live charge target is 0 W", detail)
+
+    def test_physical_recovery_remains_higher_priority_than_support_cap(self):
+        now = datetime.now(UTC)
+        low_soc = dl.BATTERY_KWH * (dl.SOC_RECOVERY_ENTRY_PCT - 0.5) / 100
+        with mock.patch.object(dl, "read_live_soc_kwh", return_value=low_soc), \
+             mock.patch.object(dl, "read_live_solar_surplus_w", return_value=0), \
+             mock.patch.object(dl, "_soc_recovery_active", False):
+            action, power, *_ = dl.prioritize_soc_recovery(
+                "charge", 200, None, False, "", {}, now,
+            )
+        self.assertEqual(action, "charge")
+        self.assertGreaterEqual(power, dl.SOC_FLOOR_RECOVERY_W)
+
+
 class PlannerHoldDecisionTests(unittest.TestCase):
     def test_legacy_planner_hold_becomes_idle_before_executor_guards(self):
         now = stockholm("2026-01-15T00:00:00").astimezone(UTC)
@@ -410,6 +633,10 @@ class ApplyTargetRouting(unittest.TestCase):
     def test_charge_forces_a_charge_setpoint(self):
         dl.apply_target(object(), "charge", 1500)
         self.assertEqual(self.calls, [("charge", 1500)])
+
+    def test_solar_capture_forces_ems_charge_without_general(self):
+        dl.apply_target(object(), "solar_charge", 800)
+        self.assertEqual(self.calls, [("charge", 800)])
 
     def test_discharge_forces_a_discharge_setpoint(self):
         dl.apply_target(object(), "discharge", 2000)
@@ -539,6 +766,108 @@ class ApplyTargetRouting(unittest.TestCase):
         self.assertEqual(set(dl.FORCED_ACTIONS) & set(dl.AUTO_ACTIONS), set())
 
 
+class BatterySaveSolarCaptureTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.now(UTC)
+        self.enabled = mock.patch.object(dl, "BATTERY_SAVE_SOLAR_ENABLED", True)
+        self.l3_guard = mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", "1")
+        self.enabled.start()
+        self.l3_guard.start()
+
+    def tearDown(self):
+        self.l3_guard.stop()
+        self.enabled.stop()
+
+    def reading(self, *, pv=2250, house=850, battery=150, grid=1550, soc=22.0,
+                seconds_old=0, mode=0x303, balanced=0):
+        inverter_ac = house + grid
+        return {
+            "timestamp": (self.now - timedelta(seconds=seconds_old)).isoformat(),
+            "work_mode_raw": mode,
+            "grid_unbalanced_output_raw": balanced,
+            "soc_pct": soc,
+            "pv_w": pv,
+            "house_load_w": house,
+            "battery_w": battery,
+            "grid_w": grid,
+            "inverter_ac_w": inverter_ac,
+            "meter_l1_w": grid / 3,
+            "meter_l2_w": grid / 3,
+            "meter_l3_w": grid / 3,
+        }
+
+    def capture(self, reading, *, action="discharge", numbers=None):
+        with mock.patch.object(dl.common, "read_json", return_value=reading):
+            return dl.capture_battery_save_solar(
+                action, 50, None, False, "battery-save", numbers or {"battery_save_w": 50}, self.now)
+
+    def test_real_export_becomes_ems_solar_charge_near_economic_reserve(self):
+        action, power, expected, skip, detail, numbers = self.capture(self.reading(soc=20.5))
+        self.assertEqual(action, "solar_charge")
+        self.assertGreater(power, 0)
+        self.assertLess(power, (2250 - 850) * dl.ONE_WAY_EFF)
+        self.assertIsNone(expected)
+        self.assertFalse(skip)
+        self.assertEqual(numbers["battery_save_solar_status"], "capture")
+        self.assertIn("EMS charge", detail)
+
+    def test_no_pv_preserves_small_battery_save_discharge(self):
+        reading = self.reading(pv=0, house=900, battery=50, grid=-850)
+        self.assertEqual(self.capture(reading)[:2], ("discharge", 50))
+
+    def test_meter_import_prevents_solar_capture(self):
+        reading = self.reading(pv=2250, house=850, battery=-1800, grid=-450)
+        self.assertEqual(self.capture(reading)[:2], ("discharge", 50))
+
+    def test_ongoing_physical_solar_charge_can_continue_with_low_export(self):
+        reading = self.reading(pv=2250, house=850, battery=-1100, grid=200)
+        self.assertEqual(self.capture(reading)[0], "solar_charge")
+
+    def test_stale_or_inconsistent_ct_data_never_charges(self):
+        stale = self.reading(seconds_old=70)
+        corrupted = self.reading()
+        corrupted["meter_l3_w"] += 600
+        for reading in (stale, corrupted, self.reading(mode=0x101),
+                        self.reading(balanced=1), None):
+            with self.subTest(reading=reading):
+                self.assertEqual(self.capture(reading)[:2], ("discharge", 50))
+
+    def test_upper_soc_ceiling_stops_capture_without_limiting_below_it(self):
+        self.assertEqual(self.capture(self.reading(soc=dl.SOC_CEILING_PCT))[:2], ("discharge", 50))
+        self.assertEqual(self.capture(self.reading(soc=dl.SOC_CEILING_PCT - 0.1))[0], "solar_charge")
+
+    def test_recovery_and_regular_dispatch_are_unchanged(self):
+        reading = self.reading()
+        with mock.patch.object(dl.common, "read_json", return_value=reading):
+            recovery = dl.capture_battery_save_solar("charge", 300, None, False, "", {"soc_recovery": True}, self.now)
+            regular = dl.capture_battery_save_solar("discharge", 1000, None, False, "", {}, self.now)
+        self.assertEqual(recovery[:2], ("charge", 300))
+        self.assertEqual(regular[:2], ("discharge", 1000))
+
+    def test_inactive_l3_guard_does_not_bypass_phase_limits(self):
+        with mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", "shadow"):
+            self.assertEqual(self.capture(self.reading())[:2], ("discharge", 50))
+
+    def test_rejects_pv_surplus_below_headroom_and_nonfinite_input(self):
+        too_small = self.reading(pv=1100, house=850, grid=400)
+        self.assertEqual(self.capture(too_small)[:2], ("discharge", 50))
+        not_finite = self.reading()
+        not_finite["pv_w"] = float("nan")
+        self.assertEqual(self.capture(not_finite)[:2], ("discharge", 50))
+
+    def test_feature_disabled_leaves_battery_save_unchanged(self):
+        with mock.patch.object(dl, "BATTERY_SAVE_SOLAR_ENABLED", False):
+            self.assertEqual(self.capture(self.reading())[:2], ("discharge", 50))
+
+    def test_solar_charge_l3_guard_fails_closed_instead_of_forcing_grid_trickle(self):
+        with (mock.patch.object(dl, "L3_CHARGE_GUARD_MODE", "1"),
+              mock.patch.object(dl.common, "read_json", return_value=None)):
+            power, _detail, _numbers, limited = dl.guard_l3_charge(
+                "solar_charge", 900, "", {}, self.now)
+        self.assertEqual(power, 0)
+        self.assertTrue(limited)
+
+
 class EffectiveTargetTests(unittest.TestCase):
     """The solar-funding guard folded into the target actually applied."""
 
@@ -603,6 +932,20 @@ class NeedsApplyTests(unittest.TestCase):
         # charge -> discharge is a direction reversal, not load noise, however small the delta.
         last = ("t0", "charge", 100)
         self.assertTrue(dl.needs_apply(("t0", "discharge", 100), last, "discharge", 100, False))
+
+    def test_solar_capture_switches_mid_slot_without_blocking_regular_charge_guard(self):
+        # Physical surplus and its disappearance must both retarget on the next tick.
+        last = ("t0", "discharge", 50)
+        target = ("t0", "solar_charge", 800)
+        self.assertTrue(dl.needs_apply(target, last, "solar_charge", 800, False))
+        self.assertTrue(dl.needs_apply(last, target, "discharge", 50, False))
+
+    def test_solar_only_power_reduction_ignores_deadband(self):
+        last = ("t0", "solar_charge", 850)
+        target = ("t0", "solar_charge", 750)
+        self.assertTrue(dl.needs_apply(target, last, "solar_charge", 750, False))
+        # Growing PV may still use the existing write-rate deadband.
+        self.assertFalse(dl.needs_apply(last, target, "solar_charge", 850, False))
 
     def test_battery_save_discharge_is_not_replaced_by_charge_mid_slot(self):
         # A replan may change the plan while the current slot is already executing.
@@ -1373,6 +1716,34 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
         self.assertEqual((action, power_w), ("idle", 0))
         self.assertNotIn("reserve_hold", numbers)
 
+    def test_economic_reserve_idle_uses_existing_ems_save_without_solar(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 20.0), \
+             mock.patch.object(dl, "SOC_RECOVERY_ENTRY_PCT", 13.0), \
+             mock.patch.object(dl, "SOC_RECOVERY_EXIT_PCT", 16.0), \
+             mock.patch.object(dl, "BATTERY_SAVE_W", 50):
+            dl._soc_recovery_active = False
+            action, power, expected, skip, _detail, numbers = self.run_decision(
+                19.0, action="idle", power_w=0, surplus_w=0)
+        self.assertEqual((action, power, expected, skip), ("discharge", 50, None, False))
+        self.assertEqual(numbers.get("economic_reserve_save_w"), 50)
+        self.assertNotIn("soc_recovery", numbers)
+
+    def test_economic_reserve_idle_still_absorbs_measured_solar(self):
+        with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 20.0), \
+             mock.patch.object(dl, "SOC_RECOVERY_ENTRY_PCT", 13.0), \
+             mock.patch.object(dl, "SOC_RECOVERY_EXIT_PCT", 16.0), \
+             mock.patch.object(dl, "BATTERY_SAVE_W", 50):
+            dl._soc_recovery_active = False
+            action, power, *_ = self.run_decision(
+                19.0, action="idle", power_w=0, surplus_w=650)
+            self.assertEqual((action, power), ("idle", 0))
+            action, power, *_ = self.run_decision(
+                19.0, action="charge", power_w=1800, surplus_w=0)
+            self.assertEqual((action, power), ("charge", 1800))
+            action, power, *_ = self.run_decision(
+                21.0, action="idle", power_w=0, surplus_w=0)
+            self.assertEqual((action, power), ("idle", 0))
+
     def test_reserve_hold_blocks_discharge_at_16_percent_without_grid_charging(self):
         with mock.patch.object(dl, "PLANNER_RESERVE_PCT", 17.0), \
              mock.patch.object(dl, "RESERVE_HOLD_VERIFIED", True):
@@ -1441,7 +1812,7 @@ class PrioritizeSocRecoveryTests(unittest.TestCase):
         entry = (floor + headroom) / cap * 100
         with mock.patch.multiple(
             dl, BATTERY_KWH=cap, BATTERY_FLOOR_KWH=floor,
-            SOC_FLOOR_GUARD_HEADROOM_KWH=headroom,
+            SOC_FLOOR_GUARD_HEADROOM_KWH=headroom, PLANNER_RESERVE_PCT=20.0,
             SOC_RECOVERY_ENTRY_PCT=entry, SOC_RECOVERY_EXIT_PCT=16.0,
         ):
             dl._soc_recovery_active = False

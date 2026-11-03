@@ -33,6 +33,7 @@
 - [Beslut: solmedveten EV/L3-shadow](architecture/adr-2026-10-31-ev-solar-shadow.md)
 - [ADR: solöverskott under batterisparläge, skrivskyddad skuggmodell](architecture/adr-2026-11-02-battery-save-solar-shadow.md)
 - [ADR: EMS kontra General, skydd, watchdog och bortfall av Dell](architecture/adr-2026-11-02-ems-general-failsafe.md)
+- [ADR: återställd prisstyrd mjuk 20 %-reserv och separat SoC-skydd](architecture/adr-2026-11-02-economic-reserve-recovery.md)
 - [EVCC – read-only rollout](evcc-readonly-rollout-2026-10-28.md)
 - [Elprisprognoser](xc40-price-forecast.md)
 - [Energikostnadsjournal](ev-cost-ledger.md)
