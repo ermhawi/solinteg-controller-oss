@@ -126,6 +126,19 @@ Det isolerade [solar-save replay-provet](adr-2026-11-02-battery-save-solar-shado
 
 Hypotetisk riskanalys: observerade **5 363 W** urladdning, 22 % SoC, granskningsgräns 21,5 %, **antagen 120 s** sammanlagd detektions-/reaktionstid gav nominellt **~50,5 s** till gränsen för vissa prov; **12/18** hypotetiska kandidater uppfyllde inte antagen tidsbudget. Grovt avrundad SoC gör den verkliga marginalen osäker. Ingen av dessa siffror är mätt oberoende supervisor-latens eller certifierad kapacitet.
 
+### Uppföljning 2026-11-03: skrivskyddad inventering, ingen ny Modbus-session
+
+[Driftinventering och fysisk verifieringsmatris](../solinteg-fallback-readonly-inventory-2026-11-03.md)
+visar att live-läget var EMS BattCtrl vid kontrollen, medan
+SoC protection ON och EndSOC 10 % är **senast verifierade genom FC03
+2026-11-02**. Firmware/BMS-revision är fortfarande okänd och gamla
+`100xx`-identityprober har orsakat avbrott på referensinstallationen.
+Under de senaste 24 timmarna noterades två `error_revert_failed`
+med 132–140 sekunders telemetrigap trots senare återhämtning.
+Ingen separat FC03-session utfördes; aktuell firmware kan hämtas via
+OEM System Info/monitorering. **Beteende med kvarhängande `0x303`
+vid nätbortfall är fortfarande NO-GO för automatisk fallback.**
+
 ## 6. Beslutade nästa steg (ingen fysisk ändring godkänd)
 
 1. Få **skriftligt svar från Solinteg för MHT-10K-25 och exakta ARM-/DSP-/dataloggerversioner**: finns en lokal EMS-börvärdes-TTL eller watchdog? Är den inställbar? Vilka paket/register återställer klockan? Vilken mode/effekt används vid timeout? Fungerar `CommsWatchDog` bara master/slav? Respekteras `52502/52503` i EMS med ett gammalt `50207`? Hur fungerar BMS-current-limits i samma felläge?
