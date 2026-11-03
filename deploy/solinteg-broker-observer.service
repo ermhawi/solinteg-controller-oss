@@ -1,0 +1,30 @@
+# Observe-only, independently scheduled process. No Modbus or service-control authority.
+# Install script separately under /opt/solinteg/safety; never copy the whole
+# development checkout over an active production app as part of this step.
+[Unit]
+Description=Solinteg Modbus-broker safety observer (NO inverter writes)
+
+[Service]
+Type=oneshot
+User=solinteg
+Group=solinteg
+ExecStart=/usr/bin/python3 /opt/solinteg/safety/modbus_broker_watchdog_observer.py
+Environment=BROKER_OBSERVER_MODE=observe
+# Broker read-only cutover is not deployed. Require it only after a separate GO.
+Environment=BROKER_OBSERVER_REQUIRE_BROKER=0
+Environment=BROKER_OBSERVER_STATE_PATH=/var/lib/solinteg-broker-observer/status.json
+StateDirectory=solinteg-broker-observer
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+TimeoutStartSec=10

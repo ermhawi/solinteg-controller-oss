@@ -5,7 +5,7 @@
 dispatcher, watchdog och EV-vakt kör oförändrat.
 **Branch:** `Sundsvall`, aldrig merge till `main` eller upstream.
 **Avgränsning:** Solintegs TCP:502. EVCC/Waveshare RS-485 är separat.
-**Koduppföljning 2026-11-03:** pollerns replaykontroll och opt-in-dispatchergrind är implementerade/testade offline; armed brokerdrift är uttryckligen spärrad. Se [stale-/SoC-ADR](architecture/adr-2026-11-02-stale-telemetry-soc.md). Ingen tjänst har driftsatts.
+**Koduppföljning 2026-11-03:** pollerns replaykontroll och opt-in-dispatchergrind är implementerade/testade offline; armed brokerdrift är uttryckligen spärrad. Se [stale-/SoC-ADR](architecture/adr-2026-11-02-stale-telemetry-soc.md). Ingen broker eller styr-/pollerändring har driftsatts. En [separat observationswatchdog](modbus-broker-watchdog-dell-2026-11-03.md) är installerad på Dell utan fysisk behörighet.
 
 ## Levererat, men inte installerat
 

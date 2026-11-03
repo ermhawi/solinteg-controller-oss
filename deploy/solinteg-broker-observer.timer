@@ -1,0 +1,12 @@
+[Unit]
+Description=Observe Solinteg dispatcher and broker every 15 seconds (NO writes)
+
+[Timer]
+OnBootSec=45sec
+OnUnitInactiveSec=15sec
+AccuracySec=1sec
+Persistent=false
+Unit=solinteg-broker-observer.service
+
+[Install]
+WantedBy=timers.target
