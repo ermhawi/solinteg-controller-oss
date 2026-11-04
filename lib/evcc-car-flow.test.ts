@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { carSupplyBounds, carSupplyRoute, houseWithoutCarW, parseEvccCarState } from './evcc-car-flow';
+import { carFlowTelemetryConsistent, carSupplyBounds, carSupplyRoute, houseWithoutCarW, parseEvccCarState } from './evcc-car-flow';
 
 const now = Date.parse('2026-11-04T11:00:00Z');
 const charging = {
@@ -16,6 +16,29 @@ const charging = {
 };
 
 describe('EVCC live car energy paths', () => {
+  it('rejects incoherent AC/PV/battery samples rather than showing a false local arrow', () => {
+    const valid = {
+      pv_w: 531, battery_w: -329, inverter_ac_w: 234, grid_w: -2397,
+      house_load_w: 2631, meter_l1_w: -169, meter_l2_w: -130,
+      meter_l3_w: -2097, grid_unbalanced_output_raw: 0,
+    };
+    const inconsistent = {
+      pv_w: 493, battery_w: -537, inverter_ac_w: 1957, grid_w: 42,
+      house_load_w: 1915, meter_l1_w: 405, meter_l2_w: 437,
+      meter_l3_w: -800, grid_unbalanced_output_raw: 0,
+    };
+    expect(carFlowTelemetryConsistent(valid)).toBe(true);
+    expect(carFlowTelemetryConsistent(inconsistent)).toBe(false);
+    expect(carFlowTelemetryConsistent({ ...valid, meter_l2_w: 100 })).toBe(false);
+    expect(carFlowTelemetryConsistent({ ...valid, grid_unbalanced_output_raw: 1 })).toBe(false);
+    expect(carFlowTelemetryConsistent({ ...valid, meter_l3_w: undefined })).toBe(false);
+    expect(carFlowTelemetryConsistent(null)).toBe(false);
+    const car = parseEvccCarState(charging, now);
+    expect(carSupplyRoute(carSupplyBounds(car,
+      carFlowTelemetryConsistent(inconsistent) ? inconsistent.meter_l3_w : undefined
+    ))).toBe('unknown');
+  });
+
   it('uses measured L3 current and nominal voltage, never the configured limit as actual power', () => {
     const car = parseEvccCarState(charging, now);
     expect(car).toMatchObject({ connected: true, charging: true, currentA: 6, powerEstimateW: 1380 });

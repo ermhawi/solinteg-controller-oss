@@ -4,7 +4,7 @@ import { useRef } from 'react';
 import type { InverterLiveData } from '@/lib/inverter';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { powerFlowDirection } from '@/lib/power-flow';
-import { carSupplyBounds, carSupplyRoute, houseWithoutCarW } from '@/lib/evcc-car-flow';
+import { carFlowTelemetryConsistent, carSupplyBounds, carSupplyRoute, houseWithoutCarW } from '@/lib/evcc-car-flow';
 import type { PowerFlowDirection } from '@/lib/power-flow';
 import { MOBILE_FLOW_HEIGHT, mobileFlowLayout, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
 import FlowConnector from './FlowConnector';
@@ -81,7 +81,7 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
   const gridFlow = data ? powerFlowDirection('grid', data.grid_w) : null;
   const noData = 'Ingen aktuell data';
   const car = data?.evcc_car ?? null;
-  const carBounds = carSupplyBounds(car, data?.meter_l3_w);
+  const carBounds = carSupplyBounds(car, carFlowTelemetryConsistent(data) ? data?.meter_l3_w : undefined);
   const carRoute = carSupplyRoute(carBounds);
   const houseW = data ? houseWithoutCarW(data.house_load_w, car) : null;
 
@@ -114,6 +114,9 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
           <span>{car?.charging && car.powerEstimateW !== null ? power(car.powerEstimateW)
             : car?.connected ? 'Ansluten – väntar' : car ? 'Ej ansluten' : noData}</span>
         </div>
+        {car?.charging && !carBounds && (
+          <p className="mt-1" style={{ color: 'var(--text-muted)' }}>Energivägen okänd – mätdata saknas eller är inkonsistenta.</p>
+        )}
         {carBounds && (
           <>
             <div className="mt-1 flex flex-wrap justify-between gap-x-3 gap-y-1 font-semibold">

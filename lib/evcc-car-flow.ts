@@ -15,6 +15,35 @@ export interface CarSupplyBounds {
   powerEstimateW: number;
 }
 
+// A corrupted inverter sample must never turn one unreliable CT value into a
+// confident car-source arrow. Same independent telemetry coherence bounds as
+// the live EV policy; these affect presentation only, never the raw counters.
+export function carFlowTelemetryConsistent(live: {
+  pv_w: number;
+  battery_w: number;
+  inverter_ac_w: number;
+  grid_w: number;
+  house_load_w: number;
+  meter_l1_w?: number;
+  meter_l2_w?: number;
+  meter_l3_w?: number;
+  grid_unbalanced_output_raw?: number;
+} | null): boolean {
+  if (!live || live.grid_unbalanced_output_raw !== 0) return false;
+  const { pv_w, battery_w, inverter_ac_w, grid_w, house_load_w,
+    meter_l1_w, meter_l2_w, meter_l3_w } = live;
+  if ([pv_w, battery_w, inverter_ac_w, grid_w, house_load_w,
+    meter_l1_w, meter_l2_w, meter_l3_w].some(
+    (value) => typeof value !== 'number' || !Number.isFinite(value)
+  )) return false;
+  const phases = (meter_l1_w as number) + (meter_l2_w as number) + (meter_l3_w as number);
+  return pv_w >= 0 && house_load_w >= 0
+    && Math.abs(phases - grid_w) <= Math.max(80, Math.abs(grid_w) * 0.05)
+    && Math.abs(inverter_ac_w - grid_w - house_load_w) <= Math.max(150, house_load_w * 0.10)
+    && Math.abs(inverter_ac_w - (pv_w + battery_w))
+      <= 500 + 0.10 * Math.max(Math.abs(inverter_ac_w), pv_w, Math.abs(battery_w));
+}
+
 // Mutually exclusive *status indication*, never proof of an exclusive physical source.
 export type CarSupplyRoute = 'grid' | 'local' | 'unknown';
 const GRID_ROUTE_TOLERANCE_W = 125; // nominal voltage/PF and CT measurement uncertainty

@@ -1,4 +1,4 @@
-"""Live EV solar-capture policy: bounded charge-only trials, no device writes."""
+"""Live EV grid-first PV capture: phase-aware battery charge, no device writes."""
 from __future__ import annotations
 
 import copy
@@ -30,19 +30,87 @@ class LiveEvPolicyTests(unittest.TestCase):
         return policy.evaluate(action, power_w, sun() if live is None else live,
                                EVCC if evcc is None else evcc, now=NOW, **kw)
 
-    def test_daylight_pv_capture_is_bounded_600_w(self):
+    def test_daylight_pv_capture_uses_l3_non_ev_load_not_fixed_600_w(self):
         s = self.call()
-        self.assertEqual((s.state, s.action, s.power_w), ("live_solar_capture", "charge", 600))
+        self.assertEqual((s.state, s.action, s.power_w),
+                         ("grid_first_pv_capture", "charge", 1800))
         self.assertEqual(s.metrics["ev_w_est"], 1380)
         self.assertEqual(s.metrics["non_ev_house_w_est"], 757)
         self.assertEqual(s.metrics["solar_headroom_w_est"], 1269)
+        self.assertEqual(s.metrics["desired_inverter_ac_max_w"], 28)
+        self.assertEqual(s.metrics["grid_first_charge_target_w"], 1800)
         self.assertLessEqual(max(s.metrics["predicted_phase_import_w"]), policy.MAX_PHASE_IMPORT_W)
         self.assertFalse(s.metrics["physical_fuse_protection"])
         self.assertEqual(s.metrics["device_writes"], 0)
         self.assertEqual(s.metrics["evcc_writes"], 0)
 
-    def test_planned_charge_recovery_and_hold_are_untouched(self):
-        for action in ("charge", "solar_charge", "freeze", "reserve_hold"):
+    def test_pv_capturing_follows_measured_power_and_not_just_total_house_surplus(self):
+        # Same house and phase loads. A passing cloud changes only PV and
+        # battery power (AC output/CT remain consistent).
+        lower = self.call(live={**sun(), "pv_w": 1500, "battery_w": 722})
+        higher = self.call(live=sun())
+        self.assertEqual((lower.state, lower.power_w), ("grid_first_pv_capture", 1300))
+        self.assertEqual(higher.power_w, 1800)
+        self.assertLess(lower.power_w, higher.power_w)
+        self.assertLessEqual(lower.power_w, 1500)
+        self.assertLessEqual(higher.power_w, 2026)
+
+    def test_transient_non_ev_l3_load_never_turns_off_pv_capture(self):
+        # A 750 W L3 appliance imports more grid power, so the car *looks*
+        # fully grid-funded while the appliance is on. Switching to EMS 50 W
+        # would feed solar back onto the EV phase when it switches off.
+        baseline = sun()
+        appliance = {**baseline, "meter_l3_w": baseline["meter_l3_w"] - 750,
+                     "grid_w": baseline["grid_w"] - 750,
+                     "house_load_w": baseline["house_load_w"] + 750}
+        normal = self.call("discharge", 50, live=baseline)
+        with_appliance = self.call("discharge", 50, live=appliance)
+        self.assertEqual((normal.state, normal.action, normal.power_w),
+                         ("grid_first_pv_capture", "charge", 1800))
+        self.assertEqual((with_appliance.state, with_appliance.action, with_appliance.power_w),
+                         ("grid_first_pv_capture", "charge", 1800))
+        self.assertEqual(with_appliance.metrics["ev_grid_target_gap_w_est"], 0)
+        self.assertGreater(with_appliance.metrics["non_ev_l3_w_est"],
+                           normal.metrics["non_ev_l3_w_est"])
+
+    def test_cloud_reduces_pv_charge_without_using_l3_appliance_as_switch(self):
+        lower_pv = {**sun(), "pv_w": 1093, "battery_w": 1129}
+        appliance = {**lower_pv, "meter_l3_w": lower_pv["meter_l3_w"] - 750,
+                     "grid_w": lower_pv["grid_w"] - 750,
+                     "house_load_w": lower_pv["house_load_w"] + 750}
+        for reading in (lower_pv, appliance):
+            decision = self.call("discharge", 50, live=reading)
+            self.assertEqual((decision.state, decision.action, decision.power_w),
+                             ("grid_first_pv_capture", "charge", 900))
+            self.assertLess(decision.power_w, reading["pv_w"])
+
+    def test_charge_cap_is_explicit_at_high_pv_and_cannot_claim_all_from_grid(self):
+        sample = {**sun(), "pv_w": 5000, "battery_w": -2827}
+        decision = self.call(live=sample)
+        self.assertEqual(decision.action, "charge")
+        self.assertEqual(decision.power_w, policy.MAX_SOLAR_CHARGE_W)
+        self.assertIs(decision.metrics["target_limited_by_charge_cap"], True)
+
+    def test_solar_skip_is_replaced_only_by_verified_pv_charge(self):
+        with tempfile.TemporaryDirectory() as td:
+            a = Path(td) / "live.json"; b = Path(td) / "evcc.json"
+            a.write_text(json.dumps(sun()))
+            b.write_text(json.dumps(EVCC))
+            with patch.dict(os.environ, {"DISPATCH_EV_GRID_LIVE": "1"}):
+                action = adapter.coordinate("charge", 2300, None, True, "solar skip", {},
+                                            NOW, live_path=a, evcc_path=b,
+                                            read_json=lambda p: json.loads(Path(p).read_text()))
+            self.assertEqual(action[:4], ("charge", 1800, None, False))
+            self.assertIs(action[5]["ev_grid_live_priority_charge"], True)
+
+    def test_planned_charge_is_raised_only_if_pv_capture_needs_more(self):
+        self.assertEqual((self.call("charge", 350).action,
+                          self.call("charge", 350).power_w), ("charge", 1800))
+        self.assertEqual(self.call("charge", 2400).state, "preserve_existing_action")
+        self.assertEqual(self.call("charge", 2400, solar_skip=True).power_w, 1800)
+
+    def test_recovery_and_hold_are_untouched(self):
+        for action in ("solar_charge", "freeze", "reserve_hold"):
             with self.subTest(action=action):
                 s = self.call(action=action, power_w=350)
                 self.assertEqual(s.state, "preserve_existing_action")
@@ -57,13 +125,14 @@ class LiveEvPolicyTests(unittest.TestCase):
         self.assertEqual(s.state, "insufficient_verified_solar")
         self.assertIsNone(s.power_w)
 
-    def test_solar_hysteresis_avoids_commands_below_margin(self):
+    def test_low_pv_never_forces_a_grid_funded_solar_charge(self):
         base = sun()
         # Reconcile PV-battery/AC when PV falls, keeping the CT/house totals constant.
-        base.update(pv_w=1500, battery_w=722)
+        base.update(pv_w=250, battery_w=1923)
         s = self.call(live=base)
         self.assertEqual(s.state, "insufficient_verified_solar")
         self.assertIsNone(s.action)
+        self.assertLess(s.metrics["grid_first_charge_target_w"], policy.MIN_SOLAR_CHARGE_W)
 
     def test_stale_and_unverified_evcc_fail_closed(self):
         for e in ({**EVCC, "timestamp": (NOW-timedelta(seconds=65)).isoformat()},
@@ -107,7 +176,7 @@ class LiveEvPolicyTests(unittest.TestCase):
 
     def test_discharge_uses_non_ev_house_and_l3_load_when_solar_is_insufficient(self):
         # EV is 1380 W of the 2137 W measured site load, not house demand.
-        base = {**sun(), "pv_w": 1500, "battery_w": 722}
+        base = {**sun(), "pv_w": 250, "battery_w": 1923}
         s = self.call(action="discharge", power_w=2200, live=base)
         self.assertEqual((s.state, s.action, s.power_w),
                          ("grid_priority_discharge_cap", "discharge", 50))
@@ -117,13 +186,13 @@ class LiveEvPolicyTests(unittest.TestCase):
         self.assertEqual(s.metrics["discharge_cap_w"], 50)
 
     def test_grid_first_discharge_cap_does_not_override_existing_small_target(self):
-        base = {**sun(), "pv_w": 1500, "battery_w": 722}
+        base = {**sun(), "pv_w": 250, "battery_w": 1923}
         s = self.call(action="discharge", power_w=50, live=base)
         self.assertEqual(s.state, "insufficient_verified_solar")
         self.assertIsNone(s.action)
 
     def test_grid_first_discharge_never_changes_soc_recovery_or_hold(self):
-        base = {**sun(), "pv_w": 1500, "battery_w": 722}
+        base = {**sun(), "pv_w": 250, "battery_w": 1923}
         self.assertEqual(self.call("discharge", 2200, live=base,
                                    soc_recovery=True).state, "preserve_existing_action")
         self.assertEqual(self.call("freeze", 0, live=base).state, "preserve_existing_action")
@@ -132,7 +201,7 @@ class LiveEvPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td)
             a = path / "live.json"; b = path / "evcc.json"
-            a.write_text(json.dumps({**sun(), "pv_w": 1500, "battery_w": 722}))
+            a.write_text(json.dumps({**sun(), "pv_w": 250, "battery_w": 1923}))
             b.write_text(json.dumps(EVCC))
             def reader(p): return json.loads(Path(p).read_text())
             args = ("discharge", 2200, 5.0, False, "planned", {}, NOW)
@@ -146,7 +215,7 @@ class LiveEvPolicyTests(unittest.TestCase):
 
     def test_discharge_is_reduced_to_battery_charge_when_solar_verified(self):
         s=self.call(action="discharge",power_w=2200)
-        self.assertEqual((s.state,s.action,s.power_w),("live_solar_capture","charge",600))
+        self.assertEqual((s.state,s.action,s.power_w),("grid_first_pv_capture","charge",1800))
 
     def test_adapter_enabled_only_by_explicit_env(self):
         with tempfile.TemporaryDirectory() as td:
@@ -160,10 +229,11 @@ class LiveEvPolicyTests(unittest.TestCase):
                 self.assertEqual(out,args[:6])
             with patch.dict(os.environ,{"DISPATCH_EV_GRID_LIVE":"1"}):
                 out=adapter.coordinate(*args,live_path=a,evcc_path=b,read_json=reader)
-                self.assertEqual(out[:4],("charge",600,None,False))
-                self.assertIn("PV-to-house-battery",out[4])
-                self.assertEqual(out[5]["ev_grid_live_status"],"live_solar_capture")
-                self.assertEqual(out[5]["ev_grid_live_charge_target_w"],600)
+                self.assertEqual(out[:4],("charge",1800,None,False))
+                self.assertIn("grid-first PV capture",out[4])
+                self.assertEqual(out[5]["ev_grid_live_status"],"grid_first_pv_capture")
+                self.assertEqual(out[5]["ev_grid_live_charge_target_w"],1800)
+                self.assertIs(out[5]["ev_grid_live_priority_charge"],True)
                 # EV disappeared or telemetry invalid -> original decision preserved.
                 b.write_text('{"bad":true}')
                 out=adapter.coordinate(*args,live_path=a,evcc_path=b,read_json=reader)

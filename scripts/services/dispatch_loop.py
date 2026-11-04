@@ -1734,7 +1734,8 @@ def effective_target(action: str, power_w: int, solar_skip: bool):
 
 
 def needs_apply(target, last_target, effective_action: str, effective_power: int,
-                due_for_reassert: bool, *, soc_recovery: bool = False) -> bool:
+                due_for_reassert: bool, *, soc_recovery: bool = False,
+                ev_grid_priority_charge: bool = False) -> bool:
     """Does this tick warrant actually writing a register?
 
     Three rules, in tension:
@@ -1760,7 +1761,7 @@ def needs_apply(target, last_target, effective_action: str, effective_power: int
         and last_target[1] == "discharge"
         and target[1] == "charge"
     )
-    if mid_slot_drift_to_charge and not soc_recovery:
+    if mid_slot_drift_to_charge and not (soc_recovery or ev_grid_priority_charge):
         return False
 
     small_power_move = (
@@ -1770,6 +1771,8 @@ def needs_apply(target, last_target, effective_action: str, effective_power: int
         and abs(effective_power - last_target[2]) < LIVE_LOAD_DEADBAND_W
         # Never hold an excessive solar-only charge target for up to REASSERT_S.
         and not (effective_action == "solar_charge" and effective_power < last_target[2])
+        and not (ev_grid_priority_charge and effective_action == "charge"
+                 and effective_power < last_target[2])
     )
     return (target != last_target and not small_power_move) or (
         due_for_reassert and effective_action != "idle"
@@ -2144,7 +2147,8 @@ def main() -> None:
             target = (slot_time, effective_action, effective_power)
             due_for_reassert = (time.monotonic() - last_write_monotonic) >= REASSERT_S
             if needs_apply(target, last_target, effective_action, effective_power, due_for_reassert,
-                           soc_recovery=bool(numbers.get("soc_recovery"))):
+                           soc_recovery=bool(numbers.get("soc_recovery")),
+                           ev_grid_priority_charge=numbers.get("ev_grid_live_priority_charge") is True):
                 outcome, loop_in_auto = apply_decision(
                     con, slot_time, action, power_w, expected_soc_kwh, solar_skipped_now,
                     detail, numbers, loop_in_auto, broker_sample=last_broker_sample)

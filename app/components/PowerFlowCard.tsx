@@ -5,7 +5,7 @@ import type { InverterLiveData } from '@/lib/inverter';
 import { INVERTER_STATUS_TEXT } from '@/lib/inverter-api-status';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { FLOW_THRESHOLD_W } from '@/lib/power-flow';
-import { carSupplyBounds, carSupplyRoute, houseWithoutCarW } from '@/lib/evcc-car-flow';
+import { carFlowTelemetryConsistent, carSupplyBounds, carSupplyRoute, houseWithoutCarW } from '@/lib/evcc-car-flow';
 import FlowConnector from './FlowConnector';
 import type { Pt } from './FlowConnector';
 
@@ -195,7 +195,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
   }
 
   const car = data.evcc_car ?? null;
-  const carBounds = carSupplyBounds(car, data.meter_l3_w);
+  const carBounds = carSupplyBounds(car, carFlowTelemetryConsistent(data) ? data.meter_l3_w : undefined);
   const carRoute = carSupplyRoute(carBounds);
   const houseW = houseWithoutCarW(data.house_load_w, car);
   const solarActive = data.pv_w > FLOW_THRESHOLD_W;
@@ -311,7 +311,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
             <p className="mt-1">L3-netto: nät högst {kw(carBounds.gridToCarUpperW)}, lokalt minst {kw(carBounds.localToCarLowerW)}. Endast en indikator är aktiv; faktisk energikälla kan vara blandad.</p>
           </>
         ) : (
-          <p>{carCharging ? 'Ingen tillförlitlig L3-mätning för bilens energiväg.'
+          <p>{carCharging ? 'Energivägen okänd – mätdata saknas eller är inkonsistenta.'
             : car?.connected ? 'Bilen ansluten, ingen verifierad laddström.'
               : car ? 'Bilen är inte ansluten.' : 'Bilens mätdata saknas eller är för gammal.'}</p>
         )}

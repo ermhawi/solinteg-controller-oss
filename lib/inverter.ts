@@ -21,7 +21,10 @@ export interface InverterLiveData {
   house_load_w: number; // derived: inverter_ac_w - grid_w
   work_mode: string; // e.g. "General", "EMS BattCtrl"
   work_mode_raw: number;
+  meter_l1_w?: number;
+  meter_l2_w?: number;
   meter_l3_w?: number; // signed CT: + export, - import; may be unavailable
+  grid_unbalanced_output_raw?: number; // inverter register 50006; 0 means balanced
   evcc_car?: EvccCarState; // independently validated, current-only EVCC FC03 observation
 }
 

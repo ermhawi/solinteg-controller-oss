@@ -1,7 +1,9 @@
 """Bounded *live* EV/L3 solar capture through the existing battery dispatcher.
 
-Only when measured 6 A EV charging, fresh balanced three-phase telemetry, and
-a conservative surplus exist. The old dispatch/SoC recovery and Modbus broker
+Only when measured 6 A EV charging and fresh balanced three-phase telemetry
+exist. PV capture tracks the AC output that would otherwise offset the EV's
+L3 import, instead of using a fixed PV-surplus threshold. The old
+SoC recovery and Modbus broker
 remain the sole actuator and failure owner. No EVSE writes or hardware drivers.
 This is NOT a certified EV power-source attribution or fuse protection.
 """
@@ -16,12 +18,12 @@ INVERTER_WINDOW_S = 55
 EV_NOMINAL_V = 230
 EV_CURRENT_LOW = 5.7
 EV_CURRENT_HIGH = 6.4
-SOLAR_MARGIN_W = 650
+PV_RESPONSE_MARGIN_W = 100
 MIN_SOLAR_CHARGE_W = 300
-MAX_SOLAR_CHARGE_W = 600
+MAX_SOLAR_CHARGE_W = 3500
 MAX_PHASE_IMPORT_W = 3000
 MAX_SITE_IMPORT_W = 6000
-EV_L3_LOCAL_MARGIN_W = 180
+EV_L3_LOCAL_MARGIN_W = 90
 BATTERY_AC_EFF_EST = 0.95
 MIN_EMS_DISCHARGE_W = 50
 BMS_TEMP_LOW_C = 10
@@ -61,7 +63,8 @@ def _age(d: dict, now: datetime, limit: int) -> float:
 
 
 def evaluate(action: str, power_w: int, live: dict, evcc: dict, *,
-             now: datetime, soc_recovery: bool = False) -> EvLiveDecision:
+             now: datetime, soc_recovery: bool = False,
+             solar_skip: bool = False) -> EvLiveDecision:
     base = {"device_writes": 0, "evcc_writes": 0, "physical_fuse_protection": False}
     def result(state: str, reason: str, candidate: int | None = None,
                candidate_action: str = "charge") -> EvLiveDecision:
@@ -70,10 +73,11 @@ def evaluate(action: str, power_w: int, live: dict, evcc: dict, *,
     if (not isinstance(live, dict) or not isinstance(evcc, dict)
             or not isinstance(now, datetime) or now.tzinfo is None
             or type(power_w) is not int or power_w < 0
+            or type(solar_skip) is not bool
             or action not in ("idle", "discharge", "charge", "solar_charge", "freeze", "reserve_hold")):
         return result("unavailable", "invalid inputs")
-    if action in ("charge", "solar_charge", "freeze", "reserve_hold") or soc_recovery:
-        return result("preserve_existing_action", "planned charge/recovery or hold takes priority")
+    if action in ("solar_charge", "freeze", "reserve_hold") or soc_recovery:
+        return result("preserve_existing_action", "existing solar capture, recovery or hold takes priority")
     now = now.astimezone(timezone.utc)
     try:
         ages = (_age(live, now, INVERTER_WINDOW_S), _age(evcc, now, EV_WINDOW_S))
@@ -134,8 +138,22 @@ def evaluate(action: str, power_w: int, live: dict, evcc: dict, *,
                     ev_grid_target_w_est=round(ev_w),
                     ev_grid_target_gap_w_est=round(max(0, ev_w-grid_l3_import_w)),
                     soc_pct=round(soc,1))
-        surplus = solar_headroom_w - SOLAR_MARGIN_W
-        if surplus < MIN_SOLAR_CHARGE_W:
+        # With balanced inverter output every 3 W of AC generation adds about
+        # 1 W on L3. A transient heater on L3 may temporarily make the EV look
+        # completely grid-fed, but stopping battery PV capture immediately
+        # sends that AC power back to the EV when the heater switches off.
+        # Keep capturing solar PV while the EV charges, regardless of transient
+        # non-EV phase demand. This can shift L1/L2 house demand to the GRID.
+        # Never request more than the current PV with a 100 W reaction reserve.
+        allowed_ac_w = 3 * max(0, non_ev_l3_w - EV_L3_LOCAL_MARGIN_W)
+        pv_charge_budget_w = max(0, pv - PV_RESPONSE_MARGIN_W)
+        target = min(MAX_SOLAR_CHARGE_W,
+                     int(pv_charge_budget_w * BATTERY_AC_EFF_EST // 100) * 100)
+        base.update(desired_inverter_ac_max_w=round(allowed_ac_w),
+                    pv_only_charge_budget_w=round(pv_charge_budget_w),
+                    grid_first_charge_target_w=target,
+                    target_limited_by_charge_cap=target == MAX_SOLAR_CHARGE_W)
+        if target < MIN_SOLAR_CHARGE_W:
             # The dispatch planner's raw house load includes EV. Discharge that
             # follows that load may power the car. Limit battery AC output to
             # the *non-EV* L3 demand; PV has first claim on that budget.
@@ -159,7 +177,12 @@ def evaluate(action: str, power_w: int, live: dict, evcc: dict, *,
                                   battery_cap_w, "discharge")
             return result("insufficient_verified_solar",
                           "insufficient solar for forced charging; original dispatch retained")
-        target = min(MAX_SOLAR_CHARGE_W, int(surplus // 100) * 100)
+        if action == "charge" and power_w >= target and not solar_skip:
+            return result("preserve_existing_action",
+                          "planned battery charging already absorbs the PV target")
+        # Conservative upper bound on added site import if today's battery
+        # discharge turns into this battery charge. Normal house/EV load is
+        # NOT subtracted from the import/fuse measurements.
         delta_ac_w = max(0., battery + target) * 1.2
         estimated_phase_import = [-p + delta_ac_w/3 for p in phases]
         estimated_total_import = -grid + delta_ac_w
@@ -169,6 +192,8 @@ def evaluate(action: str, power_w: int, live: dict, evcc: dict, *,
         if (any(x > MAX_PHASE_IMPORT_W for x in estimated_phase_import)
                 or estimated_total_import > MAX_SITE_IMPORT_W):
             return result("import_guard", "projected import exceeds trial envelope")
-        return result("live_solar_capture", "PV available after non-EV house, charge battery using broker", target)
+        return result("grid_first_pv_capture",
+                      "capture PV in house battery to minimize balanced inverter output on EV L3",
+                      target)
     except (KeyError, ValueError, TypeError, OverflowError) as exc:
         return result("unavailable", str(exc)[:140])

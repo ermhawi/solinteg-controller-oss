@@ -948,6 +948,22 @@ class NeedsApplyTests(unittest.TestCase):
         # Growing PV may still use the existing write-rate deadband.
         self.assertFalse(dl.needs_apply(last, target, "solar_charge", 850, False))
 
+    def test_verified_ev_grid_charge_bypasses_only_mid_slot_economic_block(self):
+        last = ("t0", "discharge", 50)
+        target = ("t0", "charge", 1800)
+        self.assertFalse(dl.needs_apply(target, last, "charge", 1800, False))
+        self.assertTrue(dl.needs_apply(target, last, "charge", 1800, False,
+                                       ev_grid_priority_charge=True))
+        self.assertFalse(dl.needs_apply(target, last, "charge", 1800, True,
+                                        ev_grid_priority_charge=False))
+
+    def test_ev_grid_charge_can_drop_immediately_on_clouds(self):
+        previous = ("t0", "charge", 1700)
+        target = ("t0", "charge", 1700 - dl.LIVE_LOAD_DEADBAND_W + 1)
+        self.assertFalse(dl.needs_apply(target, previous, "charge", target[2], False))
+        self.assertTrue(dl.needs_apply(target, previous, "charge", target[2], False,
+                                       ev_grid_priority_charge=True))
+
     def test_battery_save_discharge_is_not_replaced_by_charge_mid_slot(self):
         # A replan may change the plan while the current slot is already executing.
         # Keep the applied battery-save direction until the next slot boundary.

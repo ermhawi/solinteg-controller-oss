@@ -1,5 +1,25 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
+En första livekorrigering från 12:27 UTC ersatte 50 W
+EMS-urladdning med 1 100–1 300 W PV-laddning och uppmätt L3-import
+i nivå med bilens cirka 1,36 kW under sju avläsningar.
+En tillfällig L3-huslast utlöste dock ett bakslag till 50 W
+kl. 12:29:29 UTC. **Efterföljande PV-kontinuitetsfix** tar därför
+PV-laddningsbudget från faktisk PV minus 100 W marginal,
+**oberoende av tillfällig annan L3-last**, så länge färsk EVCC
+bekräftar 6 A-laddning och SoC-/BMS-/fasgrindar godkänner.
+Styrningen får högst begära 3 500 W husbatteriladdning i det
+kontrollerade EV-läget. Både första korrigeringen och den senare
+PV-kontinuitetsfixen har egna rootägda checksummeverifierade
+rollbackkopior. Endast befintlig dispatcher och broker används;
+ingen EVCC-skrivare, extra watchdog eller shadow-tjänst har lagts till.
+Se [EV/L3-live-ADR: kod, rollback och verifiering](../docs/architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md).
+**Begränsning:** med växelriktarens balanserade AC kan elköp till
+övriga husfaser öka när solel prioriteras till batteriet för att
+hålla bilen på nätet. Full stabilitet är inte garanterad vid låg PV,
+BMS-laddspärr, telemetrifel eller snabbare förlopp än polling.
+
 **Dell – EV/L3 live och Systemstatus 2026-11-04 (nyare än de historiska avsnitten nedan):**
 Se [aktuell implementering, test, driftsbevis och rollback](../docs/architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md).
 `DISPATCH_EV_GRID_LIVE=1` är driftsatt via den **befintliga** dispatchern
