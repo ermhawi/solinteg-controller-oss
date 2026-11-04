@@ -77,6 +77,21 @@ The service templates are **not installed**; the stage 3
 [cutover blockers](../../docs/modbus-broker-readonly-stage3-2026-11-02.md)
 must be resolved before any physical migration.
 
+`test_modbus_broker_control.py` verifierar den nya, fortfarande **ej driftsatta**
+FC03/FC06-brokern med gemensam worker/Unix-socket: korrekt roll-
+authorisering, oförändrad `Inverter`-styrning (laddning, urladdning,
+importgräns, SoC-skydd och snabb re-target), `broker_legacy`-pollerns
+samma SQLite-/JSON-fält, och att en enda syntetisk Modbusanslutning
+räcker för både läsning och styrning. Den gamla watchdoggen är oförändrad;
+felbegränsningar är dokumenterade i
+[ADR](../../docs/architecture/adr-2026-11-04-broker-legacy-failure-scope.md).
+
+`wire_smoke_control.py` är ett separat integrationstest med **verklig
+pymodbus**, exakt en TCP-session till en syntetisk `127.0.0.1`-dongel
+med kernelvald port, FC03, två FC06, och IPC-behörighetskontroll.
+Det körs inte automatiskt i stdlib-unittestupptäckten och öppnar aldrig
+anslutning till riktig växelriktare.
+
 `wire_smoke_readonly.py` is an **explicit standalone real-pymodbus
 integration smoke** (not included in default unittest discovery).
 Run it only with an environment containing pymodbus>=3.13; it uses

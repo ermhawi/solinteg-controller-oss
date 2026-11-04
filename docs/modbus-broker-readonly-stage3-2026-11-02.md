@@ -7,6 +7,8 @@ dispatcher, watchdog och EV-vakt kör oförändrat.
 **Avgränsning:** Solintegs TCP:502. EVCC/Waveshare RS-485 är separat.
 **Koduppföljning 2026-11-03:** pollerns replaykontroll och opt-in-dispatchergrind är implementerade/testade offline; armed brokerdrift är uttryckligen spärrad. Se [stale-/SoC-ADR](architecture/adr-2026-11-02-stale-telemetry-soc.md). Ingen broker eller styr-/pollerändring har driftsatts. En [separat observationswatchdog](modbus-broker-watchdog-dell-2026-11-03.md) är installerad på Dell utan fysisk behörighet.
 
+**Nyare alternativ 2026-11-04:** [gemensam normalbroker med FC03 och FC06](modbus-broker-control-stage-2026-11-04.md) är implementerad separat i källkod och använder pollerns gamla avkodning via `broker_legacy` och dispatcherns gamla effektstyrningsalgoritmer. Den stränga read-only-snapshotgrinden från denna etapp används inte i det alternativet. **Kontrollbrokern driftsattes 2026-11-04 kl. 05:45 CET; denna read-only-broker är fortsatt inaktiv. Starta dem aldrig parallellt.** Befintlig watchdog och dess fallback lämnas oförändrade enligt [beslutade brister](architecture/adr-2026-11-04-broker-legacy-failure-scope.md).
+
 ## Levererat, men inte installerat
 
 | Fil | Uppgift |

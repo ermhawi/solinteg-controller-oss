@@ -1,0 +1,32 @@
+# Opt-in single TCP owner for ordinary Solinteg poller + dispatcher.
+# Deployed Dell 2026-11-04 after stopping both direct clients. Operator rollback documented.
+# Existing solinteg-watchdog.service/timer remain UNCHANGED.
+[Unit]
+Description=Solinteg single-owner Modbus control broker
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/run/solinteg-broker-control-approved
+ConditionPathExists=/run/solinteg-broker-ownership.lock
+
+[Service]
+Type=simple
+User=solinteg
+Group=solinteg
+WorkingDirectory=/opt/solinteg/app
+EnvironmentFile=/opt/solinteg/solinteg.env
+Environment=SOLINTEG_BROKER_CONTROL_ENABLED=1
+Environment=SOLINTEG_BROKER_SOCKET=/run/solinteg-broker/broker.sock
+RuntimeDirectory=solinteg-broker
+RuntimeDirectoryMode=0700
+ExecStart=/opt/solinteg/app/.venv/bin/python /opt/solinteg/app/scripts/services/modbus_broker_control_service.py --control
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=40
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -14,6 +14,8 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+
+from modbus_broker_readonly_transport import READ_BLOCKS
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -22,12 +24,21 @@ log = logging.getLogger(__name__)
 GENERAL = 0x101
 EMS_BATTCTRL = 0x303
 GRID_CAP_RAW = 1100  # 11 kW inverter AC cap; NOT a site/fuse limit
-READS = {"status", "read_snapshot"}
-CONTROLS = {"charge", "discharge", "reserve_hold", "auto"}
+RAW_READ = "read_registers"
+RAW_WRITE = "write_register"
+READS = {"status", "read_snapshot", RAW_READ}
+CONTROLS = {"charge", "discharge", "reserve_hold", "auto", RAW_WRITE}
 SAFETY = {"safety_auto"}
+# Only the legacy Inverter interface needs these registers. No arbitrary FC06.
+CONTROL_READS = frozenset({
+    (50000, 1), (50006, 1), (50007, 1), (50009, 1),
+    (50207, 1), (50208, 1), (50209, 1), (50210, 1),
+    (30258, 2), (33000, 1),
+})
+CONTROL_WRITES = frozenset({50000, 50007, 50009, 50207, 50208, 50209, 50210})
 ROLES = {
     "read": READS,
-    "control": READS | CONTROLS,
+    "control": READS | CONTROLS | {RAW_READ},
     "safety": READS | SAFETY,
 }
 WORK_MODE_NAMES = {
@@ -114,7 +125,7 @@ class Broker:
     ):
         if not callable(transport_factory):
             raise TypeError("transport_factory required")
-        if runtime_mode not in ("offline", "readonly"):
+        if runtime_mode not in ("offline", "readonly", "control"):
             raise ValueError("unsupported broker runtime mode")
         if runtime_mode == "readonly" and (
             armed or phase_guard is not None or allow_hold or charge_sign is not None
@@ -168,19 +179,41 @@ class Broker:
                 "owns_forced_state": self._owns_control,
                 "offline_only": self._runtime_mode == "offline",
                 "read_only": self._runtime_mode == "readonly",
+                "control_runtime": self._runtime_mode == "control",
             }
 
     def submit(
         self, operation: str, *, role: str = "read",
         request_id: str | None = None, watts: int | None = None,
-        timeout_s: float = 30.0,
+        address: int | None = None, count: int | None = None,
+        value: int | None = None, timeout_s: float = 30.0,
     ) -> dict:
         if operation not in ROLES.get(role, frozenset()):
             raise PermissionError("operation is not authorized for peer role")
+        if self._runtime_mode == "control" and operation not in READS | {RAW_READ, RAW_WRITE}:
+            raise PermissionError("control runtime exposes legacy register IPC only")
         if type(timeout_s) not in (float, int) or not math.isfinite(timeout_s) or not 0 < timeout_s <= 120:
             raise ValueError("timeout_s must be finite and in (0, 120]")
         if operation == "status":
             return self.status()
+        raw = operation in {RAW_READ, RAW_WRITE}
+        if raw:
+            if self._runtime_mode == "readonly":
+                raise PermissionError("raw register IPC forbidden in read-only runtime")
+            if type(address) is not int:
+                raise ValueError("raw register address required")
+            if operation == RAW_READ:
+                approved = READ_BLOCKS if role == "read" else READ_BLOCKS | CONTROL_READS
+                if (type(count) is not int or (address, count) not in approved
+                        or value is not None):
+                    raise PermissionError("FC03 register block not allowlisted")
+            elif (address not in CONTROL_WRITES or type(value) is not int
+                  or not 0 <= value <= 65535 or count is not None):
+                raise PermissionError("FC06 register/value not allowlisted")
+            if watts is not None:
+                raise ValueError("raw register request does not accept watts")
+        elif any(arg is not None for arg in (address, count, value)):
+            raise ValueError("register fields only allowed for raw operations")
 
         control = operation in CONTROLS | SAFETY
         if control:
@@ -195,6 +228,8 @@ class Broker:
                 raise ValueError("power must be 10..11000 W in steps of 10")
         elif watts is not None:
             raise ValueError("watts only allowed for power actions")
+        if raw:
+            watts = (address, count if operation == RAW_READ else value)
 
         with self._lock:
             if self._closed:
@@ -234,9 +269,13 @@ class Broker:
         except FutureTimeoutError as exc:
             if control:
                 with self._lock:
-                    # An ambiguous client timeout MUST NOT leave a queued write valid.
+                    # An ambiguous IPC timeout must invalidate queued writes.
+                    # Raw legacy dispatch still performs its CURRENT best-effort
+                    # return_to_auto on failure, so do not add a new persistent
+                    # broker latch to that path in this migration.
                     self._generation += 1
-                    self._safety_latched = True
+                    if operation != RAW_WRITE:
+                        self._safety_latched = True
             raise TimeoutError("broker request result unknown; control fenced") from exc
 
     def _fenced(self, epoch: int) -> None:
@@ -354,6 +393,23 @@ class Broker:
         if self._read(addr, 1)[0] != raw:
             raise BrokerError(f"FC06 readback mismatch at {addr}")
 
+    def _write_raw(self, address: int, value: int, epoch: int) -> None:
+        """Single allowlisted FC06 on the one worker-owned TCP connection.
+
+        The existing dispatch Inverter performs its own readback/rollback,
+        preserving the installed behavior. Never silently retry a timed-out
+        write or open another TCP connection.
+        """
+        self._fenced(epoch)
+        now = self._clock()
+        if self._last_write_at is not None and now - self._last_write_at < self._interval:
+            self._sleep(self._interval - (now - self._last_write_at))
+        self._fenced(epoch)
+        self._last_write_at = self._clock()
+        reply = self._client().write_register(address, value, device_id=255)
+        if reply.isError():
+            raise BrokerError(f"FC06 write failed at {address}")
+
     def _return_auto(self) -> None:
         """Best-effort all steps; mode attempted even if cap restore fails."""
         errors = []
@@ -455,8 +511,17 @@ class Broker:
                         future.set_exception(exc)
                     return
                 self._fenced(epoch)
-                result = self._snapshot() if operation == "read_snapshot" else self._apply(
-                    operation, watts, epoch)
+                if operation == "read_snapshot":
+                    result = self._snapshot()
+                elif operation == RAW_READ:
+                    address, count = watts
+                    result = {"registers": self._read(address, count)}
+                elif operation == RAW_WRITE:
+                    address, value = watts
+                    self._write_raw(address, value, epoch)
+                    result = {"status": "sent_unverified"}
+                else:
+                    result = self._apply(operation, watts, epoch)
                 future.set_result(result)
             except Exception as exc:  # noqa: BLE001 - broker returns explicit failure
                 future.set_exception(exc)

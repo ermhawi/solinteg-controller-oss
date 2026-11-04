@@ -124,10 +124,17 @@ class Inverter:
     """Thin pymodbus wrapper: persistent connection, checked + verified writes."""
 
     def __init__(self, host: str = HOST, port: int = PORT, unit: int = SLAVE_ID):
-        if not host:
-            raise ValueError("SOLINTEG_HOST not set")
         self.unit = unit
-        self.client = ModbusTcpClient(host, port=port, timeout=5)
+        source = os.environ.get("SOLINTEG_MODBUS_SOURCE", "direct")
+        if source == "broker":
+            from modbus_broker_control_client import BrokerModbusClient
+            self.client = BrokerModbusClient()
+        elif source == "direct":
+            if not host:
+                raise ValueError("SOLINTEG_HOST not set")
+            self.client = ModbusTcpClient(host, port=port, timeout=5)
+        else:
+            raise ValueError("SOLINTEG_MODBUS_SOURCE must be direct or broker")
         self._rl = RateLimiter()
 
     # — connection —

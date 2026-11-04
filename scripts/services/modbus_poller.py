@@ -41,7 +41,8 @@ Environment variables:
   POLL_INTERVAL        Poll interval in seconds (default 30)
   POLL_PHASE_RETRY_INITIAL_S  Delay after first extended CT read failure (default 120)
   POLL_PHASE_RETRY_MAX_S      Maximum exponential retry delay (default 1800)
-  SOLINTEG_POLL_SOURCE        direct (default), broker (opt-in; no direct fallback)
+  SOLINTEG_POLL_SOURCE        direct (default), broker (strict snapshot), broker_legacy
+                              (broker transport, unchanged poller decoding/fallback)
   SOLINTEG_BROKER_SOCKET      Protected UDS path for broker cutover (required)
 """
 
@@ -351,22 +352,26 @@ def log_reading(con: sqlite3.Connection, data: dict) -> None:
 
 
 def main() -> None:
-    if POLL_SOURCE not in ("direct", "broker"):
-        sys.exit("SOLINTEG_POLL_SOURCE must be direct or broker")
+    if POLL_SOURCE not in ("direct", "broker", "broker_legacy"):
+        sys.exit("SOLINTEG_POLL_SOURCE must be direct, broker or broker_legacy")
     if POLL_SOURCE == "direct" and not INVERTER_HOST:
         sys.exit("Set SOLINTEG_HOST to the inverter's IP address before starting.")
 
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = init_db(DB_PATH)
     previous_broker_sample = common.read_json(DATA_PATH) if POLL_SOURCE == "broker" else None
-    if POLL_SOURCE == "broker":
-        from modbus_broker_ipc import BrokerIpcClient
+    if POLL_SOURCE in ("broker", "broker_legacy"):
         socket_path = os.environ.get("SOLINTEG_BROKER_SOCKET")
         if socket_path != "/run/solinteg-broker/broker.sock":
             sys.exit("SOLINTEG_BROKER_SOCKET must be the dedicated protected broker socket")
-        client = BrokerIpcClient(Path(socket_path))
-        log.info("Starting BROKER-only poller every %ds → %s  telemetry → %s",
-                 POLL_INTERVAL, DATA_PATH, DB_PATH)
+        if POLL_SOURCE == "broker_legacy":
+            from modbus_broker_control_client import BrokerModbusClient
+            client = BrokerModbusClient()
+        else:
+            from modbus_broker_ipc import BrokerIpcClient
+            client = BrokerIpcClient(Path(socket_path))
+        log.info("Starting %s poller every %ds → %s telemetry → %s",
+                 POLL_SOURCE, POLL_INTERVAL, DATA_PATH, DB_PATH)
     else:
         client = ModbusTcpClient(INVERTER_HOST, port=INVERTER_PORT, timeout=10)
         log.info("Starting poller → %s:%d (slave %d) every %ds → %s  telemetry → %s",
@@ -391,7 +396,7 @@ def main() -> None:
                      data["battery_w"], data["house_load_w"], data["work_mode"])
         except Exception as exc:
             log.error("Poll failed: %s — will retry in %ds", exc, POLL_INTERVAL)
-            if POLL_SOURCE == "direct":
+            if POLL_SOURCE in ("direct", "broker_legacy"):
                 try:
                     client.close()
                 except Exception:

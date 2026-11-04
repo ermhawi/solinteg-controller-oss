@@ -47,11 +47,14 @@ class _Handler(socketserver.StreamRequestHandler):
             message = json.loads(raw)
             if not isinstance(message, dict):
                 raise ValueError("expected request object")
-            if set(message) - {"operation", "request_id", "watts", "timeout_s"}:
+            if set(message) - {"operation", "request_id", "watts", "timeout_s",
+                               "address", "count", "value"}:
                 raise ValueError("unsupported IPC request field")
             response = self.server.broker.submit(
                 message.get("operation"), role=role, request_id=message.get("request_id"),
-                watts=message.get("watts"), timeout_s=message.get("timeout_s", 30),
+                watts=message.get("watts"), address=message.get("address"),
+                count=message.get("count"), value=message.get("value"),
+                timeout_s=message.get("timeout_s", 30),
             )
             envelope = {"ok": True, "result": response}
         except (ValueError, TypeError, PermissionError, RuntimeError, TimeoutError) as exc:

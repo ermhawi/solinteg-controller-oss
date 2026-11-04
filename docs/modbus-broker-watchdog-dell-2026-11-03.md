@@ -4,7 +4,7 @@
 [separat offlinegrind för framtida privilegierad nödfallback](modbus-broker-emergency-policy-offline-2026-11-03.md);
 den är **inte** kopplad till denna tjänst. Den ordinarie
 pollern, dispatchern, webbappen och den befintliga `solinteg-watchdog.timer`
-kör oförändrat. Modbus-brokern är **inte driftsatt** och den nya observatören
+kör samma kod som tidigare. Vid observationsstarten 2026-11-03 var Modbus-brokern **inte driftsatt**; sedan 2026-11-04 kl. 05:45 CET körs kontrollbrokern separat. Den nya observatören
 är **inte en privilegierad nödfallback**.
 
 **Arkitekturbeslut:** [Dell-först, Pi-senare](architecture/adr-2026-11-03-dell-broker-observer.md).

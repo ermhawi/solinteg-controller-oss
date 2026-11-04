@@ -9,6 +9,8 @@
 - [Plan: Modbus-broker, ensam TCP-ägare och säker migrering](plans/modbus-broker-2026-11-01.md)
 - [Modbus-broker etapp 0–2: offlineimplementation och baslinje](modbus-broker-offline-2026-11-01.md)
 - [Modbus-broker etapp 3: read-only-kod och grindar inför driftsättning](modbus-broker-readonly-stage3-2026-11-02.md)
+- [Broker gemensam FC03/FC06 – normalväg offlineklar, driftsättnings-/rollbackplan](modbus-broker-control-stage-2026-11-04.md)
+- [ADR: behåll befintlig watchdog och dokumentera felvägens begränsningar](architecture/adr-2026-11-04-broker-legacy-failure-scope.md)
 - [Broker-watchdog: observationspilot på Dell, utan Modbus-skrivning](modbus-broker-watchdog-dell-2026-11-03.md)
 - [Nödfallback: SoC-/BMS-grind, syntetisk root/fencing-kedja, endast offline](modbus-broker-emergency-policy-offline-2026-11-03.md)
 - [Sundsvall: skrivskyddad inventering av SoC-skydd, firmwareläge och fallback-verifieringsmatris](solinteg-fallback-readonly-inventory-2026-11-03.md)
