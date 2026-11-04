@@ -89,6 +89,10 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
     smart_state, smart_reason = smart.read_smart_charging(
         str(root / "volvo-smart-charging.json"), now=now,
         expected_vin_sha256=vin_hash)
+    volvo = _json_file(root / "volvo-smart-charging.json")
+    battery = smart.verified_battery_observation(
+        volvo.get("battery_readonly") if volvo else None,
+        now=now, expected_vin_sha256=vin_hash)
     try:
         manual = ownership.read_manual_intent(
             "/run/solinteg/ev-manual-intent.json", now=now)
@@ -110,6 +114,7 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
              if session is not None else None)
     checks = {
         "volvo_smart_charging_explicitly_off": smart_state == "off",
+        "fresh_chronos_battery_sample_observed": battery is not None,
         "independently_calibrated_fresh_ev_session": session is not None,
         "lossless_manual_stop_source_verified": manual_ok,
         "fresh_consistent_evcc_fc03": _evcc_usable(evcc, now),
@@ -144,6 +149,13 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
         "checks": checks,
         "volvo_smart_charging": smart_state,
         "volvo_gate_reason": smart_reason,
+        "volvo_battery": {
+            "sampled_at_utc": battery["battery_sampled_at_utc"],
+            "soc_pct": battery["soc_pct"],
+            "charging_status": battery["charging_status_v2"],
+            "manual_stop_lossless": False,
+            "metered_ev_energy_available": False,
+        } if battery else None,
         "evcc_observed_state": evcc.get("state") if evcc else None,
         "price_mode": session["charge_mode"] if session else None,
         "planning_advisory": planning,

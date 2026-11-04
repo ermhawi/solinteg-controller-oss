@@ -41,6 +41,32 @@ def sample(enabled=False):
     }
 
 
+def battery_sample(**changes):
+    data = {
+        "source": "chronos_get_latest_battery_readonly",
+        "captured_utc": NOW.isoformat(),
+        "battery_sampled_at_utc": (NOW - timedelta(seconds=50)).isoformat(),
+        "target_vin_sha256": VIN_HASH,
+        "soc_pct": 64,
+        "charging_status_v2": "charging",
+        "charging_power_w": 1386,
+        "charging_current_a": 6,
+        "charging_voltage_v": 231,
+        "charger_power_status_code": 4,
+        "connection_status_code": 1,
+        "observation_quality": "chronos_reported_sample_time_not_meter_calibration",
+        "device_writes": 0,
+        "charge_now_override": {
+            "action": "not_applicable", "override_state": "not_active",
+            "manual_stop_proven": False,
+        },
+        "raw_vin": "PRIVATE-IDENTIFIER-DO-NOT-PUBLISH",
+        "access_token": "PRIVATE-SECRET-DO-NOT-PUBLISH",
+    }
+    data.update(changes)
+    return data
+
+
 class PublishTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -72,6 +98,37 @@ class PublishTests(unittest.TestCase):
         self.assertNotIn("departure", text.replace("departure_times", ""))
         self.assertEqual(json.loads(text)["chronos"]["locations"]["locations"][0]
                          ["optimized_charging_enabled"], False)
+
+    def test_fresh_chronos_battery_report_is_allowlisted_not_an_intent_source(self):
+        source = sample()
+        source["battery_readonly"] = battery_sample()
+        self.write_source(source)
+        self.assertEqual(self.publish()["state"], "off")
+        published = json.loads(self.target.read_text())
+        battery = published["battery_readonly"]
+        self.assertEqual(battery["soc_pct"], 64)
+        self.assertEqual(battery["charging_status_v2"], "charging")
+        self.assertFalse(battery["manual_stop_lossless"])
+        self.assertFalse(battery["metered_ev_energy_available"])
+        self.assertFalse(battery["charge_now_override"]["manual_stop_proven"])
+        self.assertNotIn("PRIVATE-IDENTIFIER", self.target.read_text())
+        self.assertNotIn("PRIVATE-SECRET", self.target.read_text())
+
+    def test_mismatched_or_stale_optional_battery_is_omitted_not_promoted(self):
+        for changed in (
+            {"target_vin_sha256": "b" * 64},
+            {"battery_sampled_at_utc": (NOW - timedelta(seconds=301)).isoformat()},
+            {"soc_pct": 110},
+            {"device_writes": 1},
+            {"charging_status_v2": "user_manually_paused"},
+            {"observation_quality": "inferred_from_ha_field_change"},
+        ):
+            source = sample()
+            source["battery_readonly"] = battery_sample(**changed)
+            self.write_source(source)
+            with self.subTest(changed=changed):
+                self.assertEqual(self.publish()["state"], "off")
+                self.assertNotIn("battery_readonly", json.loads(self.target.read_text()))
 
     def test_on_overwrites_prior_off_and_blocks_price_control(self):
         self.publish()

@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
-from ev_volvo_smart_charging import read_smart_charging  # noqa: E402
+from ev_volvo_smart_charging import (  # noqa: E402
+    read_smart_charging, verified_battery_observation,
+)
 
 DESTINATION = Path("/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json")
 MAX_BYTES = 65536
@@ -93,6 +95,12 @@ def publish(source: Path, destination: Path, *, expected_vin_sha256: str,
             "pending_amp_limit": chronos.get("pending_amp_limit"),
         },
     }
+
+    battery = verified_battery_observation(
+        data.get("battery_readonly"), now=now,
+        expected_vin_sha256=expected_vin_sha256)
+    if battery is not None:
+        slim["battery_readonly"] = battery
 
     if not destination.parent.is_dir() or destination.is_symlink():
         raise ValueError("invalid Volvo runtime destination")

@@ -87,6 +87,33 @@ och EVCC-prisstyrning spärras automatiskt. Återställning:
 kWh-session, manuell stoppdetektion och fysiska EVCC-prov är godkända.
 Inga fordons-/EVCC-/inverterskrivningar gjordes i Volvo-integrationen.
 
+**Volvo BMS-/appstatus, endast skrivskyddad komplettering (2026-11-04):**
+Den befintliga DPoP/Chronos femminutersinsamlingen hämtar nu via
+`VOLVO_READONLY_BATTERY_ENABLED=1` även
+`GetLatestBattery` och `GetEnabledOverrideChargeTimerAction`.
+Den nya privata `volvo_battery_read_only.py` kräver matchande
+VIN och max 300 s gammalt faktiskt rapporterat BMS-prov.
+Exportören återger enbart tillåtna fält under
+`volvo-smart-charging.json:battery_readonly`; felaktigt/gammalt
+prov utelämnas medan Smart Charging-avläsningen fortsätter.
+`ChargeNow`-override är **inte** en detektor för manuellt stopp;
+`manual_stop_lossless=false` och
+`metered_ev_energy_available=false` följer alltid.
+Den uppmätta BMS-tidsstämpeln varierade från 52 till 462 s gammal
+under två verifierade liveprov, så den får inte antas färsk.
+Tillägget är **driftsatt på Dell i den befintliga tjänsten**, inte
+i EVCC-priscontrollern. Första uppföljande systemd-körning gav
+`Result=success`, `refreshed=true`, Smart Charging `off`,
+`device_writes=0`. Batteri-RPC gav för gammalt prov
+(`ValueError`), så `battery_readonly` **utelämnades korrekt**.
+Byteexakt original och SHA-manifest för de tre ändrade
+installationsfilerna finns i rootägd katalog
+`/var/lib/solinteg-evshadow-rollback/volvo-bms-readonly-20261104/`
+med mode `0700`. Timern återstartades och är fortsatt `enabled/active`.
+Samma tjänsts roller, sekretess och femminuterstimer gäller;
+ingen ny tjänst och **ingen EVCC-skrivning**.
+Se [Volvo-/EVCC-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
 **Ny EVCC-prisaktiverings-preflight (2026-11-04, enbart kod):**
 `scripts/tools/ev_price_activation_preflight.py` kontrollerar i
 **read-only** läge Volvos färska `off`, strikt kalibrerad

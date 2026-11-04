@@ -607,3 +607,73 @@ Periodisk FC03 kan missa en kort ur-/inkoppling och säger
 inget om manuella stopp i Volvo-appen. Den separata förlustfria
 manuell-intent-grinden är därför **oförändrat obligatorisk**.
 [Separat detalj- och rollbackrunbook](../evcc-cable-tracking-2026-11-04.md).
+
+### Volvo-appens manuella stopp och BMS-prov (2026-11-04, nytt delsteg)
+
+Den dekompilerade Volvo Cars 7.5.0-klienten och en ny **enbart
+skrivskyddad** livekontroll av `ChargeNowService/
+GetEnabledOverrideChargeTimerAction` gav
+`status=1`, `enabled_action=3 (NOT_APPLICABLE)` och
+`override_timer_state=1 (NOT_ACTIVE)`. Det betyder att
+ingen *Charge now*-överstyrning är aktiv för den aktuella bilen,
+**inte** att ett manuellt stopp har detekterats eller att man
+säkert kan återstarta EVCC. Dekompilerade `StopCharging`-anrop
+återfanns i den offentliga laddningstjänsten/Volvo Wallbox-koden,
+inte som en verifierad lokal XC40-stopp-händelseström.
+Publik Volvo-support beskriver också fjärrstopp separat för
+Wallbox och publika laddare. Vi kan **inte** dra slutsatsen att
+alla möjliga bilstopp är omöjliga eller att appens faktiska
+beteende är täckt.
+
+En ytterligare read-only mobilapp-DPoP-förfrågan till
+`BatteryService/GetLatestBattery` gav 64 % SoC,
+`CHARGING`, 6 A, 231 V och 1 386 W med separat rapporterad
+`Battery.timestamp` **52 sekunder gammal**. En senare
+observation av samma serverbaserade BMS-stämpel var **462 sekunder
+gammal** trots fortsatt status `CHARGING`. Vi inför därför
+ingen falsk kontinuitetsgaranti. `volvo_battery_read_only.py`
+(private, ej Git) kräver VIN-match, ändamålsenlig protobuf,
+rimlig SoC och **max 300 s gammal** batteritidsstämpel.
+Valfri `VOLVO_READONLY_BATTERY_ENABLED=1` utnyttjar den
+**redan existerande** femminuters OAuth/Chronos-tjänsten; ytterligare
+Battery/ChargeNow RPC är båda enbart läsningar. Om tillägget
+misslyckas fortsätter tidigare verifierad Smart Charging-status
+att uppdateras, men det äldre BMS-provet publiceras inte.
+
+Den publika root-ägda statusexportören `publish_ev_volvo_smart_charging.py`
+har nu en extra **valfri fältallowlist** som kan lägga
+`battery_readonly` i samma privata status-JSON (mode 0600).
+Verifieringen kräver source, VIN-SHA256, observerad tid,
+batteriprovtid, giltig SoC och `device_writes=0`; giltiga
+statusfält saneras och återskapas, extra metadata/tokens eller
+rått VIN släpps inte igenom. `manual_stop_lossless=false`
+och `metered_ev_energy_available=false` skrivs explicit.
+Stale eller ogiltigt BMS-prov **utelämnas** utan att
+Smart Charging-statusen skrivs om till påhittat värde.
+`ev_price_activation_preflight.py` redovisar dessa villkor
+separat som `fresh_chronos_battery_sample_observed`;
+godkänt test är **inte** en ersättning för kalibrerad kWh eller
+förlustfri app-/manuell-intent-källa.
+
+**NO-GO oförändrat för fysisk EVCC-prisstyrning:** en äkta
+AC-kWh-referens, en verifierad session/tidsstämplad SoC-serie,
+säker detektion eller särskilt godkänt sessionellt
+samtycke vid manuellt Volvo-stopp och kontrollerade
+FC10-pauser/återstarter kvarstår. Enbart Volvo-statusläsningen
+får aktiveras. 1 526 Python-tester och 25 privata tester OK,
+alla utan EVCC/Volvo/inverter-skrivkommando.
+
+**Driftkontroll:** Efter en byteexakt SHA-kontroll av tre installerade
+filer stoppades endast Volvo-status-timern tillfälligt. De tre
+filerna uppdaterades atomiskt och originalen med manifest sparades i
+`/var/lib/solinteg-evshadow-rollback/volvo-bms-readonly-20261104/`
+(rootägt, katalog `0700`). `systemd-analyze verify` godkände
+servicen; timern återstartades och är `enabled/active`.
+Den första manuella servicekörningen gav `Result=success`,
+`refreshed=true`, Smart Charging `off`, `device_writes=0`.
+Det kompletterande BMS-anropet avvisades som `ValueError` när
+provtiden var över 300 s gammal; `battery_readonly` saknas därför
+i den filtrerade runtimefilen vid denna kontroll. Detta är ett
+**förväntat fail-closed-utfall**, inte ett lyckat färskt BMS-prov.
+`solinteg-ev-price-controller.service` är fortsatt `not-found`.
+Ingen EVCC-, bil- eller inverterstyrning ändrades.

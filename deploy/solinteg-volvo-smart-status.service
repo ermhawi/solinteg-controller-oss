@@ -8,6 +8,8 @@ Type=oneshot
 User=hakan
 Group=hakan
 EnvironmentFile=/etc/solinteg/volvo-smart-status.env
+# Adds only read-only GetLatestBattery/ChargeNow to the existing authenticated poll.
+Environment=VOLVO_READONLY_BATTERY_ENABLED=1
 ExecStart=/home/hakan/.local/share/volvo-smartcharging-oauth/.venv/bin/python -B /home/hakan/.local/share/volvo-smartcharging-oauth/smart_schedule_refresh.py
 ExecStartPost=!/usr/bin/python3 -B /usr/local/lib/solinteg-volvo-smart-status/tools/publish_ev_volvo_smart_charging.py --source /home/hakan/.local/share/volvo-smartcharging-oauth/smart-schedule-current-readonly.json
 UMask=0077

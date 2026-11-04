@@ -74,9 +74,14 @@ EVCC-/bil-/inverterkommandon. Endast när
    är därför fortsatt blockerande för automatisk återstart.
 
 30 sekunders polling kan missa en mycket kort ur-/inkoppling,
-därför används **aldrig** `lossless=true`. Säkrare framtida
-implementation kan behöva fysisk händelsekälla eller ett
-explicit ny-session-samtycke för att möta kravet på app-manualstopp.
+därför används **aldrig** `lossless=true`. Volvos egen
+[XC40-laddningsmanual](https://www.volvocars.com/se/support/car/xc40-recharge-pure-electric/21w22/article/47d2c97fd33effd3c0a8cc3718c999b7-a27aa276ce5ec813c0a8b04a2b2eb5e5-8664b2fa77a7e089c0a8296870d1a409/47d2c97fd33effd3c0a8cc3718c999b7-455a36edef2fc9f4c0a8b08a64080ac4-8664b2fa77a7e089c0a8296870d1a409/9270e2c3a351b0f1c0a8b04a16c5119e-0bd61e02a350d231c0a8b04a7cae8b2b-8664b2fa77a7e089c0a8296870d1a409/)
+beskriver dessutom **ur-/återkoppling inom tre sekunder** för
+att åsidosätta ett aktivt laddningsschema. En sådan övergång
+kan inte garanterat observeras med vår 30-sekunderspollning.
+Säkrare framtida implementation kan behöva fysisk händelsekälla
+eller ett explicit ny-session-samtycke för att möta kravet på
+app-manualstopp och kabelstyrt åsidosättande.
 
 ## Verifiering och driftsättning
 

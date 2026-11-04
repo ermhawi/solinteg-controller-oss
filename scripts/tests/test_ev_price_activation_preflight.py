@@ -64,6 +64,27 @@ class ReadinessTests(unittest.TestCase):
             "charge_mode": "deadline",
             "departure_local_time": "07:00",
         })
+        self._write("volvo-smart-charging.json", {
+            "battery_readonly": {
+                "source": "chronos_get_latest_battery_readonly",
+                "captured_utc": NOW.isoformat(),
+                "battery_sampled_at_utc": (NOW - timedelta(seconds=50)).isoformat(),
+                "target_vin_sha256": "a" * 64,
+                "soc_pct": 64,
+                "charging_status_v2": "charging",
+                "charging_power_w": 1386,
+                "charging_current_a": 6,
+                "charging_voltage_v": 231,
+                "charger_power_status_code": 4,
+                "connection_status_code": 1,
+                "observation_quality": "chronos_reported_sample_time_not_meter_calibration",
+                "charge_now_override": {
+                    "action": "not_applicable", "override_state": "not_active",
+                    "manual_stop_proven": False,
+                },
+                "device_writes": 0,
+            },
+        })
         self.session = {
             "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "connection_epoch": 1,
@@ -166,6 +187,30 @@ class ReadinessTests(unittest.TestCase):
         })
         self.assertEqual(self.inspect()["planning_advisory"],
                          {"quality": "unverified_display_only"})
+
+    def test_chronos_sample_is_fresh_but_not_manual_intent_or_energy_meter(self):
+        result = self.inspect(session=self.session, manual=self.manual)
+        self.assertTrue(result["checks"]["fresh_chronos_battery_sample_observed"])
+        self.assertEqual(result["volvo_battery"]["soc_pct"], 64)
+        self.assertEqual(result["volvo_battery"]["charging_status"], "charging")
+        self.assertFalse(result["volvo_battery"]["manual_stop_lossless"])
+        self.assertFalse(result["volvo_battery"]["metered_ev_energy_available"])
+
+    def test_stale_bms_timestamp_or_wrong_vehicle_blocks_chronos_evidence(self):
+        baseline = json.loads((self.root / "volvo-smart-charging.json").read_text())
+        for change in (
+            {"battery_sampled_at_utc": (NOW - timedelta(seconds=301)).isoformat()},
+            {"target_vin_sha256": "b" * 64},
+            {"soc_pct": -1},
+            {"charging_status_v2": "manually_stopped"},
+        ):
+            with self.subTest(change=change):
+                item = json.loads(json.dumps(baseline))
+                item["battery_readonly"].update(change)
+                self._write("volvo-smart-charging.json", item)
+                result = self.inspect(session=self.session, manual=self.manual)
+                self.assertFalse(result["checks"]["fresh_chronos_battery_sample_observed"])
+                self.assertIsNone(result["volvo_battery"])
 
     def test_cable_disconnected_or_tracker_missing_is_not_ready(self):
         path = self.root / "evcc-cable-state.json"
