@@ -100,6 +100,60 @@ aldrig direkt över `/opt/solinteg/app` eller `/etc/systemd/system`.
 Den lokalt behållna fulla kopian är inte separat start- eller
 restaureringstestad i denna åtgärd.
 
+## Uppföljande EV-shadow-avveckling 2026-11-04
+
+Användaren valde att behålla endast **faktiska mätkällor för live**
+och avveckla de separata shadow-tjänsterna. USB-monteringen
+verifierades som `/dev/sdb1`, NTFS/`fuseblk`, och en ny GPG
+AES256-krypterad leverans skapades:
+
+```text
+/mnt/media-stack/archive/solinteg/2026-11-04-ev-shadow-retirement/
+  ev-shadow-units-and-source.tar.gpg
+  MANIFEST.json
+  SHA256SUMS
+  README.txt
+```
+
+**SHA-256** för arkivet:
+`c3be49228b6e777b5c11780cd15ad664b4c6b6fa43f04e16b8194846ad5a4b67`.
+
+Manifestet omfattar **13 filer**: fem installerade EV-shadow-/legacy
+watchdog-systemd-enheter, fem separata rootägda observationsmoduler,
+en inaktiv EV-shadow-planerare, historiktjänstens tidigare unitfil
+och den historiska privata shadow-JSON:en. GPG-dekryptering lyckades;
+**samtliga 13 filer återlästes byteexakt** och SHA kontrollerades innan
+något togs bort. Enligt arkivpolicyn ligger endast krypterad data
+på USB, ingen klartextnyckel. Lokal rootägda nyckelfil och
+tidigare verifierad extern Bitwarden-kopia rördes inte.
+
+Efter verifierad `inactive/disabled`/ej beroende av annan enhet
+avinstallerades följande **fem** unitfiler:
+
+- `solinteg-ev-grid-solar-shadow.service/.timer`
+- `solinteg-ev-shadow.service`
+- `solinteg-ev-grid-priority-watchdog.service/.timer`
+
+Fem inaktiva rootmoduler under
+`/usr/local/libexec/solinteg-ev-grid-solar-shadow`, den inaktiva
+`ev_shadow_planner.py` och dess gamla output-JSON avvecklades också.
+Exakt **tolv** filer togs bort och rootkatalogen raderades efter
+fil-/SHA-kontroll. `solinteg-ev-history.service` har enbart fått
+sitt gamla `After=... solinteg-ev-shadow.service` borttaget och
+`systemctl daemon-reload` kördes **utan** att starta om historiken.
+En terminal rootägd statusfil bevarades:
+
+`/var/lib/solinteg-evshadow-rollback/ev-shadow-retirement-20261104.status.json`.
+
+**Bevarat och aktivt:** `solinteg-ev-observer` (Waveshare/EVCC-Ict2),
+`solinteg-ev-history` (synkron historik), `solinteg-ev-ha` (Volvo),
+live-dispatch, poller, broker och vanlig watchdog. De behövs för
+mätning och uppföljning, **inte för parallell shadow-styrning**.
+Äldre rootgrind/tombstones och nödvändig lokal rollback ligger kvar;
+okänt/operatörsägt material raderades inte.
+
+Se [aktuell ADR för EV/L3 live och panel](architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md).
+
 ## Definition of Done för kommande engångsprov
 
 **Agentansvar enligt engineering-standards v1.3.0:** följ

@@ -5,6 +5,7 @@ import type { InverterLiveData } from '@/lib/inverter';
 import { INVERTER_STATUS_TEXT } from '@/lib/inverter-api-status';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { FLOW_THRESHOLD_W } from '@/lib/power-flow';
+import { carSupplyBounds, carSupplyRoute, houseWithoutCarW } from '@/lib/evcc-car-flow';
 import FlowConnector from './FlowConnector';
 import type { Pt } from './FlowConnector';
 
@@ -13,7 +14,7 @@ import type { Pt } from './FlowConnector';
 // so the whole diagram scales down uniformly with the SVG's own viewBox scaling instead of
 // overflowing the card on narrow viewports (this card can render well under 360px wide).
 const DESIGN_W = 360;
-const DESIGN_H = 284;
+const DESIGN_H = 396;
 const NODE_W = 80;
 const NODE_H = 66;
 
@@ -113,6 +114,18 @@ const GridIcon = (
   </svg>
 );
 
+const CarIcon = (
+  <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%' }}>
+    <g fill="none" stroke="currentColor" strokeWidth={7} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 59 L25 37 Q28 29 38 29 H62 Q72 29 75 37 L84 59" />
+      <path d="M15 58 H85 V75 Q85 81 78 81 H22 Q15 81 15 75 Z" />
+      <circle cx="29" cy="68" r="5" fill="currentColor" stroke="none" />
+      <circle cx="71" cy="68" r="5" fill="currentColor" stroke="none" />
+      <path d="M26 43 H74 M24 81 V89 M76 81 V89" />
+    </g>
+  </svg>
+);
+
 function CardChrome({ children, live = true }: { children: React.ReactNode; live?: boolean }) {
   return (
     <div
@@ -181,8 +194,12 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
     );
   }
 
+  const car = data.evcc_car ?? null;
+  const carBounds = carSupplyBounds(car, data.meter_l3_w);
+  const carRoute = carSupplyRoute(carBounds);
+  const houseW = houseWithoutCarW(data.house_load_w, car);
   const solarActive = data.pv_w > FLOW_THRESHOLD_W;
-  const houseActive = data.house_load_w > FLOW_THRESHOLD_W;
+  const houseActive = houseW > FLOW_THRESHOLD_W;
   const batteryCharging = data.battery_w < -FLOW_THRESHOLD_W;
   const batteryDischarging = data.battery_w > FLOW_THRESHOLD_W;
   const batteryActive = batteryCharging || batteryDischarging;
@@ -190,6 +207,9 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
   const importing = data.grid_w < -FLOW_THRESHOLD_W;
   const gridActive = exporting || importing;
   const gridColor = importing ? 'var(--flow-red)' : 'var(--flow-sky)';
+  const carCharging = car?.charging === true;
+  const carValue = carCharging && car.powerEstimateW !== null ? kw(car.powerEstimateW)
+    : car?.connected ? 'Ansluten' : car ? 'Ej ansluten' : 'Okänt';
 
   // Solar -> House always flows downward (a panel can't draw power); House <-> Battery and
   // House <-> Grid reverse direction on discharge/import.
@@ -199,6 +219,10 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
   const batPt: Pt = [108, 209];
   const husGrid: Pt = [210, 183];
   const gridPt: Pt = [252, 209];
+  const houseCar: Pt = [180, 184];
+  const carFromHouse: Pt = [180, 308];
+  const gridCar: Pt = [285, 277];
+  const carFromGrid: Pt = [221, 339];
   const [bFrom, bTo] = batteryDischarging ? [batPt, husBat] : [husBat, batPt];
   const [gFrom, gTo] = importing ? [gridPt, husGrid] : [husGrid, gridPt];
 
@@ -208,7 +232,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
         {expanded ? 'Dölj flöde och batterihälsa' : 'Visa flöde och batterihälsa'}
       </button>
       <div className={expanded ? 'block' : 'hidden min-[700px]:block'}>
-      {/* Fixed 360x284 design, scaled down uniformly (via aspect-ratio + %-based FlowNode
+      {/* Fixed 360x396 design, scaled down uniformly (via aspect-ratio + %-based FlowNode
           positions, both keyed off DESIGN_W/DESIGN_H) below that width instead of overflowing —
           this card can be well under 360px wide on a phone once the page's own padding is
           subtracted. Above 360px (desktop) it renders at the exact original pixel design,
@@ -225,6 +249,10 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
           <FlowConnector from={solA} to={solB} color="var(--flow-solar)" active={solarActive} />
           <FlowConnector from={bFrom} to={bTo} color="var(--flow-battery)" active={batteryActive} />
           <FlowConnector from={gFrom} to={gTo} color={gridColor} active={gridActive} />
+          <FlowConnector from={houseCar} to={carFromHouse} color="var(--flow-battery)"
+            active={carRoute === 'local'} />
+          <FlowConnector from={gridCar} to={carFromGrid} color="var(--flow-red)"
+            active={carRoute === 'grid'} />
         </svg>
 
         <FlowNode
@@ -241,7 +269,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
           top={116}
           icon={HouseIcon}
           label="Hus"
-          value={houseActive ? kw(data.house_load_w) : 'Vilar'}
+          value={houseActive ? kw(houseW) : 'Vilar'}
           active={houseActive}
           color="var(--flow-house-accent)"
         />
@@ -263,6 +291,30 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
           active={gridActive}
           color={gridColor}
         />
+        <FlowNode
+          left={140}
+          top={310}
+          icon={CarIcon}
+          label="Bil"
+          value={carValue}
+          active={carCharging}
+          color="var(--flow-house-accent)"
+        />
+      </div>
+      <div className="px-5 pb-2 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+        {carBounds ? (
+          <>
+            <div className="flex flex-wrap justify-between gap-x-3 gap-y-1 font-semibold">
+              <span>{carRoute === 'grid' ? 'Nät → Bil · indikativt' : 'Hus/sol → Bil · lokalt bidrag'}</span>
+              <span>{kw(carBounds.powerEstimateW)}</span>
+            </div>
+            <p className="mt-1">L3-netto: nät högst {kw(carBounds.gridToCarUpperW)}, lokalt minst {kw(carBounds.localToCarLowerW)}. Endast en indikator är aktiv; faktisk energikälla kan vara blandad.</p>
+          </>
+        ) : (
+          <p>{carCharging ? 'Ingen tillförlitlig L3-mätning för bilens energiväg.'
+            : car?.connected ? 'Bilen ansluten, ingen verifierad laddström.'
+              : car ? 'Bilen är inte ansluten.' : 'Bilens mätdata saknas eller är för gammal.'}</p>
+        )}
       </div>
 
       <div style={{ height: 1, background: 'var(--divider)' }} />

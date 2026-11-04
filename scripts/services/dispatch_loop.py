@@ -275,6 +275,7 @@ import common  # sibling module (scripts/services/) — script dir is sys.path[0
 from l3_battery_policy import observe_l3, suggest_battery_target
 from modbus_broker_stale_policy import assess_stale_dispatch
 from ev_grid_priority_guard import guard_dispatch as guard_ev_grid_priority
+from ev_l3_live_dispatch import coordinate as coordinate_ev_grid_live
 from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
@@ -2111,6 +2112,14 @@ def main() -> None:
             # to General's automatic discharge when clouds arrive. Disabled until approved.
             action, power_w, expected_soc_kwh, solar_skip, detail, numbers = capture_battery_save_solar(
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
+            # Live EV solar capture uses the existing broker writer. It runs after
+            # SoC recovery and the older guards, and never commands the EVSE.
+            try:
+                action, power_w, expected_soc_kwh, solar_skip, detail, numbers = coordinate_ev_grid_live(
+                    action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now,
+                    live_path=Path(LIVE_JSON_PATH), read_json=common.read_json)
+            except Exception as exc:  # noqa: BLE001 — preserve the original dispatch on bad EV telemetry
+                log.warning("EV/L3 live coordination unavailable (%s) — original dispatch retained", exc)
             # Independent charge-side guard runs last, so it can cap a high charge
             # recommended by either the optimizer or L3 battery coordination.
             # Missing/old phase data never means spare L3 capacity.

@@ -1,9 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { connection } from 'next/server';
 import { BATTERY_KWH } from './constants';
+import { parseEvccCarState } from './evcc-car-flow';
+import type { EvccCarState } from './evcc-car-flow';
 
 const DATA_PATH = process.env.INVERTER_DATA_PATH ?? '/opt/solinteg/live.json';
 const STALE_MS = 2 * 60 * 1000;
+const EVCC_PATH = process.env.EVCC_READONLY_PATH ?? '/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json';
 
 export interface InverterLiveData {
   timestamp: string;
@@ -18,6 +21,8 @@ export interface InverterLiveData {
   house_load_w: number; // derived: inverter_ac_w - grid_w
   work_mode: string; // e.g. "General", "EMS BattCtrl"
   work_mode_raw: number;
+  meter_l3_w?: number; // signed CT: + export, - import; may be unavailable
+  evcc_car?: EvccCarState; // independently validated, current-only EVCC FC03 observation
 }
 
 /** True if `data` has every InverterLiveData field with the expected type. Guards against a
@@ -51,7 +56,14 @@ export async function readLiveInverterData(): Promise<InverterLiveData | null> {
     if (!isValidInverterLiveData(data)) return null;
     const age = Date.now() - new Date(data.timestamp).getTime();
     if (age > STALE_MS) return null;
-    return data;
+    // Optional EVCC observation. Missing/stale EVCC must not blank inverter or optimizer data.
+    try {
+      const evcc: unknown = JSON.parse(await readFile(EVCC_PATH, 'utf-8'));
+      const car = parseEvccCarState(evcc, Date.now());
+      return car ? { ...data, evcc_car: car } : data;
+    } catch {
+      return data;
+    }
   } catch {
     return null;
   }

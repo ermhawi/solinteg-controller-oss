@@ -1,6 +1,8 @@
 # EV/L3-lastbalansering: kod, dokumentation och Dell-drift (2026-11-04)
 
-**Status: produktionsaktivering av EV-nätprioritet = NO-GO.** Skrivskyddad inventering och historisk återspelning genomförda; ingen tjänst, env, gate, hårdvaruregister eller laddboxinställning ändrades. Detta är ett aktuellt driftkomplement till [EV-releasehistoriken](ev-grid-priority-permanent-2026-10-29.md), [designspecifikationen](superpowers/specs/2026-10-19-smart-ev-charging-design.md) och [brokerreleasen](modbus-broker-transactions-release-2026-11-04.md). Äldre daterade driftpåståenden gäller endast sina angivna kontrolltidpunkter.
+**Nyare driftstatus 2026-11-04 ca 12:50 CET:** Denna inventering är en historisk baslinje. Ett begränsat **live EV/L3-läge** via befintlig dispatcher och Modbus-broker är aktiverat; Systemstatus visar separat bil, och fem gamla shadow-enheter har arkiverats krypterat och avvecklats. Verifierad fysisk 100 % nätfinansiering saknas fortfarande. Se [ny ADR med nuvarande drift och rollback](architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md).
+
+**Historiskt utgångsläge för denna granskning:** Skrivskyddad inventering och historisk återspelning genomförda; ingen tjänst, env, gate, hårdvaruregister eller laddboxinställning ändrades. Detta är ett aktuellt driftkomplement till [EV-releasehistoriken](ev-grid-priority-permanent-2026-10-29.md), [designspecifikationen](superpowers/specs/2026-10-19-smart-ev-charging-design.md) och [brokerreleasen](modbus-broker-transactions-release-2026-11-04.md). Äldre daterade driftpåståenden gäller endast sina angivna kontrolltidpunkter.
 
 ## 1. Dokumentationspreflight: faktiskt nuläge kontra källkod
 

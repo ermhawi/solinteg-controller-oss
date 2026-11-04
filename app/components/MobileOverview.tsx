@@ -4,6 +4,7 @@ import { useRef } from 'react';
 import type { InverterLiveData } from '@/lib/inverter';
 import type { InverterApiStatus } from '@/lib/inverter-api-status';
 import { powerFlowDirection } from '@/lib/power-flow';
+import { carSupplyBounds, carSupplyRoute, houseWithoutCarW } from '@/lib/evcc-car-flow';
 import type { PowerFlowDirection } from '@/lib/power-flow';
 import { MOBILE_FLOW_HEIGHT, mobileFlowLayout, mobileFlowSegments } from '@/lib/mobile-flow-geometry';
 import FlowConnector from './FlowConnector';
@@ -79,6 +80,10 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
   const batteryFlow = data ? powerFlowDirection('battery', data.battery_w) : null;
   const gridFlow = data ? powerFlowDirection('grid', data.grid_w) : null;
   const noData = 'Ingen aktuell data';
+  const car = data?.evcc_car ?? null;
+  const carBounds = carSupplyBounds(car, data?.meter_l3_w);
+  const carRoute = carSupplyRoute(carBounds);
+  const houseW = data ? houseWithoutCarW(data.house_load_w, car) : null;
 
   return (
     <section className="card-surface order-0 min-w-0 p-3.5 min-[700px]:hidden" aria-label="Energiöversikt">
@@ -90,7 +95,7 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
       </div>
       <div ref={gridRef} className="relative grid grid-cols-2 gap-x-6"
         style={{ gridTemplateRows: `repeat(2, ${layout.tileHeight}px)`, rowGap: layout.rowGap }}>
-        <Metric label="Huset" width={layout.cardWidth} value={data ? power(data.house_load_w) : '–'}
+        <Metric label="Huset" width={layout.cardWidth} value={houseW !== null ? power(houseW) : '–'}
           detail={data ? 'Förbrukning' : noData} />
         <Metric label="Sol" width={layout.cardWidth} value={data ? power(data.pv_w) : '–'}
           detail={data ? (solarFlow ? 'Produktion' : 'Ingen produktion') : noData}
@@ -102,6 +107,22 @@ export default function MobileOverview({ data, status }: { data: InverterLiveDat
           detail={data ? (gridFlow?.state ?? 'I balans') : noData}
           color={gridFlow?.state === 'Import' ? 'var(--flow-red)' : 'var(--flow-sky)'} right />
         <FlowNetwork width={width ?? 258} flows={{ solar: solarFlow, battery: batteryFlow, grid: gridFlow }} />
+      </div>
+      <div className="mt-3 rounded-xl px-3 py-2 text-[12px]" style={{ background: 'var(--badge-bg)' }}>
+        <div className="flex items-center justify-between gap-3 font-semibold">
+          <span>Bil</span>
+          <span>{car?.charging && car.powerEstimateW !== null ? power(car.powerEstimateW)
+            : car?.connected ? 'Ansluten – väntar' : car ? 'Ej ansluten' : noData}</span>
+        </div>
+        {carBounds && (
+          <>
+            <div className="mt-1 flex flex-wrap justify-between gap-x-3 gap-y-1 font-semibold">
+              <span>{carRoute === 'grid' ? 'Nät → Bil · indikativt' : 'Hus/sol → Bil · lokalt bidrag'}</span>
+              <span>{power(carBounds.powerEstimateW)}</span>
+            </div>
+            <p className="mt-1" style={{ color: 'var(--text-muted)' }}>Nät högst {power(carBounds.gridToCarUpperW)}, lokalt minst {power(carBounds.localToCarLowerW)}. Exklusiv statusindikator, inte uppmätt energikälla.</p>
+          </>
+        )}
       </div>
     </section>
   );

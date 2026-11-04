@@ -1,5 +1,24 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**Dell – EV/L3 live och Systemstatus 2026-11-04 (nyare än de historiska avsnitten nedan):**
+Se [aktuell implementering, test, driftsbevis och rollback](../docs/architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md).
+`DISPATCH_EV_GRID_LIVE=1` är driftsatt via den **befintliga** dispatchern
+och Modbus-brokern. EVCC Ict2 separeras från huset i liveregleringen
+och i Systemstatus; bilens pilar visas **exklusivt som indikativ status**,
+inte som uppmätt enskild energikälla. Webbserverns Next-bygge måste
+få `NEXT_BASE_PATH=/solinteg`; `/solinteg/api/inverter` är HTTP 200.
+De fem inaktiva separata EV-shadow-enheterna är nu krypterat
+USB-arkiverade och avinstallerade med `daemon-reload`.
+**Behåll** aktiva `solinteg-ev-observer.service`,
+`solinteg-ev-history.service` och `solinteg-ev-ha.service`:
+de är faktiska EVCC-/Volvo-mätkällor för live och monitorering,
+**inte** en autonom parallell styrmodell. Ordinarie watchdog,
+poller och broker kvarstår. Det finns fortfarande ingen garanterad
+fysisk isolering av batteriet från bilen när EMS ligger på 50 W
+eller inverterläget är Auto; följ SoC och verkliga mätvärden.
+Historiska hänvisningar till `solinteg-ev-grid-solar-shadow.timer`
+nedan gäller äldre kontrolltidpunkter, **inte installerat nuläge**.
+
 **Archived one-off pilot cleanup (2026-11-01):** 35 unused deployment/
 rollback snapshots (~9.0 GiB), 22 retired SoC25 systemd units, five
 old root code directories and two obsolete EV-grid-trial units were

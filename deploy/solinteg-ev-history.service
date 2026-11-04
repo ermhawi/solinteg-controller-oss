@@ -1,6 +1,6 @@
 [Unit]
 Description=Solinteg EV / L3 synchronized observation history (READ ONLY)
-After=solinteg-ev-ha.service solinteg-ev-observer.service solinteg-ev-shadow.service
+After=solinteg-ev-ha.service solinteg-ev-observer.service
 
 [Service]
 Type=simple
