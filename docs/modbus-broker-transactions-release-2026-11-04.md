@@ -290,6 +290,13 @@ preprod-/rollbackkatalog
    Inga nya Modbus- eller pollerfel observerades vid
    kontrollen. **Ingen rollback behövdes.**
 
+**Utökad kontroll kl. 08:00:** **14** telemetrimätningar efter
+bytet och **3 av 3** naturliga styråtgärder med `applied`:
+importbegränsning separat bekräftad, därefter både `charge`
+och `discharge` som kompletta transaktioner. Samtliga
+ordinarie tjänster var aktiva utan omstarter, en TCP:502-
+ägare kvarstod och inga nya Modbusfel sågs.
+
 **Återställning:** `rollback.sh --execute` i den skyddade
 preprod-/rollbackkatalogen är redo för ett kontrollerat
 återställningsbeslut och var endast syntax-/torrkörningstestad
@@ -299,6 +306,12 @@ produktion. Den föregående kompletta brokerrollbacken under
 Den root-skyddade releasen behåller `cutover.sh`, terminal
 `CUTOVER_STATUS` och verifierade SHA-256 för dessa samt
 watchdoggens oförändrade systemd-filer.
+**Krypterad arkivkopia:** USB-enheten `/mnt/media-stack`
+(Seagate Expansion, NTFS, verifierat UUID) innehåller
+`archive/solinteg/2026-11-04-broker-transactions/cutover-evidence.tar.zst.gpg`.
+GPG AES256, SHA-256 och full återläsning till en isolerad
+katalog med bytejämförelse mot originalet är **godkända**.
+Den lokala rollbackkatalogen behålls för snabb återställning.
 
 **Återstår:** 24–72 timmars uppföljning av faktisk normaldrift,
 inklusive väntetider för pollern under längre transaktioner,
