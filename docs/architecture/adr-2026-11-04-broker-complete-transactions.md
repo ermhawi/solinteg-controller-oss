@@ -1,8 +1,11 @@
 # ADR 2026-11-04: hela styrsekvenser i Modbus-brokerns worker
 
-**Beslut:** Implementerat och offlineverifierat på `Sundsvall` men
-**INTE driftsatt**. Befintlig Dell-produktion fortsätter använda
-`SOLINTEG_MODBUS_SOURCE=broker` och separata FC03/FC06-IPC-anrop.
+**Beslut:** Implementerat, offlineverifierat och **DRIFTSATT** på Dell
+**2026-11-04 kl. 07:53:55 CET**. Dispatchern kör nu
+`SOLINTEG_MODBUS_SOURCE=broker_transaction`, med hela
+styrsekvensen i en broker-worker. Första verkliga styrning,
+registerreadback och tre efterföljande pollerprover verifierade;
+se [driftrapport](../modbus-broker-transactions-release-2026-11-04.md).
 
 ## Bakgrund
 

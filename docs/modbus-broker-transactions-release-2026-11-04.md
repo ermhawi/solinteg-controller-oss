@@ -1,11 +1,12 @@
-# Releaseförberedelse: brokerägda hela styrtransaktioner (2026-11-04)
+# Driftsättning: brokerägda hela styrtransaktioner (2026-11-04)
 
-**Status 2026-11-04:** Fullständig preprodverifiering, separerad
-root-skyddad rollbackbackup och isolerat återläsningsprov **GODKÄNDA**;
-**INTE DRIFTSATT**. Befintlig Dell-produktion använder fortfarande
-`SOLINTEG_MODBUS_SOURCE=broker` och brokern accepterar individuella
-FC03/FC06 från dispatcher. Denna release växlar till
-`broker_transaction`, där en worker utför hela registersekvensen.
+**Status 2026-11-04:** **DRIFTSATT på Dell kl. 07:53:55 CET**.
+Preprodverifiering, separat root-skyddad rollbackbackup och isolerat
+återläsningsprov var godkända före bytet. Broker och dispatcher
+använder nu `SOLINTEG_BROKER_TRANSACTIONS_ENABLED=1` respektive
+`SOLINTEG_MODBUS_SOURCE=broker_transaction`. En broker-worker
+utför hela FC03/FC06-styrsekvensen. Verklig styråtgärd och tre
+påföljande pollerprover verifierade; se avsnitt 8.
 
 Beslut:
 [ADR: hela transaktioner, ingen ny fallback](architecture/adr-2026-11-04-broker-complete-transactions.md).
@@ -78,8 +79,8 @@ Verifiera särskilt de nya testerna för:
 
 ## 3. Driftgrindar (GO/NO-GO)
 
-**Ingen automatisk driftsättning i denna uppgift.**
-Innan en operatör godkänner cutover:
+**Historisk GO/NO-GO-lista före bytet 07:53:55 CET.**
+Innan en operatör godkänner en framtida omdriftsättning:
 
 - Nulägets broker/poller/dispatcher/observer/watchdog är
   aktiva utan omstarter; `solinteg-broker-readonly.service`
@@ -103,7 +104,7 @@ Innan en operatör godkänner cutover:
   senast lyckat kontrollutfall, backup- och rollback-ID
   före bytet. Stoppa vid färskhets-/SoC-/nätfel.
 
-## 4. Produktionsbyte – plan, ej utförd
+## 4. Produktionsbyte – genomfört 2026-11-04 kl. 07:53:45–07:53:55 CET
 
 1. Installera de verifierade sex Pythonfilerna som
    `solinteg:solinteg 0644` utan att röra aktiv
@@ -185,7 +186,7 @@ uttryckligen **utanför omfattningen**. Det är en känd
 brist i [normalbroker-ADR](architecture/adr-2026-11-04-broker-legacy-failure-scope.md)
 och blir inte löst av att registersekvenserna körs odelat.
 
-## 7. Genomförd preprodverifiering 2026-11-04 – **ingen aktivering**
+## 7. Historisk preprodverifiering före kl. 07:53 – **ingen aktivering i detta steg**
 
 **Källbas:** `ea2b490242bfecb6529f1bb6cf164382218e0f9c`,
 `origin/Sundsvall`. Separata verifieringskommandon slutfördes
@@ -241,8 +242,67 @@ använder fortsatt `SOLINTEG_MODBUS_SOURCE=broker`,
 inte `broker_transaction`. Watchdoggen och de tidigare
 accepterade failure-brister har inte ändrats.
 
-**Återstår enbart för produktionsbeslutet:** separat
-godkänd cutover, faktisk naturlig transaktionsreadback och
-uppföljning 24–72 h. Backupens återläsning i en separat katalog
-är inte liktydig med testad fysisk systemd-rollback eller
-hårdvaruatomära writes.
+**Vid denna tidpunkt återstod:** separat godkänd cutover,
+naturlig transaktionsreadback och uppföljning 24–72 h.
+Cutover och första liveverifieringen är nu utförda enligt
+avsnitt 8. En isolerad backupåterläsning är inte liktydig med
+testad fysisk systemd-rollback eller hårdvaruatomära writes.
+
+## 8. Genomförd produktionssättning och första liveverifieringen
+
+**Start:** 2026-11-04 kl. **07:53:45 CET**.
+**Slutförd första cutovergrind:** kl. **07:53:55 CET**.
+**Källbas:** `ea2b490` på `Sundsvall`, separat
+preprod-/rollbackkatalog
+`/opt/solinteg/preprod-broker-transactions-ea2b490-20261104`.
+
+1. Preflight, SHA256 och `rollback.sh --check` godkändes på
+   aktiv originalinstallation; SoC **20 %**, mode `0x0303`.
+2. Den gamla dispatchern stoppades först och körde befintlig
+   Auto-återställning. Därefter stoppades broker och poller;
+   **TCP:502 var stängd** före att ny broker startades.
+3. Exakt **sex** verifierade Pythonmoduler kopierades till
+   aktiv tjänstekatalog samt en ny `30-transactions.conf`
+   till var och en av broker och dispatcher.
+   `systemctl daemon-reload` och startordningen
+   **broker → poller → dispatcher** genomfördes.
+   `dispatch_loop.py`, pollerns `broker_legacy`,
+   `watchdog.py`, `solinteg-watchdog.*`, observer och
+   native `52502/52503` lämnades orörda.
+4. Broker, poller, dispatcher och watchdog/observer var
+   aktiva utan omstarter efter bytet. **En** etablerad
+   TCP:502-anslutning ägdes av broker-PID **4054941**.
+   Konfigurationen bekräftades som
+   `SOLINTEG_BROKER_TRANSACTIONS_ENABLED=1` och
+   `SOLINTEG_MODBUS_SOURCE=broker_transaction`,
+   med `DISPATCH_BROKER_STALE_GUARD=0` oförändrad.
+5. **07:53:57** loggade brokern fullföljd
+   `transaction_import_limit` (**10 500 W**).
+   **07:54:07** loggade den fullföljd
+   `transaction_charge` (**300 W**), och dispatcherns
+   första naturliga `charge`-åtgärd fick `applied`.
+   Den befintliga kodens registerreadback utfördes inne
+   i en och samma broker-worker.
+6. **Tre** efterföljande mätningar, kl. **07:54:27–07:55:27**,
+   visade samtliga mode `771` (`0x0303`) med **30,1 s**
+   mellan mätningarna. `live.json`, SQLite och
+   dispatcher-heartbeat var färska; observer var `healthy`.
+   Inga nya Modbus- eller pollerfel observerades vid
+   kontrollen. **Ingen rollback behövdes.**
+
+**Återställning:** `rollback.sh --execute` i den skyddade
+preprod-/rollbackkatalogen är redo för ett kontrollerat
+återställningsbeslut och var endast syntax-/torrkörningstestad
+före produktionsbytet. Den har **inte** exekverats mot aktiv
+produktion. Den föregående kompletta brokerrollbacken under
+`/opt/solinteg/rollback-broker-20261104` är också bevarad.
+Den root-skyddade releasen behåller `cutover.sh`, terminal
+`CUTOVER_STATUS` och verifierade SHA-256 för dessa samt
+watchdoggens oförändrade systemd-filer.
+
+**Återstår:** 24–72 timmars uppföljning av faktisk normaldrift,
+inklusive väntetider för pollern under längre transaktioner,
+förändringar i energiflöde, nya protokollfel, återstarter och
+kontrollåtgärder. Liveverifieringen bevisar inte framtida
+felfrihet eller att halvutförda FC06 kan återställas atomärt.
+Befintliga dokumenterade fel-/watchdogbrister är oförändrade.

@@ -10,7 +10,7 @@
 - [Modbus-broker etapp 0–2: offlineimplementation och baslinje](modbus-broker-offline-2026-11-01.md)
 - [Modbus-broker etapp 3: read-only-kod och grindar inför driftsättning](modbus-broker-readonly-stage3-2026-11-02.md)
 - [Broker gemensam FC03/FC06 – driftsatt normalväg och rollback](modbus-broker-control-stage-2026-11-04.md)
-- [Nästa steg: hela styrtransaktioner – full preprodverifiering och lokal rollbackbackup klar; ej driftsatt](modbus-broker-transactions-release-2026-11-04.md)
+- [Driftsatt: hela styrtransaktioner i brokern – liveverifiering, rollback och uppföljning](modbus-broker-transactions-release-2026-11-04.md)
 - [ADR: flytta odelade registersekvenser till broker-worker, behåll failure-scenariot](architecture/adr-2026-11-04-broker-complete-transactions.md)
 - [ADR: behåll befintlig watchdog och dokumentera felvägens begränsningar](architecture/adr-2026-11-04-broker-legacy-failure-scope.md)
 - [Broker-watchdog: observationspilot på Dell, utan Modbus-skrivning](modbus-broker-watchdog-dell-2026-11-03.md)
