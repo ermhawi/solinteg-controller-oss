@@ -111,6 +111,17 @@ class MeteredReplayTests(unittest.TestCase):
         self.assertEqual(r["max_ev_w_est"], 3680)
         self.assertEqual(r["samples"]["policy_phase_import_bound"], 1)
 
+    def test_sunny_ict2_replay_reports_house_battery_priority(self):
+        row = record()
+        row.update(pv_w=2026, battery_w=196, inverter_ac_w=2173,
+                   house_load_w=2137, grid_w=36, l1_grid_w=400,
+                   l2_grid_w=391, l3_grid_w=-755, house_soc_pct=25)
+        result = replay([row])
+        self.assertEqual(result["samples"]["policy_solar_storage_priority_unverified"], 1)
+        self.assertEqual(result["max_ev_w_est"], 1380)
+        self.assertFalse(result["physical_control_authorized"])
+        self.assertEqual(result["device_writes"], 0)
+
     def test_invalid_time_interval_is_rejected(self):
         with self.assertRaises(ValueError):
             scan(self.path, since=NOW, until=NOW)

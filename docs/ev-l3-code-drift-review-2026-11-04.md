@@ -154,3 +154,50 @@ Fysisk nätprioritet och integrerad dispatcher-shadow är **inte
 driftsatta**. Nästa krav är en stabil laddsession med verifierad Ict2
 på L3 och samstämmig pilot samt separat sol-/Auto-prov med
 återställningsbar releaseplan; inga automatiska PWM-ändringar.
+
+## 6. Korrigerad prioritet efter övervakat 6 A-laddprov 2026-11-04
+
+Under ett separat godkänt engångsprov ändrades endast EVCC:s PWM från paus
+(1000) till 100 (6 A), med manuell FC10, låsning och dubbel FC03-läsback.
+Bilen gick därefter till `C2` och Ict2 visade 6,0–6,1 A. Broker,
+dispatcher, inverter och ordinarie watchdog lämnades orörda.
+Observer-/historiktjänsterna fungerar; privat provlogg finns på Dell.
+Detta verifierar **EVCC-strömmen, inte nätprioriteten**.
+
+**Kravförtydligande:** vid SoC 24–25 % och solproduktion upp till cirka
+2,7 kW ska bilen fortfarande budgeteras för **full nätimport**.
+En felsökningsavläsning med Ict2=6 A, 2 740 W PV och uppskattad
+icke-EV-huslast på 688 W gav modellen solöverskott till lagring
+på högst cirka 2 052 W, **ingen** solel till bil, och ett mål om
+1 380 W L3-nätimport för bilen. Samtidigt var faktisk L3-import
+cirka 551 W. Differensen 829 W är en **proxy för målavvikelse**,
+inte fysikaliskt bevisad batteri-till-bil-överföring.
+
+Den nya `ev_l3_metered_policy.py` har därför fått en separat,
+ren `solar_priority_budget()`:
+
+- **Inte fullt:** `ev_grid_target_w_est = 230 × Ict2`,
+  `ev_solar_allowance_w_est = 0`, överskott efter icke-EV-huslast
+  reserveras för **husbatteriets laddning**; ingen säker exportbudget
+  utan BMS-laddgräns och verifierad möjlighet att lagra.
+- **Oberoende verifierat fullt:** fördela PV efter icke-EV-huslast
+  **först till bilen**, sedan till export; övrig EV-effekt budgeteras
+  som nätimport. Denna fullverifiering finns ännu inte i den
+  installerade `live.json`; det **syntetiska fullfallet är enbart
+  unittest**.
+- **Ingen EV-laddning:** återstående PV efter huslast vid verifierat
+  fullt batteri går till export enligt samma rena prioriteringsregel.
+- **PV i sig är aldrig en blockerare.** Vid solöverskott som skulle
+  kunna ladda husbatteriet får modellen status
+  `solar_storage_priority_unverified`, med uttryckligt önskat
+  ladd-/nätmål men **inget inverterkommando**. Den bevarar befintliga
+  `charge`-/återhämtningsåtgärder och SoC-/BMS-grindar. `idle/Auto`
+  och `solar_charge` kräver fysisk BMS-/EMS-verifiering; 50 W
+  påtvingad urladdning är **inte** godkänd lösning under solöverskott.
+
+**Driftstatus:** endast källkod/offline-shadow. Befintlig fysisk styrning
+är oförändrad. Solintegs balanserade inverter kan inte märka PV- och
+nätwatt efter källa: önskad L3-import måste verifieras tillsammans
+med PV→batteri, nät-CT och faktisk batteriladdning. Ingen fysisk
+EV-grid-priority-aktivering förrän gränser, laddläge, stabilitet,
+återställning och failure-scenario är separat verifierade.

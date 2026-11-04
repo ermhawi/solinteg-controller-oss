@@ -24,6 +24,14 @@ def charger(amps: float, *, pwm_raw: int, live: dict = LIVE):
     return inv, ev
 
 
+def daylight():
+    # Balanced grid/AC/PV/battery snapshot with verified 6 A car on L3.
+    return {**LIVE, "pv_w": 2026, "battery_w": 196,
+            "inverter_ac_w": 2173, "house_load_w": 2137, "grid_w": 36,
+            "meter_l1_w": 400, "meter_l2_w": 391, "meter_l3_w": -755,
+            "soc_pct": 25}
+
+
 class EvL3MeteredPolicyTests(unittest.TestCase):
     def call(self, action="discharge", target=2300, live=None, evcc=None):
         return policy.assess(action, target,
@@ -130,17 +138,90 @@ class EvL3MeteredPolicyTests(unittest.TestCase):
                 self.assertEqual(r.measurements["ev_power_w_est"], 1380)
                 self.assertIsNone(r.candidate_power_w)
 
-    def test_soc_temperature_and_solar_are_vetoes_not_current_meters(self):
+    def test_soc_and_temperature_guard_still_preserve_bms(self):
         for live, state in [({**LIVE, "soc_pct": 20}, "soc_or_bms_guard"),
                             ({**LIVE, "soc_pct": 97}, "soc_or_bms_guard"),
-                            ({**LIVE, "battery_temp_c": 7}, "soc_or_bms_guard"),
-                            ({**LIVE, "pv_w": 200, "inverter_ac_w": 2300,
-                              "house_load_w": 2460}, "solar_unverified")]:
+                            ({**LIVE, "battery_temp_c": 7}, "soc_or_bms_guard")]:
             with self.subTest(state=state):
                 r = self.call(live=live)
                 self.assertEqual(r.state, state)
-                self.assertEqual(r.measurements["ev_power_w_est"], 1380)
+                self.assertEqual(r.measurements["ev_grid_target_w_est"], 1380)
+                self.assertEqual(r.measurements["ev_solar_allowance_w_est"], 0)
                 self.assertIsNone(r.candidate_action)
+
+    def test_pv_generation_alone_never_blocks_grid_first_discharge_budget(self):
+        live = {**LIVE, "pv_w": 200, "inverter_ac_w": 2300,
+                "house_load_w": 2460}
+        r = self.call(live=live)
+        self.assertEqual(r.state, "shadow_hypothesis")
+        self.assertEqual(r.measurements["ev_grid_target_w_est"], 1380)
+        self.assertEqual(r.measurements["ev_solar_allowance_w_est"], 0)
+
+    def test_daylight_solar_surplus_routes_to_house_battery_not_ev(self):
+        r = self.call(live=daylight())
+        self.assertEqual(r.state, "solar_storage_priority_unverified")
+        self.assertEqual(r.measurements["ev_ict2_a"], 6)
+        self.assertEqual(r.measurements["ev_power_w_est"], 1380)
+        self.assertEqual(r.measurements["ev_grid_target_w_est"], 1380)
+        self.assertEqual(r.measurements["ev_solar_allowance_w_est"], 0)
+        self.assertEqual(r.measurements["house_battery_solar_charge_headroom_w_est"], 1269)
+        self.assertIsNone(r.measurements["solar_export_after_ev_w_est"])
+        self.assertEqual(r.measurements["ev_l3_import_target_gap_w_est"], 625)
+        self.assertFalse(r.measurements["solar_storage_mode_verified"])
+        self.assertFalse(r.measurements["model_actionable"])
+        self.assertIsNone(r.candidate_action)
+
+    def test_sunny_idle_does_not_force_discharge_and_block_solar_storage(self):
+        r = self.call(action="idle", target=0, live=daylight())
+        self.assertEqual(r.state, "solar_storage_priority_unverified")
+        self.assertEqual(r.measurements["ev_grid_target_w_est"], 1380)
+        self.assertIsNone(r.candidate_power_w)
+
+    def test_full_battery_only_after_independent_confirmation_uses_solar_for_ev(self):
+        full = {**daylight(), "soc_pct": 100, "pv_w": 3000,
+                "battery_w": 0, "inverter_ac_w": 3000, "grid_w": 862,
+                "house_load_w": 2138, "meter_l1_w": 900,
+                "meter_l2_w": 900, "meter_l3_w": -938,
+                "battery_full_confirmed": True}
+        r = self.call(live=full)
+        self.assertEqual(r.state, "full_battery_solar_ev_priority_unverified")
+        self.assertTrue(r.measurements["battery_full_verified"])
+        self.assertEqual(r.measurements["ev_solar_allowance_w_est"], 1380)
+        self.assertEqual(r.measurements["ev_grid_target_w_est"], 0)
+        self.assertEqual(r.measurements["solar_export_after_ev_w_est"], 862)
+        self.assertIsNone(r.candidate_action)
+
+        for invalid in ({**full, "battery_full_confirmed": False},
+                        {k: v for k, v in full.items() if k != "battery_full_confirmed"},
+                        {**full, "soc_pct": 99},
+                        {**full, "battery_w": 300}):
+            with self.subTest(invalid=invalid):
+                proposed = self.call(live=invalid)
+                self.assertFalse(proposed.measurements["battery_full_verified"])
+                self.assertEqual(proposed.measurements["ev_grid_target_w_est"], 1380)
+                self.assertEqual(proposed.measurements["ev_solar_allowance_w_est"], 0)
+                self.assertIsNone(proposed.measurements["solar_export_after_ev_w_est"])
+
+    def test_full_battery_without_ev_demand_exports_surplus(self):
+        result = policy.solar_priority_budget(
+            0, 3000, 500, battery_full_verified=True)
+        self.assertEqual(result["ev_grid_target_w_est"], 0)
+        self.assertEqual(result["ev_solar_allowance_w_est"], 0)
+        self.assertEqual(result["solar_export_after_ev_w_est"], 2500)
+        almost_full = policy.solar_priority_budget(
+            1380, 3000, 500, battery_full_verified=False)
+        self.assertEqual(almost_full["ev_grid_target_w_est"], 1380)
+        self.assertEqual(almost_full["house_battery_solar_charge_headroom_w_est"], 2500)
+        self.assertIsNone(almost_full["solar_export_after_ev_w_est"])
+
+    def test_solar_priority_helper_rejects_invalid_power_or_full_signal(self):
+        for args in ((float("nan"), 100, 100, False),
+                     (1380, -100, 100, False),
+                     (1380, 100, 100, 1)):
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    policy.solar_priority_budget(
+                        args[0], args[1], args[2], battery_full_verified=args[3])
 
     def test_charge_solar_charge_and_holds_are_never_overridden(self):
         for action in ("charge", "solar_charge", "freeze", "reserve_hold"):

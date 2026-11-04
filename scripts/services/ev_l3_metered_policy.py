@@ -23,7 +23,9 @@ EV_PILOT_MAX_A = 18.1
 EV_OTHER_PHASE_MAX_A = 0.5
 EV_CURRENT_SUM_TOLERANCE_A = 0.21
 EV_PILOT_MARGIN_A = 0.5
-PV_SHADOW_LIMIT_W = 100
+SOLAR_SURPLUS_EVIDENCE_W = 100
+BATTERY_FULL_SOC_PCT = 99.5
+FULL_BATTERY_IDLE_LIMIT_W = 150
 SOC_MIN_PCT = 25
 SOC_MAX_PCT = 95
 BATT_TEMP_MIN_C = 10
@@ -67,15 +69,41 @@ def _age(data: dict, now: datetime, max_age: int) -> float:
     return age
 
 
+def solar_priority_budget(ev_w: float, pv_w: float, non_ev_house_w: float, *,
+                          battery_full_verified: bool) -> dict:
+    """Economic allocation preference, NOT measured power provenance.
+
+    PV supplies non-EV house demand first. Until the battery is independently
+    verified full, remaining PV is reserved for house-battery storage, not EV;
+    export cannot be budgeted without knowing remaining battery charge power.
+    """
+    if (any(type(v) not in (int, float) or not math.isfinite(v) or v < 0
+            for v in (ev_w, pv_w, non_ev_house_w))
+            or type(battery_full_verified) is not bool):
+        raise ValueError("invalid solar priority budget")
+    surplus = max(0., pv_w - non_ev_house_w)
+    solar_ev = min(ev_w, surplus) if battery_full_verified else 0.
+    return {
+        "ev_grid_target_w_est": round(ev_w - solar_ev),
+        "ev_solar_allowance_w_est": round(solar_ev),
+        "pv_after_non_ev_house_w_est": round(surplus),
+        "house_battery_solar_charge_headroom_w_est": (
+            0 if battery_full_verified else round(surplus)),
+        "solar_export_after_ev_w_est": (
+            round(surplus - solar_ev) if battery_full_verified else None),
+        "energy_allocation_is_control_target_not_proven_flow": True,
+    }
+
+
 def assess(action: str, power_w: int, live: dict, evcc: dict, *,
            now: datetime) -> MeteredAdvice:
     """Compute *advisory* battery discharge reduction from measured EVCC Ict2.
 
     A positive result is a counterfactual, never an executable setpoint.
-    At night only, model balanced inverter AC contribution per phase, subtract
-    EVCC-measured car demand from inferred house L3 demand, and retain the
-    estimated non-EV load plus a conservative margin. Daylight/idle needs
-    separate solar-aware and temporal-stability validation before any release.
+    In daylight and at night, reserve PV for non-EV house loads and the
+    house battery until independently confirmed full. The EV grid-import
+    target applies even with high PV; at full battery, solar surplus may
+    serve EV before export. No setpoint in this model is executable.
     """
     base = {"model_actionable": False, "physical_control_authorized": False,
             "device_writes": 0, "ev_power_metered": False,
@@ -154,20 +182,47 @@ def assess(action: str, power_w: int, live: dict, evcc: dict, *,
         non_ev_l3 = house_l3 - ev_w
         if not -300 <= non_ev_l3 <= 10000:
             raise ValueError("EV current incompatible with L3 power")
+        full_verified = (soc >= BATTERY_FULL_SOC_PCT
+                         and live.get("battery_full_confirmed") is True
+                         and abs(battery) <= FULL_BATTERY_IDLE_LIMIT_W)
+        non_ev_house_w = max(0., house - ev_w)
+        base.update(solar_priority_budget(
+            ev_w, pv, non_ev_house_w, battery_full_verified=full_verified))
         base.update(house_l3_w_est=round(house_l3),
                     non_ev_l3_w_est=round(non_ev_l3),
+                    non_ev_house_load_w_est=round(non_ev_house_w),
                     pv_w=round(pv), soc_pct=round(soc, 1),
                     battery_w=round(battery),
+                    battery_full_verified=full_verified,
+                    battery_full_requires_independent_confirmation=True,
+                    ev_l3_import_observed_w=max(0, round(-phases[2])),
+                    ev_l3_import_target_gap_w_est=max(
+                        0, round(base["ev_grid_target_w_est"]
+                                 - max(0, -phases[2]))),
                     battery_to_ev_causality_proven=False,
                     phase_fuse_protection_verified=False)
+        if (not full_verified and
+                base["house_battery_solar_charge_headroom_w_est"] >= SOLAR_SURPLUS_EVIDENCE_W):
+            base["solar_storage_mode_verified"] = False
+            base["priority_shadow_instruction"] = (
+                "route available PV to house battery; reserve all EV watts for grid")
 
         if action in ("charge", "solar_charge", "freeze", "reserve_hold"):
             return result("preserve_existing_action", "do not override charge or holds")
-        if not SOC_MIN_PCT <= soc <= SOC_MAX_PCT or not BATT_TEMP_MIN_C <= temp <= BATT_TEMP_MAX_C:
+        if not BATT_TEMP_MIN_C <= temp <= BATT_TEMP_MAX_C:
+            return result("soc_or_bms_guard", "battery temperature takes priority")
+        if full_verified:
+            return result("full_battery_solar_ev_priority_unverified",
+                          "confirmed full battery: solar surplus to EV before export; "
+                          "physical routing not validated")
+        if not SOC_MIN_PCT <= soc <= SOC_MAX_PCT:
             return result("soc_or_bms_guard", "battery reserve/temperature takes priority")
-        if pv > PV_SHADOW_LIMIT_W:
-            return result("solar_unverified",
-                          "solar may supply EV or house battery; do not force discharge")
+        if (not full_verified
+                and base["house_battery_solar_charge_headroom_w_est"]
+                >= SOLAR_SURPLUS_EVIDENCE_W):
+            return result("solar_storage_priority_unverified",
+                          "solar should charge house battery, EV remains grid-first; "
+                          "solar-charge mode/Auto interaction unverified")
         if action == "idle":
             return result("idle_stability_unverified",
                           "Auto-to-50W change needs independent stable idle/EV history")

@@ -29,6 +29,19 @@ The app + Modbus poller run as systemd services on the host. No Vercel, no Home 
 
 **EVCC-Ict2 som lastsignal, endast historik driftsatt 2026-11-04:** [Mät-ADR, verifierade driftfiler och rollback](../docs/architecture/adr-2026-11-04-evcc-ict2-metered-priority.md). Endast isolerad `solinteg-ev-history.service` har uppgraderats och startats om: ny SQLite-historik sparar Ict1/Ict2/Ict3, AC-effekt, batteritemperatur och 50006 med `NULL` för tidigare okända värden (`quick_check=ok`). Rootägd backup av äldre script finns; broker, poller, dispatcher, EVCC-läsare och watchdog är oförändrade. Nya `ev_l3_metered_policy.py` och SHA-låst logg-hook är **endast offline/shadow-kandidater**, inte installerade i aktiva dispatchern. EVCC står fortfarande i `A1`; fysisk EV-nätprioritet **NO-GO**.
 
+**Korrigerad EV/L3-energiprioritet 2026-11-04, endast källkod/shadow:**
+Se [krav och driftrisker](../docs/ev-l3-code-drift-review-2026-11-04.md)
+och [mät-/prioritets-ADR](../docs/architecture/adr-2026-11-04-evcc-ict2-metered-priority.md).
+Den gamla `PV > 100 W`-spärren i `ev_l3_metered_policy.py` är
+ersatt av grid-first EV-budget, PV-till-husbatteri medan detta inte är
+verifierat fullt, samt PV-till-EV-före-export endast efter oberoende
+fullverifiering. Inget tillägg är installerat i dispatchern: inga
+automatiska inverter-/EVCC-kommandon, ingen ny watchdog och ingen
+ändring av brokerns failure-scenario. Det separata, användargodkända
+**manuella** EVCC-provet med ett FC10 1000→100 och verifierad 6 A
+laddning är avslutat; EVCC står kvar på 6 A. Detta är **inte**
+fysisk EV-nätprioritering.
+
 **Dell observer pilot (2026-11-03):** [separately installed observe-only systemd timer](../docs/modbus-broker-watchdog-dell-2026-11-03.md) checks dispatcher/poller timestamps every 15 s; it has no TCP access, no Modbus writes, and does not replace the existing watchdog.
 **Batterisparläge/solöverskott (2026-11-02):** Den direkta EMS-varianten `solar_charge`
 är endast implementerad i `Sundsvall`-källkoden, **inte driftsatt eller aktiverad**.

@@ -27,6 +27,26 @@ EV-historiken har däremot saknat separata Ict-kanaler och register 50006.
 
 ## Beslutad modell och gränser
 
+**Kravförtydligande 2026-11-04 (ersätter tidigare PV>100 W-spärr i den nya
+Ict2-shadowmodellen):** Husets aktuella last försörjs först av tillgänglig
+solel. Så länge husbatteriet **inte är verifierat fullt** reserveras
+resterande solel för **husbatteriets laddning**, medan **hela bilens
+laddningsbehov budgeteras som nätimport**, även i stark sol. Först när
+husbatteriet är **oberoende verifierat fullt** får solöverskott efter
+hushållets exklusive-bil-last prioriteras till bilen. Ytterligare överskott
+exporteras; laddar bilen inte alls exporteras hela sådana överskott.
+SoC 99 % eller ett ensamt SoC 100 %-värde är inte tillräckligt bevis för
+att PV får styras till bilen.
+
+Detta är **prioritering för ekonomisk fördelning**, inte bevisad
+fysisk elektronväg. Nät, PV och batteri blandas i växelriktarens AC-nod;
+EVCC:s Ict2 visar ström, inte vilken källa som levererade den. För en
+granskbar approximation beräknas önskad nätimport på L3 som
+`230 V × Ict2 - tillåten PV-till-bil`, jämförd med signerad L3-CT.
+Skillnaden är en **styrmålsavvikelse**, inte uppmätt felmatad batterieffekt.
+Inverter-/BMS-reglering och säker solöverskottsladdning måste separat
+fysiktestas före fysisk aktivering.
+
 1. Kräv **färska** EVCC+inverter-snapshots, `source=waveshare_evcc_fc03_readonly`,
    `read_ok=true`, `state=C2`, faktisk `charging_detected=true`,
    FC03-källa utan skrivningar, samstämmig PWM-konfiguration/pilot,
@@ -47,15 +67,26 @@ EV-historiken har däremot saknat separata Ict-kanaler och register 50006.
    varandra. **Softgränser**: förutsedd import högst 3 200 W per fas och
    6 500 W totalt i detta preliminära test. Detta är **inte**
    20 A-säkringsskydd eller oberoende RMS-/termiskt skydd.
-4. **Bevara befintlig styrning** vid SoC under 25 % eller över 95 %,
-   batteritemperatur utanför 10–45 °C, PV över 100 W, `idle/Auto`,
-   laddning, återhämtning, frys/hold, inkonsekventa faser eller
-   okänd EVCC-status. Vid `idle` krävs ytterligare sammanhängande
-   mätserie och stabilitet innan något 50 W-hypotetiskt läge kan
-   aktiveras. Vid solproduktion måste befintlig möjlighet till
-   **solelsladdning av husbatteriet** bevaras; vår rena nattmodell
-   ger **inga** dagaktiva styrförslag.
-5. `ev_l3_metered_policy.assess()` är **ren**, läser inga filer eller
+4. **PV är inte längre en blockerare i sig.** Den rena policyn
+   `solar_priority_budget()` redovisar `ev_grid_target_w_est`,
+   `ev_solar_allowance_w_est`, solöverskott till hushållsbatteriet
+   (högsta möjliga före BMS-/laddgränser) och beräknad export först
+   vid full batteriverifiering. Full kräver i nuvarande shadow-grind
+   SoC minst 99,5 %, `battery_full_confirmed=true` från en framtida
+   oberoende BMS-källa och uppmätt batterieffekt inom ±150 W.
+   **Fältet finns ännu inte i den installerade telemetrin**, så
+   modellen kommer inte tilldela solel till bilen vid
+   enbart rapporterad hög SoC.
+5. **Bevara befintlig styrning** vid SoC-reserv, BMS-/temperaturgräns,
+   `idle/Auto`, befintlig laddning, återhämtning, frys/hold,
+   inkonsekventa faser eller okänd EVCC-status. Om PV efter
+   hushållslast sannolikt kan ladda husbatteriet redovisas
+   `solar_storage_priority_unverified` (ett explicit **skuggmål**),
+   inte ett beordrat 50 W-urladdningsläge som kan blockera solladdning.
+   Även den redan dokumenterade EMS-`solar_charge`-vägen saknar
+   tillräcklig fysisk verifiering; inget börvärde eller tidsgrind
+   har aktiverats.
+6. `ev_l3_metered_policy.assess()` är **ren**, läser inga filer eller
    nätverk och ger enbart en `MeteredAdvice` med
    `model_actionable=false`, `physical_control_authorized=false`,
    `device_writes=0`. Den har **ingen automatisk verkställighetsväg**.
@@ -131,6 +162,41 @@ installeringsförslag är fortfarande **endast genererat i minnet** med
 SHA-256 `20bf7f5cad47157b81ab5b93b892892c83fd6033db3c299aeb73cbd3ab0328a4`.
 Den tidigare kandidat-SHA:n i den föregående granskningen beskriver
 ett **historiskt** loggförslag och ska inte användas för ny release.
+
+### Korrigerad implementation och verkligt 6 A-prov 2026-11-04
+
+Efter **separat uttryckligt godkännande** ändrades EVCC:s pausade PWM
+1000 med **ett** manuellt FC10-kommando till PWM 100 (6 A);
+två läsningar verifierade 100/100 och sedan verklig `C2`-laddning,
+Ict2 cirka 6,0–6,1 A. Det är en verklig EVCC-fältverifiering men
+**inte** bevis för att nätet finansierade hela billasten.
+Endast EVCC-observatören pausades för den låsta skrivningen och
+återstartades; ordinarie Solinteg-inverter/dispatcher/broker/watchdog
+ändrades inte. Privat provlogg bevaras utanför Git på Dell.
+
+I senaste separata **read-only**-återspelning fick 32 verifierade C2-prover
+nya `ev_grid_target_w_est` trots PV långt över 100 W.
+Vid SoC cirka 24 % och PV cirka 2,7 kW var 6 A-målet 1 380 W
+nätimport, medan nettomätaren på L3 visade ungefär 551 W;
+skillnaden 829 W markeras som **målavvikelse utan kausalitetsbevis**.
+Källkodens nya `solar_priority_budget` styr inte EVCC eller inverter;
+full-batteri-grenen är fortfarande enbart syntetiskt testad.
+`solar_storage_priority_unverified` medför **ingen** automatisk
+force-charge-/50 W-/Auto-ändring, eftersom de driftlägena måste
+verifieras separat mot BMS och Solintegs EMS.
+
+**Installerad drift:** enbart den tidigare read-only-historiktjänsten
+är uppgraderad. `ev_l3_metered_policy.py` körs endast via explicita
+read-only-audit/replay-anrop; ingen inkopplad dispatcher-hook.
+Den gamla `ev_grid_priority_guard.py` har fortfarande en **historisk
+PV ≤100 W-grind**, men dess rootgate är återkallad och den är **inte**
+ansluten till aktiv dispatcher. Den får **inte** återaktiveras för
+den här prioriteringen utan separat granskning och releasebeslut.
+**Validering efter kravkorrigeringen:** 1 411 Python-unittester OK,
+inklusive ny live-liknande dagsol-fixture, syntetiskt
+full-batteri-/exportfall och skrivskyddad historian-replay;
+Zensical-dokumentationsbygge och `git diff --check` godkända.
+Det accepterade äldre failure-scenariot i brokern behålls.
 
 ### Förutsättningar för fysisk driftsättning
 

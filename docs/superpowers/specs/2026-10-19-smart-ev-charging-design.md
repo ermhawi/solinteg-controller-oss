@@ -6,6 +6,20 @@ Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff4
 
 **Aktuellt driftkomplement 2026-11-04:** Den äldre EV-prioritetens shadow-hook är återkallad och den installerade dispatchern saknar även Git-kodens `coordinate_l3_battery()`. Env-värdet `DISPATCH_L3_BATTERY_MODE=shadow` aktiverar därför ingen L3-batterisamordning. Read-only EV-observation finns kvar; automatisk EVCC-/Volvostyrning och fysisk EV-prioritet är inte driftsatta. Läs [verifierad kod–drift-jämförelse, 6 A-återspelning och aktiveringsgrindar](../../ev-l3-code-drift-review-2026-11-04.md). Följande 31 oktober-stycken är historiska.
 
+**Förtydligad energiprioritet 2026-11-04 (nyare än övriga EV-avsnitt):**
+Se [korrigerad EVCC-Ict2-ADR](../../architecture/adr-2026-11-04-evcc-ict2-metered-priority.md).
+Solel ska täcka hushållet och därefter i första hand **ladda
+husbatteriet tills det är oberoende verifierat fullt**. Under tiden ska
+**hela bilens verkliga laddningsbehov belasta nätbudgeten**, oavsett
+solproduktion och prisläge. Vid fullt husbatteri får återstående
+solöverskott gå till bilen först; ytterligare överskott säljs. När
+bilen inte laddar säljs tillgängligt överskott efter att hus och fullt
+batteri prioriterats. Det tidigare `PV > 100 W`-vetot i Ict2-modellen
+var fel som produktkrav och har ersatts av ett explicit skuggmål.
+Blandad AC-produktion kan inte fysiskt spåras till bilen via Ict2;
+L3-nätimport, BMS-kapacitet och sol-/Auto-reglering måste
+fältverifieras före någon ny fysisk styrning.
+
 **Nytt beslutat spår 2026-11-04 (enbart read-only/shadow):**
 [EVCC Ict2 och Solintegs tre faser](../../architecture/adr-2026-11-04-evcc-ict2-metered-priority.md)
 är nu primär **mätbaserad** kandidat för ekonomisk batterisamordning.
