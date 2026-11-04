@@ -91,11 +91,6 @@ class ReadinessTests(unittest.TestCase):
             "charge_mode": "deadline",
             "remaining_ac_kwh": 3.5,
         }
-        self.manual = {
-            "manual_paused": False,
-            "session_id": self.session["session_id"],
-            "connection_epoch": 1,
-        }
 
     def tearDown(self):
         self.temp.cleanup()
@@ -103,9 +98,8 @@ class ReadinessTests(unittest.TestCase):
     def _write(self, file, data):
         (self.root / file).write_text(json.dumps(data))
 
-    def inspect(self, *, session=None, manual=None, smart_state="off", price=True):
+    def inspect(self, *, session=None, smart_state="off", price=True):
         with patch.object(pf, "read_ev_session", return_value=session), \
-             patch.object(pf.ownership, "read_manual_intent", return_value=manual), \
              patch.object(pf.smart, "read_smart_charging",
                           return_value=(smart_state, "test diagnostic")), \
              patch.object(pf, "read_house_price_plan", return_value={} if price else None), \
@@ -116,18 +110,18 @@ class ReadinessTests(unittest.TestCase):
                               price_db=self.root / "nonexistent.db",
                               grid_path=self.grid)
 
-    def test_live_shape_without_independent_session_and_manual_audit_blocks(self):
+    def test_live_shape_without_independent_session_blocks(self):
         result = self.inspect()
         self.assertEqual(result["state"], "not_ready")
         self.assertFalse(result["checks"]["independently_calibrated_fresh_ev_session"])
-        self.assertFalse(result["checks"]["lossless_manual_stop_source_verified"])
+        self.assertFalse(result["checks"]["price_pause_provenance_valid_or_unowned"])
         self.assertTrue(result["checks"]["fresh_consistent_evcc_fc03"])
         self.assertTrue(result["checks"]["fresh_valid_grid_and_l3"])
         self.assertFalse(result["arm_command_issued"])
         self.assertEqual(result["device_writes"], 0)
 
     def test_all_mocked_operational_inputs_still_need_physical_tests(self):
-        result = self.inspect(session=self.session, manual=self.manual)
+        result = self.inspect(session=self.session)
         self.assertTrue(all(
             ready for label, ready in result["checks"].items()
             if label != "physical_evcc_pause_resume_and_fault_tests"
@@ -135,14 +129,53 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(result["checks"]["physical_evcc_pause_resume_and_fault_tests"])
         self.assertEqual(result["state"], "not_ready")
 
-    def test_manual_pause_and_mismatched_epoch_never_qualify(self):
-        for manual in ({**self.manual, "manual_paused": True},
-                       {**self.manual, "connection_epoch": 2},
-                       None):
-            with self.subTest(manual=manual):
-                self.assertFalse(self.inspect(
-                    session=self.session, manual=manual)["checks"]
-                    ["lossless_manual_stop_source_verified"])
+    def test_unowned_paused_evcc_never_qualifies_resume(self):
+        self._write("evcc-readonly.json", observed_evcc(
+            state="B2", configured_pwm_raw=1000, pilot_pwm_raw=267,
+            channel_currents_a=[0.1, 0.1, 0.1]))
+        result = self.inspect(session=self.session)
+        self.assertFalse(result["checks"]["price_pause_provenance_valid_or_unowned"])
+
+    def test_verified_price_pause_can_qualify_without_manual_intent_source(self):
+        state = pf.cable_tracker.read(self.root / "evcc-cable-state.json")
+        stamp = (NOW - timedelta(seconds=5)).isoformat()
+        state = pf.cable_tracker.advance(state, observed_evcc(
+            timestamp=stamp, state="B2", configured_pwm_raw=1000,
+            pilot_pwm_raw=267, channel_currents_a=[0.1, 0.1, 0.1]),
+            now=NOW - timedelta(seconds=4))
+        pf.cable_tracker.store(self.root / "evcc-cable-state.json", state)
+        self._write("evcc-readonly.json", observed_evcc(
+            state="B2", configured_pwm_raw=1000, pilot_pwm_raw=267,
+            channel_currents_a=[0.1, 0.1, 0.1]))
+        record = pf.ownership.new_owner(
+            session=self.session, cable=state, now=NOW,
+            owner_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        pf.ownership.write_owner(
+            self.root / "ev-price-pause-owner.json",
+            {**record, "state": "owned", "verified_fc10_pause": True})
+        self.assertTrue(self.inspect(session=self.session)["checks"]
+                        ["price_pause_provenance_valid_or_unowned"])
+        for change in ({"connection_epoch": 2},
+                       {"session_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"}):
+            self.assertFalse(self.inspect(session={**self.session, **change})
+                             ["checks"]["price_pause_provenance_valid_or_unowned"])
+        self.assertFalse(self.inspect(session=None)["checks"]
+                         ["price_pause_provenance_valid_or_unowned"])
+
+    def test_corrupt_or_unfinished_owner_never_qualifies(self):
+        path = self.root / "ev-price-pause-owner.json"
+        for value in ({"schema_version": 1}, {"schema_version": 99}):
+            self._write("ev-price-pause-owner.json", value)
+            path.chmod(0o600)
+            self.assertFalse(self.inspect(session=self.session)["checks"]
+                             ["price_pause_provenance_valid_or_unowned"])
+        record = pf.ownership.new_owner(
+            session=self.session,
+            cable=pf.cable_tracker.read(self.root / "evcc-cable-state.json"),
+            now=NOW, owner_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        pf.ownership.write_owner(path, record)
+        self.assertFalse(self.inspect(session=self.session)["checks"]
+                         ["price_pause_provenance_valid_or_unowned"])
 
     def test_stale_evcc_or_mismatched_pwm_fails(self):
         for change in ({"timestamp": (NOW - timedelta(seconds=70)).isoformat()},
@@ -184,7 +217,7 @@ class ReadinessTests(unittest.TestCase):
     def test_smart_activated_or_unknown_fails(self):
         for state in ("on", "unknown"):
             with self.subTest(state=state):
-                result = self.inspect(session=self.session, manual=self.manual,
+                result = self.inspect(session=self.session,
                                       smart_state=state)
                 self.assertFalse(result["checks"]["volvo_smart_charging_explicitly_off"])
                 self.assertEqual(result["state"], "not_ready")
@@ -208,7 +241,7 @@ class ReadinessTests(unittest.TestCase):
                          {"quality": "unverified_display_only"})
 
     def test_chronos_sample_is_fresh_but_not_manual_intent_or_energy_meter(self):
-        result = self.inspect(session=self.session, manual=self.manual)
+        result = self.inspect(session=self.session)
         self.assertTrue(result["checks"]["fresh_chronos_battery_sample_observed"])
         self.assertEqual(result["volvo_battery"]["soc_pct"], 64)
         self.assertEqual(result["volvo_battery"]["charging_status"], "charging")
@@ -227,7 +260,7 @@ class ReadinessTests(unittest.TestCase):
                 item = json.loads(json.dumps(baseline))
                 item["battery_readonly"].update(change)
                 self._write("volvo-smart-charging.json", item)
-                result = self.inspect(session=self.session, manual=self.manual)
+                result = self.inspect(session=self.session)
                 self.assertFalse(result["checks"]["fresh_chronos_battery_sample_observed"])
                 self.assertIsNone(result["volvo_battery"])
 

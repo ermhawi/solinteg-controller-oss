@@ -90,6 +90,7 @@ class CableTrackingTests(unittest.TestCase):
                              now=START + timedelta(seconds=sec + 1))
             first = cable.read(path)
             self.assertEqual(first["connection_epoch"], 1)
+            self.assertTrue(first["tracking_id"])
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             duplicate = cable.update(path, fc03("A1", 90),
                                      now=START + timedelta(seconds=91))
@@ -104,6 +105,8 @@ class CableTrackingTests(unittest.TestCase):
         record = ingest(record, "B2", 330)
         self.assertEqual(record["status"], "connected")
         self.assertEqual(record["connection_epoch"], 0)
+        self.assertEqual(record["coverage_epoch"], 1)
+        self.assertTrue(record["tracking_id"])
         self.assertFalse(record["confirmed_replug"])
 
     def test_read_failure_invalidates_coverage(self):
@@ -113,6 +116,7 @@ class CableTrackingTests(unittest.TestCase):
         record = ingest(ingest(record, "B2", 90), "B2", 120)
         self.assertFalse(record["confirmed_replug"])
         self.assertEqual(record["connection_epoch"], 0)
+        self.assertEqual(record["coverage_epoch"], 1)
 
     def test_invalid_and_stale_sources_rejected(self):
         for changes in ({"source": "unknown"},
@@ -129,6 +133,36 @@ class CableTrackingTests(unittest.TestCase):
         record = ingest(record, "F2", 60)
         self.assertEqual(record["status"], "unknown")
         self.assertIsNone(record["last_disconnected_at_utc"])
+
+    def test_old_status_does_not_grant_authority_until_upgraded_poller_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old.json"
+            old = ingest(ingest(None, "C2", 0), "C2", 30)
+            old.pop("coverage_epoch")
+            old.pop("tracking_id")
+            cable.store(path, old)
+            self.assertIsNone(cable.read_fresh_connected(
+                path, now=START + timedelta(seconds=31)))
+            # The next FC03 sample upgrades the persisted status without
+            # treating this schema migration as a vehicle reconnection.
+            new = cable.update(path, fc03("C2", 60),
+                               now=START + timedelta(seconds=61))
+            self.assertEqual(new["coverage_epoch"], 0)
+            self.assertTrue(new["tracking_id"])
+            self.assertEqual(new["connection_epoch"], 0)
+            self.assertIsNotNone(cable.read_fresh_connected(
+                path, now=START + timedelta(seconds=61)))
+
+    def test_gap_followed_by_recovery_changes_coverage_epoch(self):
+        record = ingest(ingest(None, "C2", 0), "C2", 30)
+        self.assertEqual(record["coverage_epoch"], 0)
+        record = ingest(record, "C2", 300)
+        self.assertEqual(record["coverage_epoch"], 1)
+        record = ingest(record, "C2", 330)
+        self.assertEqual(record["connection_epoch"], 0)
+        self.assertEqual(record["coverage_epoch"], 1)
+        self.assertTrue(record["tracking_id"])
+        self.assertFalse(record["confirmed_replug"])
 
     def test_corrupt_persisted_state_never_replaced(self):
         with tempfile.TemporaryDirectory() as directory:

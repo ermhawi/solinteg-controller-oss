@@ -13,6 +13,7 @@ import fcntl
 import json
 import math
 import os
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +36,6 @@ EV_RAW_6A = 100
 EV_W_6A = 1380
 OWNER = Path("/opt/solinteg/ev-shadow-runtime/var/ev-price-pause-owner.json")
 OWNER_LOCK = Path("/opt/solinteg/ev-shadow-runtime/var/ev-price-pause-owner.lock")
-MANUAL_INTENT = Path("/run/solinteg/ev-manual-intent.json")
 SMART_CHARGING = Path("/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json")
 
 
@@ -138,8 +138,14 @@ def run_once(*, now: datetime | None = None) -> dict:
     owner_path = Path(os.environ.get("EV_PRICE_PAUSE_OWNER_PATH", str(OWNER)))
     lock_path = Path(os.environ.get("EV_PRICE_PAUSE_OWNER_LOCK", str(OWNER_LOCK)))
     try:
-        owner_lock = lock_path.open("a+b")
-    except OSError:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        owner_lock = os.fdopen(fd, "a+b")
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
+                or info.st_uid != os.geteuid()):
+            owner_lock.close()
+            raise PermissionError("unsafe price owner lock")
+    except (OSError, PermissionError):
         return {"state": "inhibited", "writes": 0, "reason": "pause owner lock unavailable"}
     with owner_lock:
         try:
@@ -167,43 +173,33 @@ def run_once(*, now: datetime | None = None) -> dict:
                 revoke("Volvo Smart Charging: " + smart_reason)
                 return {"state": "inhibited", "writes": 0,
                         "reason": smart_reason, "volvo_smart_charging": smart_state}
-            try:
-                manual = ownership.read_manual_intent(
-                    os.environ.get("EV_MANUAL_INTENT_PATH", str(MANUAL_INTENT)), now=now)
-            except ownership.OwnershipError:
-                manual = None
-            if owner is not None and owner["state"] == "owned" and not ownership.is_owned(
-                    owner, session=session, manual=manual, now=now):
-                revoke("manual intent, session, mode or observation continuity changed")
-                return {"state": "inhibited", "writes": 0,
-                        "reason": "price pause ownership revoked; manual priority"}
-            if (owner is not None and owner["session_id"] == session["session_id"]
-                    and owner["state"] in ("pending", "releasing", "revoked")):
-                return {"state": "inhibited", "writes": 0,
-                        "reason": "unresolved or revoked price pause; manual reconciliation required"}
-            if (manual is None or manual["manual_paused"]
-                    or manual["session_id"] != session["session_id"]
-                    or manual["connection_epoch"] != session["connection_epoch"]):
-                return {"state": "inhibited", "writes": 0,
-                        "reason": "independent manual-pause observer missing or manual pause active"}
-            # The optional FC03 cable tracker is additional evidence, NOT the
-            # lossless manual-intent source. A replug invalidates an old owner.
-            cable = None
+            # A pause may only be resumed when THIS writer verified its FC10,
+            # in the same independently observed EVCC cable session.
             cable_path = os.environ.get("EVCC_CABLE_TRACK_PATH")
-            if cable_path:
-                try:
-                    cable = cable_tracker.read_fresh_connected(Path(cable_path), now=now)
-                except cable_tracker.CableObservationError:
-                    cable = None
-                if cable is None:
-                    revoke("EVCC cable disconnected, transitioning or observation stale")
-                    return {"state": "inhibited", "writes": 0,
-                            "reason": "EVCC cable connection unverified"}
-                if (owner is not None and owner["state"] == "owned"
-                        and owner.get("evcc_cable_epoch") != cable["connection_epoch"]):
-                    revoke("EVCC cable epoch changed; old price pause cannot be resumed")
-                    return {"state": "inhibited", "writes": 0,
-                            "reason": "old price-pause ownership invalidated by cable epoch"}
+            if not cable_path:
+                revoke("mandatory EVCC cable source not configured")
+                return {"state": "inhibited", "writes": 0,
+                        "reason": "EVCC cable connection unverified"}
+            try:
+                cable = cable_tracker.read_fresh_connected(Path(cable_path), now=now)
+            except cable_tracker.CableObservationError:
+                cable = None
+            if cable is None:
+                revoke("EVCC cable disconnected, transitioning or observation stale")
+                return {"state": "inhibited", "writes": 0,
+                        "reason": "EVCC cable connection unverified"}
+            if owner is not None and owner["state"] in ("pending", "releasing", "revoked"):
+                return {"state": "inhibited", "writes": 0,
+                        "reason": "unresolved or revoked price pause; reconciliation required"}
+            if owner is not None and owner["state"] == "owned" and not ownership.is_owned(
+                    owner, session=session, cable=cable, now=now):
+                changed = (owner["evcc_cable_epoch"] != cable["connection_epoch"]
+                           or owner["cable_coverage_epoch"] != cable["coverage_epoch"]
+                           or owner["cable_tracker_id"] != cable["tracking_id"])
+                revoke("EVCC cable continuity or session changed")
+                return {"state": "inhibited", "writes": 0,
+                        "reason": ("old price-pause ownership invalidated by cable epoch"
+                                   if changed else "price pause ownership revoked; session changed")}
             try:
                 evcc = json.loads(Path(os.environ.get("EVCC_READONLY_PATH", str(EVCC))).read_text())
                 live = json.loads(Path(os.environ.get("INVERTER_DATA_PATH", str(LIVE))).read_text())
@@ -219,7 +215,7 @@ def run_once(*, now: datetime | None = None) -> dict:
             command = choose_action(
                 session=session, price=price, evcc=evcc, live=live, now=now,
                 price_pause_owned=ownership.is_owned(
-                    owner, session=session, manual=manual, now=now))
+                    owner, session=session, cable=cable, now=now))
             if command.action == "inhibited":
                 revoke(command.reason)
             if command.action not in ("pause", "resume"):
@@ -228,8 +224,8 @@ def run_once(*, now: datetime | None = None) -> dict:
             if not host:
                 revoke("EVCC address unavailable")
                 return {"state": "inhibited", "writes": 0, "reason": "EVCC address not configured"}
-            # All manual-intent producers MUST share the owner lock; EVCC FC03
-            # and FC10 additionally share the existing serial reader lock.
+            # The owner lock serializes price decisions; EVCC FC03 and FC10
+            # additionally share the existing physical serial reader lock.
             with Path(os.environ.get("EVCC_READER_LOCK", str(LOCK))).open("a+b") as lock:
                 try:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -237,11 +233,24 @@ def run_once(*, now: datetime | None = None) -> dict:
                     return {"state": "inhibited", "writes": 0,
                             "reason": "EVCC observation owns serial lock"}
                 try:
+                    # Re-read the durable cable file while holding both locks.
+                    # A pending disconnect/replug invalidates an earlier preflight.
+                    try:
+                        latest = cable_tracker.read_fresh_connected(
+                            Path(cable_path), now=now)
+                    except cable_tracker.CableObservationError:
+                        latest = None
+                    if (latest is None
+                            or latest["connection_epoch"] != cable["connection_epoch"]
+                            or latest["coverage_epoch"] != cable["coverage_epoch"]
+                            or latest["tracking_id"] != cable["tracking_id"]
+                            or latest["observed_state"] != evcc["state"]):
+                        revoke("EVCC cable observation changed before FC10")
+                        return {"state": "inhibited", "writes": 0,
+                                "reason": "cable state changed during FC10 preflight"}
                     if command.action == "pause":
                         next_owner = ownership.new_owner(
-                            session=session, manual=manual, now=now, owner_id=str(uuid4()))
-                        if cable is not None:
-                            next_owner["evcc_cable_epoch"] = cable["connection_epoch"]
+                            session=session, cable=latest, now=now, owner_id=str(uuid4()))
                         ownership.write_owner(owner_path, next_owner)
                     else:
                         # If the FC10 outcome is uncertain or a process crashes,
@@ -261,6 +270,7 @@ def run_once(*, now: datetime | None = None) -> dict:
                         raise EvccUncertainWrite("EVCC readback mismatched")
                     ownership.write_owner(
                         owner_path, {**next_owner,
+                                     "verified_fc10_pause": True,
                                      "state": "owned" if command.action == "pause" else "released"})
                     return {"state": command.action, "writes": 1,
                             "configured_raw": after.configured_raw, "reason": command.reason}

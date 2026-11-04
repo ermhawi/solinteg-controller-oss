@@ -3,6 +3,7 @@ Description=Solinteg EVCC price-controlled charging (single writer, explicitly a
 After=network-online.target solinteg-ev-observer.service
 Wants=network-online.target
 ConditionPathExists=/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json
+ConditionPathExists=/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json
 
 [Service]
 Type=oneshot
@@ -15,7 +16,7 @@ Environment=EVCC_PRICE_CONTROL_ARMED=0
 Environment=EV_ENABLED=0
 Environment=EVCC_CONTROL_ARMED=0
 Environment=EVCC_START_APPROVED=0
-# Optional extra interlock: never transfer a price-pause owner across a replug.
+# Mandatory FC03 continuity: never inherit price-pause owner across replug or polling loss.
 Environment=EVCC_CABLE_TRACK_PATH=/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json
 EnvironmentFile=-/etc/solinteg/ev-price-controller.env
 ExecStart=/usr/bin/python3 -B /opt/solinteg/ev-shadow-runtime/scripts/services/ev_price_controller.py --once

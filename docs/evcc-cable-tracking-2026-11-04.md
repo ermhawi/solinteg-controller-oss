@@ -25,9 +25,10 @@ CP-state, inte av att dessa PWM-register råkar vara lika.
 **Senare offlinekorrigering 2026-11-04:** Strikt, tillståndsberoende
 kontroll kan verifiera en ansluten paus som `B2/1000/267`
 **om** alla tre Ict-kanaler är färska och Ict2 är högst 0,5 A.
-Detta är **inte** en återstartsrätt: prispausägarskap,
-förlustfri manuell stoppavsikt och fysisk FC10-kvalificering
-är fortsatt nödvändiga. Se [uppdaterad pris-ADR](architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+Detta är **inte** en återstartsrätt: verifierad egen
+FC10-prispaus, aktuell kabel-/observationskontinuitet och
+fysisk kvalificering krävs fortsatt. En separat
+Volvo-appstoppdetektor ingår inte i aktuell omfattning. Se [uppdaterad pris-ADR](architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
 ## Implementation
 
@@ -52,9 +53,14 @@ EVCC-/bil-/inverterkommandon. Endast när
   `lossless=false`, `physical_control_eligible=false` och
   `device_writes=0` uttrycker begränsningarna. Läsaren
   `read_fresh_connected()` avvisar även en pågående enprovstransition.
-- Priscontrollern kan läsa den nya filen som **extra interlock**:
+- Priscontrollern kräver nu filen som **obligatorisk interlock**:
   frånkoppling/stale/pending stoppar kommandon och återkallar
-  ägarskap; pausägaren får `evcc_cable_epoch` vid skapandet.
+  ägarskap; pausägaren får `evcc_cable_epoch`,
+  `cable_coverage_epoch` och `cable_tracker_id` vid skapandet.
+  Den kontinuerliga observatören ökar `coverage_epoch` efter
+  FC03-fel eller mätuppehåll, och en ny initierad statusfil får
+  ny `tracking_id`. Inga av dessa fält är förlustfri fysisk
+  urkopplingsdetektion.
   Ändrad epoch efter ur-/inkoppling **återkallar** den gamla
   prispausens möjlighet till återstart. Driftmallen kräver
   en färsk kabelfil när priscontrollern en dag aktiveras.
@@ -75,11 +81,11 @@ EVCC-/bil-/inverterkommandon. Endast när
    Smart Charging och manuellt schema är avstängda och hanteras
    inte som separata styrfunktioner i denna etapp.
    Den äldre tanken om förlustfri *Volvo-appstoppsignal*
-   är inte längre ett produktkrav. Däremot är den nuvarande
-   generiska `verified_manual_intent_audit`-grinden i koden
-   fortfarande aktiv och måste ersättas med verifierad
-   prispausägare/kabelsessionslogik innan autonom återstart.
-   Ingen `lossless=true`-händelse får fabriceras.
+   är inte längre ett produktkrav. Den generiska
+   `verified_manual_intent_audit`-grinden är nu ersatt
+   **i källkoden**, inte driftsatt priscontroller, med en
+   beständig verifierad FC10-prispausägare och kabelsessions-
+   identitet. Ingen `lossless=true`-händelse fabriceras.
 
 30 sekunders polling kan missa en mycket kort ur-/inkoppling,
 därför används **aldrig** `lossless=true`. Volvos egen
@@ -156,8 +162,41 @@ eller ordinarie watchdog ändrades.
 
 **GO/NO-GO:** Kabelstatus är GO för observerande drift. Automatisk
 prispaus och återstart från `PWM=1000` är fortfarande **NO-GO**
-eftersom oberoende kalibrerad kWh-session, testad
-prispausägar-/kabelsessionsmodell i stället för den nuvarande
-generiska manuellt-intent-grinden, och fysisk paus-/
-startkvalificering saknas. **Ingen särskild Volvo-appstoppdetektor
+eftersom oberoende kalibrerad kWh-session, fysiskt kvalificerad
+prispaus-/kabelsessionsmodell och verkliga paus-/startprov
+fortfarande saknas. Källkodsmodellen är nu offline-testad,
+men inte installerad som priscontroller. **Ingen särskild Volvo-appstoppdetektor
 krävs för denna installation**, eftersom appen saknar stoppknapp.
+
+## Efterföljande read-only uppgradering: observationskontinuitet
+
+Den befintliga `solinteg-ev-observer.service` kör nu en ny version av
+enbart `evcc_cable_tracker.py` (SHA-256
+`761782941d607c59fb3f922aebf58f3093d34d50b9ecc15fe1656d73b9111e09`).
+En äldre trackerfil utan de nya fälten får inte ge ny FC10-
+behörighet förrän observatören skrivit nytt prov.
+`connection_epoch` ökar vid verifierad ur-/inkoppling;
+`coverage_epoch` ökar vid avbrott över 100 s eller FC03-
+fel/okänt tillstånd; `tracking_id` är beständig inom en
+trackerfil men ändras vid filförlust och ny initiering.
+En ny `tracking_id` förhindrar att äldre pausposter blir
+giltiga när kabel- och täckningsepok båda återställts till 0.
+
+Live efter uppgraderingen: `connected / C2`, epoch `0/0`,
+giltig unik trackeridentitet, provålder 8 s, `0600`,
+`device_writes=0`. EVCC-observatören, dispatchern, pollern
+och Volvo-status-timern aktiva; inga omstarter efter den
+planerade omstarten av observatören (`NRestarts=0`).
+Den separata automatiska priscontrollern är fortsatt
+`LoadState=not-found`.
+
+Byteexakt rollback och SHA-manifest finns i två rootägda
+`0700`-kataloger:
+`/var/lib/solinteg-evshadow-rollback/evcc-price-owner-continuity-20261104/`
+och
+`/var/lib/solinteg-evshadow-rollback/evcc-price-owner-tracking-id-20261104/`.
+Återställ endast denna avgränsade moduls föregående 0440-kopia
+efter checksummeverifiering och starta om befintlig EVCC-
+observatör. Äldre trackerprotokoll får då inte användas som
+underlag för automatisk återstart. Ingen annan observer,
+dispatcher, broker, timer eller watchdog tillkom eller togs bort.

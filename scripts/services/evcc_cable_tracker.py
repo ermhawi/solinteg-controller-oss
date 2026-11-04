@@ -13,6 +13,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID, uuid4
 
 SCHEMA = 1
 SOURCE = "waveshare_evcc_fc03_polled_connection"
@@ -65,6 +66,8 @@ def _initial() -> dict:
         "status": "unknown",
         "observed_state": "unknown",
         "connection_epoch": 0,
+        "coverage_epoch": 0,
+        "tracking_id": str(uuid4()),
         "confirmed_replug": False,
         "candidate_status": None,
         "candidate_samples": 0,
@@ -80,6 +83,14 @@ def _initial() -> dict:
     }
 
 
+def _valid_uuid(value: str) -> bool:
+    try:
+        UUID(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _check_prior(prior: dict) -> None:
     if (not isinstance(prior, dict) or prior.get("schema_version") != SCHEMA
             or prior.get("source") != SOURCE
@@ -89,6 +100,10 @@ def _check_prior(prior: dict) -> None:
             or not 0 <= prior["candidate_samples"] <= CONFIRM_SAMPLES
             or type(prior.get("connection_epoch")) is not int
             or not 0 <= prior["connection_epoch"] <= 2**63 - 2
+            or ("coverage_epoch" in prior and (type(prior["coverage_epoch"]) is not int
+                 or not 0 <= prior["coverage_epoch"] <= 2**63 - 2))
+            or ("tracking_id" in prior and (not isinstance(prior["tracking_id"], str)
+                 or not _valid_uuid(prior["tracking_id"])))
             or type(prior.get("confirmed_replug")) is not bool
             or prior.get("physical_control_eligible") is not False
             or prior.get("lossless") is not False
@@ -109,6 +124,11 @@ def advance(prior: dict | None, snapshot: dict, *, now: datetime) -> dict:
     state, stamp = _status(snapshot, now=now)
     previous = dict(prior) if prior is not None else _initial()
     _check_prior(previous)
+    # v1 installed status is readable, but never grants new owner authority
+    # until the upgraded observer has published coverage_epoch.
+    previous.setdefault("coverage_epoch", 0)
+    if "tracking_id" not in previous:
+        previous["tracking_id"] = str(uuid4())
     last = previous["last_sample_at_utc"]
     if last is not None:
         age = (stamp - _instant(last)).total_seconds()
@@ -116,12 +136,14 @@ def advance(prior: dict | None, snapshot: dict, *, now: datetime) -> dict:
             # Idempotent on duplicate or out-of-order polling.
             return previous
         if age > MAX_OBSERVATION_GAP_S:
+            previous["coverage_epoch"] += 1
             previous.update(status="unknown", confirmed_replug=False,
                             candidate_status=None, candidate_samples=0)
     previous["last_sample_at_utc"] = stamp.isoformat()
     previous["observed_state"] = snapshot.get("state") if state != "unknown" else "unknown"
     previous["last_transition"] = None
     if state == "unknown":
+        previous["coverage_epoch"] += 1
         previous.update(status="unknown", confirmed_replug=False,
                         candidate_status=None, candidate_samples=0)
         return previous
@@ -177,6 +199,9 @@ def read_fresh_connected(path: Path, *, now: datetime) -> dict | None:
     """Supplementary guard: does not establish absence of app-level pause."""
     record = read(path)
     if (record is None or record["status"] != "connected"
+            or type(record.get("coverage_epoch")) is not int
+            or not isinstance(record.get("tracking_id"), str)
+            or not _valid_uuid(record["tracking_id"])
             or record["candidate_status"] is not None
             or record["observed_state"] not in CONNECTED):
         return None

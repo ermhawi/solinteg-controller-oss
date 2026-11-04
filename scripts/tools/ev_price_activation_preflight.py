@@ -3,7 +3,7 @@
 
 This report is evidence, not permission to arm the price controller. In
 particular, estimated EVCC AC energy and polled Volvo charging status can
-never substitute for a calibrated session or lossless manual-stop events.
+never substitute for a calibrated session or actual FC10 pause ownership.
 """
 from __future__ import annotations
 
@@ -85,22 +85,27 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
     battery = smart.verified_battery_observation(
         volvo.get("battery_readonly") if volvo else None,
         now=now, expected_vin_sha256=vin_hash)
-    try:
-        manual = ownership.read_manual_intent(
-            "/run/solinteg/ev-manual-intent.json", now=now)
-    except ownership.OwnershipError:
-        manual = None
-    manual_ok = bool(
-        session and manual and manual["manual_paused"] is False
-        and manual["session_id"] == session["session_id"]
-        and manual["connection_epoch"] == session["connection_epoch"]
-    )
     evcc = _json_file(root / "evcc-readonly.json")
     try:
         cable = cable_tracker.read_fresh_connected(root / "evcc-cable-state.json", now=now)
     except cable_tracker.CableObservationError:
         cable = None
     grid = _json_file(grid_path)
+    try:
+        owner = ownership.read_owner(root / "ev-price-pause-owner.json")
+        owner_valid = True
+    except ownership.OwnershipError:
+        owner, owner_valid = None, False
+    ownership_ready = bool(
+        owner_valid and session and cable and _evcc_usable(evcc, now)
+        and ((owner is None and evcc["state"] == "C2"
+              and evcc["configured_pwm_raw"] == 100)
+             or (owner is not None and owner["state"] == "released"
+                 and evcc["state"] == "C2" and evcc["configured_pwm_raw"] == 100)
+             or (owner is not None and evcc["state"] == "B2"
+                 and evcc["configured_pwm_raw"] == 1000
+                 and ownership.is_owned(owner, session=session, cable=cable, now=now)))
+    )
     price = (decide_grid_price(read_house_price_plan(str(price_db)),
                                now=now, session=session, max_current_a=6)
              if session is not None else None)
@@ -108,7 +113,7 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
         "volvo_smart_charging_explicitly_off": smart_state == "off",
         "fresh_chronos_battery_sample_observed": battery is not None,
         "independently_calibrated_fresh_ev_session": session is not None,
-        "lossless_manual_stop_source_verified": manual_ok,
+        "price_pause_provenance_valid_or_unowned": ownership_ready,
         "fresh_consistent_evcc_fc03": _evcc_usable(evcc, now),
         "fresh_debounced_evcc_cable_connection": cable is not None,
         "fresh_valid_grid_and_l3": _grid_usable(grid, now),

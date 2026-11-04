@@ -34,16 +34,19 @@ fasesäkring och ägarskap är verifierade. Aktuella HA-data är markerade
 Befintlig Modbus-broker, husbatterireglering och EVCC-observatör fortsätter
 som tidigare. Se [ADR och rollback](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
-**EVCC-kabeldetektor, källkod 2026-11-04:**
-Befintliga EVCC FC03-observatören kan även publicera en lokal,
-atomiskt uppdaterad 0600-status med observerad ur-/inkoppling
-(`A1`→`B2/C2`), tvåprovskvalificering och persistent kabel-epoch.
-`EVCC_CABLE_TRACK_PATH` i `solinteg-ev-observer.service` aktiverar
-funktionen utan ny tjänst eller ytterligare FC03-läsning. En framtida
-priscontroller kan därmed återkalla gamla pausägarskap efter urkoppling.
-**Kabelhändelser tillåter inte själva automatisk återstart** från
-`PWM=1000`: manuell app-stoppsignal, färsk verifierad session och
-fysisk EVCC-kvalificering saknas fortfarande. Se
+**EVCC-kabeldetektor, read-only driftsatt 2026-11-04:**
+Den redan befintliga EVCC FC03-observatören publicerar en lokal,
+atomiskt uppdaterad 0600-status med `connection_epoch`
+för observerad ur-/inkoppling, `coverage_epoch` för tappad
+FC03-kontinuitet och beständig unik `tracking_id`
+som byts om statusfilen återskapas. Ingen ny tjänst eller
+ytterligare Modbus-/FC03-läsning introduceras.
+`EVCC_CABLE_TRACK_PATH` är **obligatorisk** för den framtida
+priscontrollern och dess verifierade FC10-pausägare.
+**Kabelhändelser ger inte själva återstartsrätt** från
+`PWM=1000`; kalibrerad session och fysiska FC10-/säkringstester
+kvarstår. Inga EVCC-skrivningar gjordes. Driftsäkerhetsbevis och
+rollback finns i
 [kabel-/sessionsrunbook](../docs/evcc-cable-tracking-2026-11-04.md).
 
 **EVCC2 paus-pilot/kontroll, endast källkod 2026-11-04:**
@@ -57,8 +60,10 @@ gemensam strikt tvålägestolkning:
 Utebliven pilot-/fasbekräftelse stoppar FC10 och
 osäkert skrivutfall återförs inte med blind retry.
 **En verifierad paus ger inte automatiskt rätt att återstarta.**
-Förlustfri manuellt stopp-signal, kalibrerad EV-session och
-fysiska EVCC-prover kvarstår. **Ingen EVCC-prisservice
+Verifierbar egen prispaus och kabelkontinuitet är nu
+implementerade och testade i källkod. Kalibrerad EV-session,
+fysiska EVCC-prover och hantering av mycket snabba
+ur-/inkopplingar kvarstår. **Ingen EVCC-prisservice
 installerades och inga EVCC-skrivningar gjordes** i detta steg.
 Se [källkods-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
@@ -100,7 +105,8 @@ och EVCC-prisstyrning spärras automatiskt. Återställning:
 `sudo systemctl disable --now solinteg-volvo-smart-status.timer`
 (stänger endast statusinsamlingen).
 **EVCC-prisstyrningen är fortfarande NO-GO** tills verifierad
-kWh-session, manuell stoppdetektion och fysiska EVCC-prov är godkända.
+kWh-session, pausägar-/kabelsessionskvalificering och fysiska
+EVCC-prov är godkända.
 Inga fordons-/EVCC-/inverterskrivningar gjordes i Volvo-integrationen.
 
 **Volvo BMS-/appstatus, endast skrivskyddad komplettering (2026-11-04):**
@@ -133,15 +139,17 @@ Se [Volvo-/EVCC-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart
 **Ny EVCC-prisaktiverings-preflight (2026-11-04, enbart kod):**
 `scripts/tools/ev_price_activation_preflight.py` kontrollerar i
 **read-only** läge Volvos färska `off`, strikt kalibrerad
-`strict-session.json`, förlustfri manuell-intent-källa enligt
-**det ännu oförändrade kodkontraktet**, färska
-EVCC C2/6 A eller B2/paus, giltiga L3-/nätvärden och prisplan.
-Utdata är enbart JSON med `state=not_ready` och `device_writes=0`;
-fysiska FC10-testgrinden är avsiktligt **hårt blockerad** tills
-separat kvalificering görs. Den aktuella Dell-avläsningen klarade
-Volvo/EVCC/L3 men saknar kalibrerad session, manuellt-intent-källa
-i kodens nuvarande form och fysiska prov. Kodfilen är **inte
-installerad i produktion** och ingen EVCC-prisservice har installerats.
+`strict-session.json`, den egna verifierade
+FC10-prispausproveniensen eller en bekräftad `C2/100`
+utan tidigare ägarpost, färsk kabelkontinuitet,
+EVCC C2/6 A eller B2/paus, giltiga L3-/nätvärden och
+prisplan. Vid osäkert eller äldre ägarformat är kontrollen
+`false`. Utdata har `device_writes=0`; den fysiska
+FC10-testgrinden är avsiktligt **hårt blockerad** tills
+separat kvalificering görs. Dell saknar ännu kalibrerad
+session och fysiskt kvalificerade prov. Preflightkoden är
+**inte installerad i produktion** och ingen
+EVCC-priscontroller har installerats.
 Se [verklig preflight, risker och kvalificeringskrav](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
 **Scope-beslut 2026-11-04 – ingen manuell stoppknapp i Volvo Cars-appen:**
@@ -152,9 +160,13 @@ appen* behövs inte i den aktuella leveransen. Det tidigare planerade
 A/B-testet fick en läsande A-mätning men **inget B-prov** eftersom
 stoppknappen saknas. Inget ytterligare Volvo-app-stoppsökande ingår.
 Däremot kvarstår säkert prispausägarskap, manuell påverkan via
-kabeln/EVSE och de fysiska EVCC-testerna. Kodens generiska
-`read_manual_intent()`-krav på källdata med `lossless=true`
-finns ännu kvar; **skapa ingen falsk producent** för att kringgå det.
+kabeln/EVSE och de fysiska EVCC-testerna. Kodens tidigare
+`read_manual_intent(lossless=true)`-krav är nu ersatt av
+beständig FC10-ägare (`schema_version=2`), obligatorisk
+kabelspårning samt `connection_epoch`, `coverage_epoch`
+och `tracking_id`. Detta är **offline-testad kontrollkod**,
+inte en driftsatt priscontroller; ingen förlustfri manuell
+stoppsignal har fabricerats.
 Den redan befintliga Smart Charging-`off`-grinden bibehålls
 oförändrad som försiktighetsregel; inga nya appschemaregler införs.
 [Avgränsning och kvarstående kodgap](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).

@@ -802,20 +802,14 @@ omvalidering av session, pausägare och FC03 innan ny åtgärd.
 Pollning kan missa snabba ur-/inkopplingar; lösningen får **inte** utge sig för att
 vara en förlustfri fysisk stopphändelsekälla.
 
-**Viktigt kodgap, ännu inte löst:** Nuvarande
-`ev_price_pause_owner.read_manual_intent()` och
-`ev_price_controller.run_once()` kräver fortfarande
-en separat `/run/solinteg/ev-manual-intent.json` med
-`lossless=true`; sådan verifierad producent finns inte.
-`ev_price_activation_preflight.py` rapporterar därför
-fortfarande `lossless_manual_stop_source_verified=false`
-och blockerar autonom återstart. Detta tidigare generiska
-kontrakt måste **ersättas och testas** mot faktiskt
-enkelskrivarägarskap, beständig prispaus, kabel-epoch och
-avvikande EVCC-register. Vi ska **inte** syntetiskt
-skriva `manual_paused=false` eller `lossless=true`
-för att forcera ett GO. Inga ändringar i dessa kodspärrar
-ingår i detta dokumentationsbeslut.
+**Historiskt kodgap, åtgärdat i senare källkod 2026-11-04:**
+Den dåvarande `ev_price_pause_owner.read_manual_intent()` krävde
+`/run/solinteg/ev-manual-intent.json` med `lossless=true`.
+Denna oskapade producent ersätts nu med verifierad
+FC10-prispausproveniens och beständiga EVCC-kabelidentiteter.
+Inga falska `manual_paused=false`-/`lossless=true`-uppgifter
+har skapats. **Källkodsåtgärden är ännu inte en aktiv
+EVCC-priscontroller**, och inte ett drift-GO; se nya avsnittet nedan.
 
 **Appscheman:** De två frånslagna appfunktionerna
 behöver ingen ny särskild logik nu. Den **redan driftsatta**
@@ -830,10 +824,136 @@ konkurrerande styrning utan ny bedömning.
 **Återstående tekniska GO-villkor för prisstyrning:**
 (1) verifierad och tillräckligt kalibrerad laddsession
 med kWh-/SoC-behov och rimlig deadline,
-(2) en verklig och testad pausägar-/kabelsessionsmodell
-utan påhittade manuella stoppintyg, samt
-(3) kontrollerade fysiska FC10-pauser/återstarter,
+(2) driftkvalificering av den nu offline-testade
+pausägar-/kabelsessionsmodellen, inklusive samtliga
+tillfällen då kontakter kan försvinna mellan FC03-prover,
+samt (3) kontrollerade fysiska FC10-pauser/återstarter,
 säkrings-/fasbudget, avvikelsehantering och rollback.
 `solinteg-ev-price-controller.service`/`.timer`
 förblir oinstallerade. Dokumentationsbeslutet i sig
 ger **ingen** fysisk skrivbehörighet eller drift-GO.
+
+### Etapp: autentiskt EVCC-prispausägarskap utan Volvo-appstopp (2026-11-04)
+
+**Implementerat och offline-testat, men INTE installerat som priscontroller:**
+`ev_price_pause_owner.py` har ett nytt, avsiktligt
+inkompatibelt `schema_version=2` och
+`source=evcc_price_controller_verified_fc10`.
+Den tidigare påhittade förutsättningen med
+`verified_manual_intent_audit`/`lossless=true` används inte.
+En inkompatibel gammal ägarpost avvisas i stället för att
+migreras till aktivt ägarskap.
+
+Under exklusivt prisägar- och EVCC-seriallås får endast controllern
+själv gå `pending → owned` **efter** verifierad FC10-paus
+`100→1000` och faktisk `B2 / pilot267 / Ict2≤0,5 A`
+i fysisk läsback. Innan paus sparas en beständig 0600-post med
+priscontrolleridentitet, sessions-UUID, sessions-epoch,
+`connection_epoch`, `coverage_epoch`, en individuell
+`tracking_id` för kabelspårarens beständiga fil och
+`verified_fc10_pause=false`. Först när läsbacken lyckats
+sparas `owned`/`verified_fc10_pause=true`.
+Återstart `1000→100` kräver denna **exakt matchande**
+proveniens; `releasing` skrivs före FC10 och `released`
+efter läsback. Ett avbrutet eller osäkert FC10-försök
+lämnar `pending`/`releasing` kvar, utan blind retry.
+
+`evcc_cable_tracker.py` ökar `coverage_epoch` när FC03-
+avläsningar faller bort över 100 s eller blir okända.
+`tracking_id` skapas bara vid ny initiering och byts om
+statusfilen försvinner och nybildas; därför kan inte ett
+gammalt ägarskap bli giltigt igen bara för att två epoker
+råkar börja om på `0`. `read_fresh_connected()`
+kräver båda dessa fält. Precis före fysisk FC10 läses
+kabelspåraren om under befintligt seriallås; ändrad
+kabelstatus, epoch, id eller CP blockerar kommandot.
+Extern ändring från `1000`, nytt sessions-ID,
+session-epoch, laddläge, gammal telemetri eller
+påslagen/okänd Volvo Smart Charging **återkallar**
+en aktiv prispaus. Terminala `pending`, `releasing`
+och `revoked` spärrar nya automatiska skrivningar
+även om en senare EV-session ser giltig ut;
+separat kontrollerad avstämning krävs.
+
+`ev_price_activation_preflight.py` visar nu
+`price_pause_provenance_valid_or_unowned`, inte en
+påhittad förlustfri stopphändelse. Ett verifierat
+`C2/100/6 A` utan tidigare pausägare kan vara
+en *kandidat till ny prispaus*, medan `B2/1000/267`
+utan verifierat eget ägarskap **aldrig** är en
+återstartskandidat. Den fysiska provgrinden är
+fortfarande hårdkodad `false`; ingen service/timer
+har installerats eller armerats.
+
+**Read-only Dell-release:** Befintliga
+`solinteg-ev-observer.service` återanvänder sin
+FC03-observation men kör nu enbart uppdaterad
+`evcc_cable_tracker.py` (SHA-256
+`761782941d607c59fb3f922aebf58f3093d34d50b9ecc15fe1656d73b9111e09`).
+Efter minimal omstart verifierades `active/running`,
+`NRestarts=0`, färsk `C2/connected`,
+`connection_epoch=0`, `coverage_epoch=0`,
+giltig `tracking_id`, privat JSON `0600`,
+`device_writes=0`; övriga dispatcher/poller och
+Volvo-status-timer var fortsatt aktiva. Ingen EVCC,
+Volvo- eller inverterstyrning har ändrats.
+Byteexakta äldre versioner och manifest för de två
+läsande uppdateringarna finns i
+`/var/lib/solinteg-evshadow-rollback/evcc-price-owner-continuity-20261104/`
+och
+`/var/lib/solinteg-evshadow-rollback/evcc-price-owner-tracking-id-20261104/`
+(rootägt mode 0700); endast trackerfilen i den
+befintliga observerprocessen ändrades.
+**Rollback:** verifiera manifest och SHA, återställ
+den närmast föregående källfilen under dess installerade
+ägare och mode `0440`, starta om **endast observatören**
+och kontrollera FC03 igen. Priscontrollern förblir
+oarmerad; äldre tracker tappar den nya proveniensgrinden
+och får därför **inte** användas för automatisk start.
+
+**Restkvalificering:** 30-sekunderspollning är inte en
+förlustfri detektor för en mycket snabb ur-/inkoppling.
+Ny kabelsession från ett tidigare `1000`-läge är
+**inte automatiskt återstartstillåten**; den kräver
+en separat explicit ny-session-policy eller starkare
+fysisk kabelhändelse, så tidigare paus inte ärvs.
+Dessutom saknas fortfarande oberoende avstämd
+AC-kWh/SoC-session och kontrollerade verkliga
+FC10-/säkrings-/feltester. Dessa blockerar aktivering
+oavsett hur många offline-tester som passerar.
+
+**Read-only energirevision efter ägarskapsändringen (2026-11-04):**
+`ev_ac_quality_audit.audit()` läste befintliga privata
+SQLite-källor, utan skrivning. Under senaste 24 h fanns
+2 876 historikprover, 15,139307 kWh **endast delvis
+uppskattad AC-energi** under 39 629 s täckning och
+18 rapporterade SoC-nivåer (+17 procentenheter).
+72-timmarsfönstret gav samma täckta AC-fragment och SoC-steg.
+Källkvaliteten är fortfarande
+`diagnostic_not_calibration`; SoC-tidens roll är
+`last_changed_not_verified_bms_sample`, och
+`calibrated_ac_dc_efficiency=null`. Detta får **inte**
+användas som ett kalibrerat 80-procents energibehov eller
+skrivas till `strict-session.json`.
+Nästa steg kräver oberoende, sammanhängande AC-kWh-mätning,
+matchade faktiskt tidsstämplade SoC-prov och en
+fysiskt verifierad 6 A-paus/återstart. Inga ändringar
+av husbatteriets, brokerns eller elbilens fysiska styrning
+har utförts vid energirevisionen.
+
+**Slutlig offline-/driftverifiering:** 1 541 Python-tester
+passerade, inklusive ägarskap v2, kraschkvarstående
+`pending`/`releasing`, kabelbortfall, avbruten polling,
+borttagen/återskapad trackerfil, idbyte och säker FC10-
+fencing. `git diff --check` och
+`systemd-analyze verify` för de inaktiva
+priscontroller-unitmallarna godkändes.
+Ett separat **read-only** liveanrop med ny preflight gav
+`state=not_ready`, `arm_command_issued=false`
+och `device_writes=0`.
+Volvos Smart Charging var explicit `off`; färsk FC03
+`C2`, verifierad kabelanslutning och aktuell L3-/nätdata
+godkändes. Kalibrerad `strict-session`, aktuell giltig
+BMS-läsning, oberoende färdigt pris-/energibeslut och fysiska
+FC10-prov saknades. Priscontroller och dess timer är
+fortsatt oinstallerade och oarmerade.
