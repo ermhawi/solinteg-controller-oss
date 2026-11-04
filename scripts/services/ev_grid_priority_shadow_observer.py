@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ev_grid_priority_solar_shadow import assess
 from ev_grid_priority_idle_strategy import evaluate as evaluate_idle
+from ev_l3_metered_shadow_observer import collect as collect_metered
 from battery_save_solar_shadow import assess as assess_battery_save
 
 LIVE = Path("/opt/solinteg/live.json")
@@ -94,6 +95,10 @@ def inspect(live_path: Path = LIVE, evcc_path: Path = EVCC,
         "phase_fuse_protection_verified": False,
         "physical_control_authorized": False,
     }
+    # This read-only policy observes independently; the retired legacy gate
+    # still protects the existing advisor below, without rearming anything.
+    result["metered_policy"] = collect_metered(
+        live_path, evcc_path, controls_path, now=now, last_applied=last_applied)
     try:
         try:
             gate = json.loads(gate_path.read_text(encoding="utf-8"))

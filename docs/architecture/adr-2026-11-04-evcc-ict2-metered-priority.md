@@ -198,6 +198,68 @@ full-batteri-/exportfall och skrivskyddad historian-replay;
 Zensical-dokumentationsbygge och `git diff --check` godkända.
 Det accepterade äldre failure-scenariot i brokern behålls.
 
+### Driftsatt: Ict2-grid-first-shadow i befintlig observationssidecar 2026-11-04
+
+**Fysisk EV-nätprioritering fortsatt NO-GO.** Enbart den redan
+installerade `solinteg-ev-grid-solar-shadow.timer` (cirka 30 s) har
+uppgraderats med ett ytterligare *read-only* JSON-fält. Ingen ny timer,
+watchdog, rootgate, dispatcher-hook, brokerskrivning, EVCC-FC10 eller
+inverterkontroll har införts.
+
+Den rootägda befintliga observatörfilen skiljde sig från den nyare
+Git-källan. Därför användes en **checksummebunden additiv injektion**,
+inte kopiering av hela Git-observatören. Skriptet
+`scripts/tools/prepare_ev_l3_metered_shadow.py` kräver exakt
+installerad ursprungs-SHA-256
+`91b569847b2380304c038913cd0a68f915117edb663f04f01f5caae5596aeb79`
+och kompilerar endast en import samt en `metered_policy`-samling
+**före** den gamla grindkontrollen. Ny installerad observatörs-SHA-256:
+`eac42a0f1ddb2734c93a2d827a9bc12ab41cc82897b7ff23e36f8ae28837b0cc`.
+
+Installerat som rootägda 0644-filer i
+`/usr/local/libexec/solinteg-ev-grid-solar-shadow/`:
+
+- `ev_grid_priority_shadow_observer.py`: originalet plus separat
+  `metered_policy`-fält (ingen ändrad legacy-`state`);
+- `ev_l3_metered_shadow_observer.py`: separat JSON-/SQLite-read-only
+  kollektor som misslyckas konservativt vid saknade data;
+- `ev_l3_metered_policy.py`: rent matematiskt Ict2-/PV-/SoC-beslut
+  med `physical_control_authorized=false` och `device_writes=0`.
+
+Den **gamla rootgrinden saknas fortfarande**. Därför är det medvetet
+förväntat att JSON-filens äldre toppnivå-`state="disabled"` samtidigt
+som **`metered_policy.state` innehåller aktivt beräknade resultat**.
+Inget försök gjordes att kringgå den gamla grindens skydd för dess
+egna äldre beslut.
+
+Första produktionskörningen verifierade `C2` Ict2=6,1 A, uppskattat
+EV-nätbehov **1 403 W**, solreserv till husbatteriet cirka **340 W**
+och `metered_policy.state="soc_or_bms_guard"`. Reservstatusen
+påverkar inte den rapporterade icke-aktuerande mätbudgeten. Enbart
+observationen tillåts vid låg SoC, aldrig fysisk reglering.
+
+**Tillbakagång:** ursprungsfilen sparades rootägd i
+`/var/lib/solinteg-evshadow-rollback/ev_grid_solar_shadow_observer.pre-ict2-20261104.py`
+(SHA-256 enligt ovan). För rollback: stoppa **endast**
+`solinteg-ev-grid-solar-shadow.timer`, verifiera att dess oneshot har
+avslutats, återställ observatörens exakt hashade tidigare innehåll
+atomiskt med ursprungligt läsbart 0644-mode, ta bort endast de två
+nya ägda modulerna efter jämförelse med förväntade hashvärden och
+starta **endast** sidecar-timern. Låt rootgrind, dispatcher,
+broker, poller och EVCC-observatör vara orörda. Bevara rollbackfilen
+och privat EVCC-provlogg tills arkivkraven har uppfyllts.
+
+**Verifieringsnivå:** 1 418 Python-unittester OK före installering,
+Zensical-dokumentationsbygge OK. Installerad version kompilerade och
+gav verifierat JSON-resultat vid manuell oneshot-start. Tre
+efterföljande, distinkta snapshot-tider verifierades:
+10:33:31, 10:34:01 och 10:35:01 UTC, med Ict2 cirka 6,1 A,
+nätbehov cirka 1 403 W och `device_writes=0`. Alla observerade
+systemd-tjänster/timern var aktiva. SoC låg då kring **22 %** och
+modellen redovisade korrekt skyddsstatus utan att stoppa den
+fortsatta fysiska urladdningen. Långsiktiga ekonomiska effekter
+och fysisk EV-nätprioritet är fortfarande **inte** verifierade.
+
 ### Förutsättningar för fysisk driftsättning
 
 1. Kontrollera under övervakad **verklig billaddning** att `C2`,

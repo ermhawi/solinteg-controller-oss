@@ -201,3 +201,31 @@ nätwatt efter källa: önskad L3-import måste verifieras tillsammans
 med PV→batteri, nät-CT och faktisk batteriladdning. Ingen fysisk
 EV-grid-priority-aktivering förrän gränser, laddläge, stabilitet,
 återställning och failure-scenario är separat verifierade.
+
+## 7. Driftsatt aktiv read-only-shadow i befintlig sidecar (2026-11-04)
+
+Under det senare, separat godkända shadow-driftsättningssteget aktiverades
+**den nya beräkningen, inte den fysiska styrningen**. Den befintliga
+`solinteg-ev-grid-solar-shadow.timer` kör var cirka 30:e sekund.
+Dess befintliga 0600-JSON har nu ett fristående
+`metered_policy`-objekt med EVCC-Ict2, bedömt nätimportbehov för bilen,
+icke-EV-huslast, PV-laddningsbudget för husbatteriet, L3-importavvikelse
+och `model_actionable=false`. Den äldre rootgate-spärrade
+toppnivåstatusen kan fortsatt säga `disabled`, men detta blockerar
+**inte** den nya observationen och ger inga nya skrivrättigheter.
+
+**Faktisk första körning:** Ict2 6,1 A, EV-mål 1 403 W
+från nätet, möjligt 340 W solöverskott reserverat till
+husbatteriet. Låg SoC gav `metered_policy.state=soc_or_bms_guard`.
+Källkodens beslut har inga utgångar till styrning. Ursprunglig
+installed observer SHA-256 var
+`91b569847b2380304c038913cd0a68f915117edb663f04f01f5caae5596aeb79`,
+nya SHA-256
+`eac42a0f1ddb2734c93a2d827a9bc12ab41cc82897b7ff23e36f8ae28837b0cc`.
+Rootägda rollbackfiler och säker isolering dokumenteras i
+[mät-/release-ADR](architecture/adr-2026-11-04-evcc-ict2-metered-priority.md).
+
+**Fortfarande saknas:** bevisad fysisk allokering av nätel till EV,
+tillräckligt BMS-styrd solelsladdning, oberoende bekräftelse av fullt
+hushållsbatteri, test av verifierad kontrollavvikelse och fysisk
+fuse-/fallback-verifiering. Ingen fysisk EV-grid-priority-aktivering.

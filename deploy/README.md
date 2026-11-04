@@ -42,6 +42,25 @@ automatiska inverter-/EVCC-kommandon, ingen ny watchdog och ingen
 laddning är avslutat; EVCC står kvar på 6 A. Detta är **inte**
 fysisk EV-nätprioritering.
 
+**Driftsatt Ict2-shadow i befintlig sidecar 2026-11-04:** Den redan
+existerande `solinteg-ev-grid-solar-shadow.timer` (cirka 30 s) kör nu
+en separat `metered_policy` baserad på faktisk FC03-Ict2,
+fasdata, SoC och PV-budget. Läs i den befintliga privata filen
+`/opt/solinteg/ev-shadow-runtime/var/ev-grid-priority-solar-shadow.json`:
+`metered_policy.state`, `metered_policy.measurements.ev_grid_target_w_est`,
+`ev_solar_allowance_w_est`, `ev_l3_import_target_gap_w_est`
+och `house_battery_solar_charge_headroom_w_est`. Den gamla
+toppnivå-`state=disabled` förblir korrekt eftersom dess orelaterade
+rootgate inte finns; **det nya fältet beräknas oberoende**.
+Rootägt installed observerpatch är checksummebunden och bara två
+ytterligare skrivskyddade moduler har lagts i sidecar-katalogen.
+Unitens `IPAddressDeny=any` och `ProtectSystem=strict`
+är oförändrade; ingen inverterskrivning eller EVCC-reglering.
+[Installations-SHA och rollback](../docs/architecture/adr-2026-11-04-evcc-ict2-metered-priority.md).
+Om `metered_policy` saknas: felsök *endast sidecar*, kontrollera timer,
+service-resultat, JSON-ålder och backup; ändra **inte** rootgrind
+eller produktionsdispatcher för att slå på observationen.
+
 **Dell observer pilot (2026-11-03):** [separately installed observe-only systemd timer](../docs/modbus-broker-watchdog-dell-2026-11-03.md) checks dispatcher/poller timestamps every 15 s; it has no TCP access, no Modbus writes, and does not replace the existing watchdog.
 **Batterisparläge/solöverskott (2026-11-02):** Den direkta EMS-varianten `solar_charge`
 är endast implementerad i `Sundsvall`-källkoden, **inte driftsatt eller aktiverad**.

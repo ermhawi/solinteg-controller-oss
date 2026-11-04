@@ -174,6 +174,55 @@ class ShadowObserverTests(unittest.TestCase):
         self.assertEqual(r["state"], "disabled")
         self.assertNotIn("advice", r)
 
+    def test_metered_policy_runs_when_legacy_root_gate_is_missing(self):
+        self.gate.unlink()
+        self.live.write_text(json.dumps({**LIVE, "battery_temp_c": 15}))
+        r = self.inspect()
+        self.assertEqual(r["state"], "disabled")
+        self.assertEqual(r["reason"], "root gate missing")
+        self.assertNotIn("advice", r)
+        self.assertEqual(r["metered_policy"]["state"], "idle_stability_unverified")
+        self.assertEqual(r["metered_policy"]["measurements"]["ev_grid_target_w_est"], 1380)
+        self.assertFalse(r["metered_policy"]["measurements"]["physical_control_authorized"])
+        self.assertEqual(r["device_writes"], 0)
+
+    def test_metered_policy_observes_daylight_with_no_legacy_gate(self):
+        self.gate.unlink()
+        self.live.write_text(json.dumps({
+            **LIVE, "battery_temp_c": 15, "pv_w": 2026, "battery_w": 196,
+            "inverter_ac_w": 2173, "house_load_w": 2137,
+            "grid_w": 36, "meter_l1_w": 400,
+            "meter_l2_w": 391, "meter_l3_w": -755, "soc_pct": 25,
+        }))
+        r = self.inspect()
+        self.assertEqual(r["state"], "disabled")
+        self.assertEqual(r["metered_policy"]["state"],
+                         "solar_storage_priority_unverified")
+        self.assertEqual(r["metered_policy"]["measurements"]["ev_grid_target_w_est"], 1380)
+        self.assertEqual(r["metered_policy"]["measurements"]["ev_solar_allowance_w_est"], 0)
+        self.assertEqual(r["metered_policy"]["measurements"]["house_battery_solar_charge_headroom_w_est"],
+                         1269)
+        self.assertIsNone(r["metered_policy"]["candidate_power_w"])
+
+    def test_metered_policy_missing_evcc_fails_closed_independently(self):
+        self.gate.unlink()
+        self.evcc.unlink()
+        r = self.inspect()
+        self.assertEqual(r["state"], "disabled")
+        self.assertEqual(r["metered_policy"]["state"], "unavailable")
+        self.assertEqual(r["metered_policy"]["measurements"]["device_writes"], 0)
+        self.assertIsNone(r["metered_policy"]["candidate_action"])
+
+    def test_metered_policy_missing_control_history_still_has_metered_grid_target(self):
+        self.gate.unlink()
+        self.actions.unlink()
+        self.live.write_text(json.dumps({**LIVE, "battery_temp_c": 15}))
+        r = self.inspect()
+        self.assertEqual(r["state"], "disabled")
+        self.assertEqual(r["metered_policy"]["state"], "unknown_action")
+        self.assertEqual(r["metered_policy"]["measurements"]["ev_grid_target_w_est"], 1380)
+        self.assertIsNone(r["metered_policy"]["candidate_power_w"])
+
     def test_missing_gate_is_disabled_after_watchdog_rollback(self):
         self.gate.unlink()
         r = self.inspect()
