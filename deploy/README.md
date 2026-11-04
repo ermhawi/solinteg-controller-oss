@@ -49,6 +49,18 @@ läsanrop. Inget oövervakat OAuth-refresh-/filpubliceringsflöde
 alla EVCC-priskommandon blockeras. **Ingen ny producent, controller-timer
 eller EVCC-skrivare är installerad.** Se [pris-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
+**Volvo-status engångsverifierad på Dell 2026-11-04:**
+Ett nytt skrivskyddat mobilappsanrop kl. 17:49 UTC visade
+`optimized_charging_enabled=false`, inaktiverad avgångstid och
+ingen aktiv global timer eller pending-ändring. En separat
+`scripts/tools/publish_ev_volvo_smart_charging.py` publicerade
+endast sanerade gate-fält atomiskt till ovanstående runtimefil,
+0600 och `solinteg-evshadow:solinteg`; servicekontot kan läsa den.
+Detta är en **engångssnapshot**, inte en kontinuerlig integration:
+statusen blir ogiltig efter 10 minuter. Saknat godkänt
+OAuth-refresh-/pollflöde betyder fortsatt **NO-GO för automatisk
+EVCC-prispaus/återstart**. Ingen EVCC- eller inverterstyrning ändrades.
+
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
 EMS-urladdning med 1 100–1 300 W PV-laddning och uppmätt L3-import

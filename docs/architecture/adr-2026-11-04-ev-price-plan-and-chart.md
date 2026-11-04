@@ -435,11 +435,41 @@ Alla andra utfall än `off` ger **0 EVCC-skrivningar**; eventuellt
 men ersätter **inte**, oberoende mätt EV-session, manuell-intent-källa
 och fysiska EVCC-/säkringstester.
 
-**Ej driftsatt:** Den privata PoC:n har bara interaktiv, kortlivad
-OAuth; det finns ännu **ingen** verifierad, automatiskt förnyad
-producent som atomiskt levererar färska snapshots till Dell-runtime.
-En operatör måste tillhandahålla dem skyddat och tillräckligt ofta.
-Tidigare liveprov visade smartladdning `true`; användarens senare
-avstängning är **inte** verifierad med nytt autentiserat anrop.
-Ingen EVCC-tjänst/timer har installerats eller aktiverats.
-Offline: 410 EV-relaterade Python-tester, hela sviten 1 489 OK; ingen fysisk skrivning.
+**Ny liveverifiering 2026-11-04 kl. 17:49 UTC:** Efter att användaren
+stängt av Volvos smartladdning gav ett nytt godkänt mobilapp-OAuth-flöde
+`GetChargeLocations` med en laddplats och explicit protobuf #7 `false`.
+Laddplatsens avgångstid 07:00 är nu inaktiv, lokala timers saknas,
+global timer/pending global timer saknas, laddplats-pending=0,
+`GetAmpLimit` gav 8 A utan pending. `set_amp_limit_calls=0`;
+inga fordons-, EVCC- eller inverterkommandon. Mobilappautentiseringens
+OTP, åtkomsttoken, callback och VIN exponerades inte i loggar.
+
+Den privata PoC:n skriver nu till en separat 0600-fil
+`smart-schedule-current-readonly.json` så daterad historik inte
+fortsätter skrivas över. En ny explicit enstegs-export
+`scripts/tools/publish_ev_volvo_smart_charging.py` filtrerar
+originalet till exakt de nödvändiga interlock-fälten. Den tar bort
+plats-ID, alias och övrig metadata; validerar ursprung, VIN-hash,
+friskhet, lokala/global timers och pending; avvisar osäkra källfiler,
+symlänkar och gammal data. Publikationen sker med `mkstemp`,
+0600, runtime-katalogens ägare/grupp, fsync och atomisk rename.
+
+**Verifierad Dell-runtime, enbart skrivskyddad statusfil:**
+`/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json`
+publicerades en gång med `off`, mode 0600,
+ägare `solinteg-evshadow:solinteg`, läsbar för servicekontot.
+Ingen EVCC-priscontroller-service/timer är installerad
+(`LoadState=not-found`). Denna engångsstatus blir **stale efter
+10 minuter** och kan inte utgöra produktionskontinuitet.
+
+**Kvarstående produktionsblockerare:** Ingen verifierad automatisk
+mobilapp-OAuth-refresh och periodisk säker leverans finns;
+användarens manuella avstängning kan ändras när som helst och en
+tidigare `false` är inte ett abonnemang på ändringshändelser.
+Den oberoende kalibrerade laddsessionen, förlustfri
+manuell-stoppkälla och fysiska EVCC-/fasprov kvarstår.
+Automatisk priskontroll förblir helt oinstallerad och oarmerad.
+
+**Verifiering:** 7 publiceringstester, 1 496 Python-tester totalt,
+10 privata PoC-tester OK; `device_writes=0` och ingen fysisk
+styrning utförd.
