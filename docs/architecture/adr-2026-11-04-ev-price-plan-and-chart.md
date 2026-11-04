@@ -295,9 +295,10 @@ orörda.
 
 ## Känd lucka
 
-Nuvarande historiska förbrukningsprognos för huset
-kan fortfarande innehålla EV-kWh eftersom råmätningen
-innehåller all last. Detta måste justeras i separat
-deriverad historik/forecast-källa, aldrig genom att
-skriva om råmätaren. Den separata UI-huslasten
-drar redan av bilens Ict2-effekt.
+**Delvis åtgärdat:** den härledda huslastprognosen använder
+nu separat vardags-/helgprofil och drar av verifierad
+EVCC-Ict2-effekt från kompletta historiska UTC-timmar.
+För tider utan mätbar EVCC-ström ligger rålasten kvar,
+vilket är avsiktligt konservativt. Nät-CT, råtelemetri
+samt visad huslast och separat bil är oförändrade.
+Se [lastprognosens ADR](adr-2026-11-04-weekday-ev-load-profile.md).

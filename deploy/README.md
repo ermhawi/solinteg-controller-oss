@@ -1,5 +1,15 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**Husets lastprognos (2026-11-04):** `readTrailingLoadProfile` skiljer
+nu vardagar och helger och räknar bort endast fullständiga UTC-timmar
+med uppmätt EVCC-Ict2 från den **härledda** huslastprofilen. Befintliga
+`readings`, L3-fasvärden, nät- och batterireglering och säkringsskydd
+förblir oförändrade. Historikern publicerar sanerade `ev-load-hourly.json`
+(mode 0640); privat `ev-history.sqlite` stannar 0600. Om mätdata
+saknas/är ofullständiga används den gamla rålasten och om klassad dagtyp
+saknar täckning används den sammanslagna profilen. Se
+[ADR, test och rollback](../docs/architecture/adr-2026-11-04-weekday-ev-load-profile.md).
+
 **Volvo-SoC i Elpriser (2026-11-04):** Den befintliga EV-historikern
 publicerar nu endast Volvo-rapporterad SoC per svensk kvart i en atomiskt
 skapad, grupp-läsbar 0640 JSON-fil. Privata ev-history.sqlite förblir 0600.

@@ -293,6 +293,61 @@ class HistoryTests(unittest.TestCase):
                          ["2026-10-25T02:15:00", "2026-10-25T02:15:00#2"])
         self.assertEqual([p["socPct"] for p in result["points"]], [60., 61.])
 
+    def test_ev_load_hourly_requires_complete_fc03_and_protects_private_history(self):
+        ev = {**evcc(), "state": "C2", "channel_currents_a": [.1, 6., .1],
+              "measured_current_a": 6.2, "charging_detected": True}
+        self.change("evcc_path", ev)
+        template = self.capture()
+        self.assertEqual(template["evcc_ict2_a"], 6.)
+        start = NOW - timedelta(hours=1)
+        rows = []
+        for i in range(120):
+            stamp = start + timedelta(seconds=i * 30)
+            rows.append({**template,
+                         "captured_at_utc": stamp.isoformat(),
+                         "captured_epoch_ms": int(stamp.timestamp() * 1000),
+                         "evcc_at_utc": stamp.isoformat()})
+        with sqlite3.connect(self.db) as con:
+            con.executescript(history.SCHEMA)
+            fields = tuple(template)
+            sql = ("INSERT INTO ev_samples (" + ",".join(fields) + ") VALUES ("
+                   + ",".join("?" for _ in fields) + ")")
+            con.executemany(sql, [tuple(r.get(k) for k in fields) for r in rows])
+            con.commit()
+        before = self.db.stat().st_size
+        result = history.build_ev_load_hourly(
+            str(self.db), now=NOW + timedelta(minutes=5))
+        self.assertEqual(result["source"], "waveshare_evcc_fc03_ict2")
+        self.assertEqual(result["quality"], "full_hour_measured_current_nominal_230v")
+        self.assertEqual(result["hours"], [{
+            "utcHour": "2026-10-28T14:00:00Z", "evAvgW": 1380., "samples": 120,
+        }])
+        self.assertEqual(self.db.stat().st_size, before)
+        out = self.db.with_name("ev-load-hourly.json")
+        history.publish_ev_load_hourly(str(self.db), str(out),
+                                       now=NOW + timedelta(minutes=5))
+        self.assertEqual(out.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(json.loads(out.read_text())["hours"], result["hours"])
+
+    def test_incomplete_or_invalid_ict2_hour_is_not_exported(self):
+        row = self.capture()
+        row["evcc_read_ok"] = 1
+        row["evcc_record_fresh"] = 1
+        row["evcc_state"] = "C2"
+        row["evcc_charging_detected"] = 1
+        row["evcc_ict1_a"] = .1
+        row["evcc_ict2_a"] = 6.
+        row["evcc_ict3_a"] = .1
+        start = NOW - timedelta(hours=1)
+        for i in range(45):
+            stamp = start + timedelta(seconds=i * 30)
+            history.append(str(self.db), {**row,
+                "captured_at_utc": stamp.isoformat(),
+                "captured_epoch_ms": int(stamp.timestamp() * 1000),
+                "evcc_at_utc": stamp.isoformat()})
+        self.assertEqual(history.build_ev_load_hourly(
+            str(self.db), now=NOW + timedelta(minutes=5))["hours"], [])
+
     def test_old_historian_schema_migrates_without_filling_past_ict2(self):
         old_schema = history.SCHEMA
         for name, kind in history.ADDED_METER_COLUMNS.items():

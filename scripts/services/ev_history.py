@@ -373,6 +373,82 @@ def publish_soc_timeline(db_path: str, output_path: str, *,
     return value
 
 
+def build_ev_load_hourly(db_path: str, *, now: datetime | None = None,
+                         days: int = 14) -> dict:
+    """Only full, independently observed EVCC hours may correct house load.
+
+    Uses captured UTC hours (matching the existing poller SQL aggregation) and
+    distinct fresh FC03 timestamps. A partial or uncertain hour is OMITTED,
+    not guessed, extrapolated or treated as zero EV demand.
+    """
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    since_ms = int((now - timedelta(days=days)).timestamp() * 1000)
+    end_ms = int(now.replace(minute=0, second=0, microsecond=0).timestamp() * 1000)
+    hours: dict[str, dict] = {}
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3) as db:
+        rows = db.execute(
+            "SELECT captured_at_utc, evcc_at_utc, evcc_record_fresh, "
+            "evcc_read_ok, evcc_state, evcc_charging_detected, "
+            "evcc_ict1_a, evcc_ict2_a, evcc_ict3_a "
+            "FROM ev_samples WHERE captured_epoch_ms >= ? AND captured_epoch_ms < ? "
+            "ORDER BY captured_epoch_ms ASC",
+            (since_ms, end_ms),
+        )
+        for captured, sampled, fresh, ok, state, charging, l1, l3, other in rows:
+            captured_at = _time(captured)
+            sampled_at = _time(sampled)
+            if captured_at is None:
+                continue
+            hour = captured_at.strftime("%Y-%m-%dT%H:00:00Z")
+            group = hours.setdefault(hour, {"total": 0, "samples": {}})
+            group["total"] += 1
+            if (fresh != 1 or ok != 1 or state not in ("A1", "B2", "C2")
+                    or charging not in (0, 1) or sampled_at is None
+                    or not -5 <= (captured_at - sampled_at).total_seconds() <= EVCC_MAX_AGE_S
+                    or any(type(a) not in (int, float) or not math.isfinite(a)
+                           for a in (l1, l3, other))
+                    or not (0 <= l1 <= .5 and 0 <= other <= .5 and 0 <= l3 <= 16.5)
+                    or (charging == 1 and state != "C2")
+                    or (charging == 1 and l3 < 1)):
+                continue
+            group["samples"][sampled_at] = (l3 * 230 if charging else 0.0)
+
+    complete: list[dict] = []
+    for utc_hour, group in sorted(hours.items()):
+        samples = sorted(group["samples"].items())
+        # Historian nominally polls every 30 s. A full hour has 120 captures.
+        # Require >=100 valid distinct FC03 observations, a >=50-min span,
+        # and >=85% valid samples so gaps cannot bias the inferred EV power.
+        if (len(samples) < 100 or len(samples) / max(1, group["total"]) < .85
+                or (samples[-1][0] - samples[0][0]).total_seconds() < 3000):
+            continue
+        avg_w = round(sum(w for _, w in samples) / len(samples), 1)
+        complete.append({"utcHour": utc_hour, "evAvgW": avg_w,
+                         "samples": len(samples)})
+    return {"version": 1, "source": "waveshare_evcc_fc03_ict2",
+            "quality": "full_hour_measured_current_nominal_230v",
+            "generatedAtUtc": now.isoformat(), "hours": complete}
+
+
+def publish_ev_load_hourly(db_path: str, output_path: str, *,
+                           now: datetime | None = None) -> dict:
+    """Publish sanitized hourly load without exposing the private EV database."""
+    value = build_ev_load_hourly(db_path, now=now)
+    tmp = f"{output_path}.{secrets.token_hex(6)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(value, output, separators=(",", ":"))
+            output.flush()
+            os.fchmod(output.fileno(), 0o640)
+            os.fsync(output.fileno())
+        os.replace(tmp, output_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watch", action="store_true", help="capture periodically")
@@ -393,6 +469,10 @@ def main() -> None:
                 publish_soc_timeline(path, os.environ.get(
                     "EV_SOC_TIMELINE_PATH",
                     "/opt/solinteg/ev-shadow-runtime/var/ev-soc-timeline.json"),
+                    now=datetime.now(UTC))
+                publish_ev_load_hourly(path, os.environ.get(
+                    "EV_LOAD_HOURLY_PATH",
+                    "/opt/solinteg/ev-shadow-runtime/var/ev-load-hourly.json"),
                     now=datetime.now(UTC))
             except (OSError, sqlite3.Error, ValueError) as exc:
                 # The optional UI export must not interrupt the private historian.

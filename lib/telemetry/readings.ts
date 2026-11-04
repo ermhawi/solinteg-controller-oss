@@ -10,6 +10,7 @@ import { stockholmParts, stockholmToUtc } from '../prices';
 import type { PriceData } from '../prices';
 import type { TrailingLoadProfile } from '../load';
 import type { FlowReading } from '../actual-flows';
+import { readEvHourlyLoad } from '../ev-load-hourly';
 import {
   computeDailyEconomics,
   computeDailySystemEconomics,
@@ -259,7 +260,12 @@ export function readTrailingLoadProfile(days = 14, minDays = 5): TrailingLoadPro
   // Falls back to null when the readings table is absent (poller never ran) or unreadable.
   return readOrFallback<TrailingLoadProfile | null>(null, (handle) => {
     const now = new Date();
-    const key = `${stockholmDateOf(now.toISOString())}:${days}`;
+    // EVCC is the only trusted EV measurement. A complete FC03 UTC hour can
+    // correct house-load forecast HISTORY, never the physical meter or fuse CT.
+    const evHourly = readEvHourlyLoad(now.getTime());
+    const evByUtcHour = new Map(evHourly.map((h) => [h.utcHour, h.evAvgW]));
+    const correctionKey = evHourly.map((h) => `${h.utcHour}:${Math.round(h.evAvgW)}`).join('|');
+    const key = `${stockholmDateOf(now.toISOString())}:${days}:${correctionKey}`;
     if (loadProfileCache && key === loadProfileKey) return loadProfileCache;
 
     const sinceIso = new Date(now.getTime() - days * 86_400_000).toISOString();
@@ -279,18 +285,48 @@ export function readTrailingLoadProfile(days = 14, minDays = 5): TrailingLoadPro
     // across-days distribution the quantile below needs — no second query.
     const perHourDayMeans: number[][] = Array.from({ length: 24 }, () => []);
     const localDays = new Set<string>();
+    const makeGroup = () => ({
+      sumW: new Array<number>(24).fill(0),
+      count: new Array<number>(24).fill(0),
+      perHourDayMeans: Array.from({ length: 24 }, () => [] as number[]),
+      days: new Set<string>(),
+    });
+    const weekday = makeGroup();
+    const weekend = makeGroup();
+    let correctedHours = 0;
     for (const b of buckets) {
       const p = stockholmParts(new Date(`${b.bucket}:00:00Z`));
-      sumW[p.hour] += b.avg_w * b.n;
+      const evW = evByUtcHour.get(`${b.bucket}:00:00Z`);
+      // Inconsistent CT / EVCC observations are withheld, not clamped to a
+      // suspicious zero house-load estimate. Missing EVCC data retains raw load.
+      const corrected = evW !== undefined && evW <= b.avg_w + 150;
+      const houseW = corrected ? Math.max(0, b.avg_w - evW!) : b.avg_w;
+      if (corrected && evW! > 0) correctedHours++;
+      sumW[p.hour] += houseW * b.n;
       count[p.hour] += b.n;
-      perHourDayMeans[p.hour].push(b.avg_w);
+      perHourDayMeans[p.hour].push(houseW);
       localDays.add(p.dateStr);
+      const civilDay = new Date(p.dateStr + 'T12:00:00Z').getUTCDay();
+      const group = civilDay === 0 || civilDay === 6 ? weekend : weekday;
+      group.sumW[p.hour] += houseW * b.n;
+      group.count[p.hour] += b.n;
+      group.perHourDayMeans[p.hour].push(houseW);
+      group.days.add(p.dateStr);
     }
     if (localDays.size < minDays || count.some((n) => n === 0)) return null;
 
     // Mean W over an hour ≈ kWh in that hour (the poller's cadence is uniform within it).
     const hourKwh = sumW.map((s, h) => s / count[h] / 1000);
     const hourHighKwh = highQuantilePerHour(perHourDayMeans);
+    const groupMean = (group: ReturnType<typeof makeGroup>, minDays: number) =>
+      group.days.size >= minDays && group.count.every((n) => n > 0)
+        ? group.sumW.map((s, h) => s / group.count[h] / 1000) : undefined;
+    const weekdayHourKwh = groupMean(weekday, 5);
+    const weekendHourKwh = groupMean(weekend, 3);
+    const weekdayHourHighKwh = weekdayHourKwh
+      ? highQuantilePerHour(weekday.perHourDayMeans, 7) : undefined;
+    const weekendHourHighKwh = weekendHourKwh
+      ? highQuantilePerHour(weekend.perHourDayMeans, 3) : undefined;
 
     let trailingMeanTempC: number | null = null;
     try {
@@ -302,7 +338,11 @@ export function readTrailingLoadProfile(days = 14, minDays = 5): TrailingLoadPro
       trailingMeanTempC = null; // weather table absent — profile still usable without scaling
     }
 
-    loadProfileCache = { hourKwh, hourHighKwh, trailingMeanTempC, days: localDays.size };
+    loadProfileCache = {
+      hourKwh, hourHighKwh, weekdayHourKwh, weekendHourKwh,
+      weekdayHourHighKwh, weekendHourHighKwh,
+      evCorrectedHours: correctedHours, trailingMeanTempC, days: localDays.size,
+    };
     loadProfileKey = key;
     return loadProfileCache;
   });
@@ -324,8 +364,8 @@ const LOAD_HIGH_QUANTILE = 0.8;
  * back to a flat margin would apply two different reserve policies within one night, and which hours
  * got which would drift silently as coverage changed.
  */
-function highQuantilePerHour(perHourDayMeans: number[][]): number[] | undefined {
-  if (perHourDayMeans.some((v) => v.length < MIN_DAYS_FOR_QUANTILE)) return undefined;
+function highQuantilePerHour(perHourDayMeans: number[][], minDays = MIN_DAYS_FOR_QUANTILE): number[] | undefined {
+  if (perHourDayMeans.some((v) => v.length < minDays)) return undefined;
   return perHourDayMeans.map((values) => {
     const sorted = [...values].sort((a, b) => a - b);
     // Nearest-rank: no interpolation between days, so the figure is always a day that really

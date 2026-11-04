@@ -73,6 +73,9 @@ export function slotConsumptionKwh(
 export interface TrailingLoadProfile {
   /** Mean consumption per local hour-of-day (kWh per hour), index 0-23. */
   hourKwh: number[];
+  /** Mean load for Mon–Fri / Sat–Sun separately. Omit if group is incomplete. */
+  weekdayHourKwh?: number[];
+  weekendHourKwh?: number[];
   /**
    * A HIGH quantile of the same per-hour distribution across the window's days (kWh per hour,
    * index 0-23) — what a hot-but-not-freak day looks like at that hour, measured rather than assumed.
@@ -84,6 +87,11 @@ export interface TrailingLoadProfile {
    * Undefined when the window is too thin to take a quantile from.
    */
   hourHighKwh?: number[];
+  /** Group-specific high quantile; never mix weekday and weekend when available. */
+  weekdayHourHighKwh?: number[];
+  weekendHourHighKwh?: number[];
+  /** Number of verified UTC hours with measured EV load excluded from the derived profile. */
+  evCorrectedHours?: number;
   /** Mean outdoor temp (°C) over the same trailing window, or null if unavailable. */
   trailingMeanTempC: number | null;
   /** Distinct local days represented — callers already got null below this module's bar. */
@@ -110,7 +118,9 @@ export function slotConsumptionFromLive(
   startTime: string,
   tempByDate: Record<string, number> | null | undefined,
 ): number {
-  return scaledSlotLoad(profile, profile.hourKwh, startTime, tempByDate);
+  return scaledSlotLoad(profile,
+    hourForDayType(profile, startTime, false) ?? profile.hourKwh,
+    startTime, tempByDate);
 }
 
 /**
@@ -126,8 +136,18 @@ export function slotConsumptionHighFromLive(
   startTime: string,
   tempByDate: Record<string, number> | null | undefined,
 ): number | null {
-  if (!profile.hourHighKwh) return null;
-  return scaledSlotLoad(profile, profile.hourHighKwh, startTime, tempByDate);
+  const hourly = hourForDayType(profile, startTime, true) ?? profile.hourHighKwh;
+  if (!hourly) return null;
+  return scaledSlotLoad(profile, hourly, startTime, tempByDate);
+}
+
+/** Local civil date determines day type, independent of DST and UTC offset. */
+function hourForDayType(profile: TrailingLoadProfile, startTime: string, high: boolean): number[] | undefined {
+  const civilDay = new Date(startTime.slice(0, 10) + 'T12:00:00Z').getUTCDay();
+  const weekend = civilDay === 0 || civilDay === 6;
+  return high
+    ? weekend ? profile.weekendHourHighKwh : profile.weekdayHourHighKwh
+    : weekend ? profile.weekendHourKwh : profile.weekdayHourKwh;
 }
 
 /** Shared body: pick the hour's value, quarter it, and apply the weather scale. */
