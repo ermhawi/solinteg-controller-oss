@@ -4,6 +4,17 @@
 **inte aktiverad** eftersom strikt verifierad Volvo-laddsession saknas.
 **Branch:** `Sundsvall` (aldrig `main`).
 
+**Aktuell avgränsning 2026-11-04:** Användaren har verifierat att
+Volvo Cars-appen för den egna XC40:n **inte har en knapp för att stoppa
+hemmaladdningen**. Endast Smart Charging och manuellt laddschema kan
+ändras via appen; båda är avstängda. Separat detektion av ett
+hypotetiskt *appstopp* är därför **inte ett produktkrav eller ett eget
+GO-villkor** för denna installation. Äldre utredningsnoteringar nedan
+om obligatorisk förlustfri *Volvo-app*-stopphändelse är överspelade i
+denna avgränsning. **Det innebär inte att befintlig manuellt-intent-
+spärr i kod har tagits bort**, eller att ett EVCC-kommando får startas:
+se beslut och kodgap längst ned i dokumentet.
+
 ## Beslut och ekonomi
 
 - EVCC:s FC03-status och **Ict2** bestämmer om bilen verkligen laddar
@@ -121,8 +132,10 @@ avsnitts kvalificering är genomförd.
 - Verifiera en enda EVCC-skrivare och FC03-lås, att B2→C2
   efter tidsstyrd start fungerar, och att
   C2→B2 paus faktiskt stoppar ström på Ict2.
-  Kontrollera Volvo-appens eget smart-laddschema för
-  konkurrerande styrning.
+  För denna installation är Smart Charging och manuellt
+  app-schema avstängda enligt användaren (2026-11-04).
+  Ingen ny appstyrningslogik ingår i denna etapp; den redan
+  implementerade Smart Charging-`off`-grinden finns kvar.
 - Separata bevis på huvud-/laddsäkringar, L3-gräns,
   6 A-minimum, BMS-skydd, godkänt
   prisfönster, låg-SoC-förlopp och kontrollerad rollback.
@@ -500,13 +513,17 @@ Token-återkallelse och förändrat app-API kan därför kräva ny
 engångsinloggning för att återansluta. Ingen omstartsautomatik
 återstartar bilen. För att stoppa insamlingen:
 `sudo systemctl disable --now solinteg-volvo-smart-status.timer`.
-Den nya statusinsamlingen är **inte** den förlustfria
-händelsekälla som behövs för manuella stopp via Volvo-appen.
+Den nya statusinsamlingen är **inte** en förlustfri källa till
+användaravsikt. Efter användarens besked 2026-11-04 krävs
+ingen särskild Volvo-*appstopp*-händelse i aktuell omfattning;
+prispausägarskap och faktiska kabel-/EVCC-händelser kvarstår.
 
 **Kvarstående EVCC-GO-blockerare:** en oberoende kalibrerad fysisk
-laddsession med korrekt kWh-behov, förlustfri manuell stopp-/start-
-händelsekälla, och fysiska EVCC-/fasbudgetstester. Före godkänt GO
-är EVCC-prisstyrningen fortsatt oinstallerad och oarmerad.
+laddsession med korrekt kWh-behov, verifierbart prispausägarskap
+inklusive kabel-epoch (nuvarande generiska manuellt-intent-grind
+är fortfarande aktiv i kod) och fysiska EVCC-/fasbudgetstester.
+Före godkänt GO är EVCC-prisstyrningen fortsatt oinstallerad
+och oarmerad.
 
 **Verifiering:** 1 496 Python-tester för Solinteg, 18 privata
 OAuth-/DPoP- och Chronos-tester, `systemd-analyze verify`,
@@ -563,7 +580,8 @@ scenariodata kräver ca 16,322 kWh AC, vilket vid 6 A/230 V motsvarar
 med denna ström, och en ytterligare prispaus försämrar marginalen.
 Bilen lämnades kvar laddande på befintliga 6 A.
 
-**Förlustfri manuell stoppsignal saknas fortfarande.** APK:s
+**Historisk utredning, ersatt av scopesbeslutet nedan:**
+En förlustfri manuell stoppsignal från Volvo-appen saknades. APK:s
 `Battery.ChargingStatus[V2]` visar `CHARGING`, `IDLE`,
 `SMART_CHARGING_PAUSED` m.fl. men ingen verifierad avsändare
 eller beständig händelse för att användaren tryckt *Stoppa* i
@@ -572,8 +590,9 @@ periodiska laddstatusen kan vara identisk före/efter ett sådant
 stopp. Att sätta `lossless=true` utifrån FC03 eller periodisk Volvo
 status vore fel och riskerar otillåten automatisk återstart.
 
-**Besked:** `NO-GO` för automatisk prispaus/**återstart**.
-Nästa kvalificeringssteg är (1) oberoende kWh-referens och en
+**Historisk kvalificeringsplan (appstoppet har senare avgränsats bort):**
+`NO-GO` för automatisk prispaus/**återstart**. Vid denna
+utredningspunkt var nästa steg (1) oberoende kWh-referens och en
 sammanhängande laddsession med verifierade mättider/SoC,
 (2) faktisk förlustfri auditering av manuellt app-stopp även
 under redan prispausad EVCC eller en bevisat säker alternativ
@@ -603,9 +622,13 @@ anslutningsindikation**, inte för att tillåta
 utan nytt kommando när kabeln återansluts och bilen accepterar
 laddning; vid `raw=1000` måste en framtida controller göra
 en *ny* verifierad prövning innan återstart.
-Periodisk FC03 kan missa en kort ur-/inkoppling och säger
-inget om manuella stopp i Volvo-appen. Den separata förlustfria
-manuell-intent-grinden är därför **oförändrat obligatorisk**.
+Periodisk FC03 kan missa en kort ur-/inkoppling.
+**Förtydligande efter appgenomgången:** Någon Volvo-appknapp
+för stopp av hemmaladdning finns inte i användarens gränssnitt.
+Det tidigare kravet på *appspecifik* manuell-stoppsignal utgår;
+kodens befintliga manuellt-intent-grind är dock fortfarande
+aktiv och ska ersättas genom separat ägarskapskvalificering,
+inte genom påhittad `lossless=true`-telemetri.
 [Separat detalj- och rollbackrunbook](../evcc-cable-tracking-2026-11-04.md).
 
 ### Volvo-appens manuella stopp och BMS-prov (2026-11-04, nytt delsteg)
@@ -655,7 +678,7 @@ separat som `fresh_chronos_battery_sample_observed`;
 godkänt test är **inte** en ersättning för kalibrerad kWh eller
 förlustfri app-/manuell-intent-källa.
 
-**NO-GO oförändrat för fysisk EVCC-prisstyrning:** en äkta
+**Historiskt NO-GO, se senare scopesbeslut:** en äkta
 AC-kWh-referens, en verifierad session/tidsstämplad SoC-serie,
 säker detektion eller särskilt godkänt sessionellt
 samtycke vid manuellt Volvo-stopp och kontrollerade
@@ -738,8 +761,79 @@ inte att bilen faktiskt har börjat ladda.
 Inget EVCC-kommando skickades i denna ändring. Detta
 löser den tidigare falska pilotspärren vid
 normala pausprover, **inte** de kvarstående hindren:
-förlustfri Volvo-app-manualstoppkälla, verifierbar
+verifierat EVCC-pausägarskap och kabel-/sessionsfencing, verifierbar
 kWh-/SoC-session, fysiskt skyddat paus-/återstartprov,
 eller driftens väggbox-/fassäkringsverifiering.
 Befintlig EVCC-observatör, Volvo-statuspoller, inverter-
 och husbatteridispatch ändras inte.
+
+### Beslut: Volvo-appens två schemalägen avgränsas bort (2026-11-04)
+
+**Operatörsverifierat UI för denna XC40:** Volvo Cars-appen har
+**ingen stoppknapp för pågående hemmaladdning**. Användaren kan
+i appen endast (1) slå på **Smart Charging** eller (2) ange ett
+**manuellt laddschema**. Båda funktionerna är för närvarande
+**avstängda**. De inkluderas inte i den nuvarande utvecklingen
+av automatisk EVCC-prisstyrning. Detta är ett verifierat
+*användar-/installationsantagande*, inte ett generellt påstående
+om alla Volvo-modeller, appar eller framtida versioner.
+
+**Följd för krav och A/B-test:** Det tidigare föreslagna
+A/B-provet ”Tryck Stoppa laddning i Volvo-appen” går inte
+att utföra i den faktiska appen. Endast A-referens togs
+`2026-11-04T20:33:09Z` (laddning 6 A, 1 392 W, 65 % SoC,
+EVCC `C2/100/100`); **inget B-prov och ingen slutsats om
+API-detektabilitet för ett manuellt appstopp** finns.
+Separat utveckling av en förlustfri
+`Volvo-app-manual-stop`-händelsekälla tas därför bort
+från aktuella krav och GO-villkor. `ChargeNow`-status
+eller avsaknad av timers ska inte ges denna betydelse.
+
+**Kvarvarande manuell EVCC-hantering:** Användaren kan
+fortfarande påverka laddningen genom att koppla ur kabeln,
+via bilens egna reglage eller genom annan EVSE-manöver.
+`A1`/anslutningsövergångar, persistent `connection_epoch`,
+rå PWM och priscontrollerns **egna** pausägarpost ska därför
+avgöra om det är dess paus som får återupptas.
+Ett gammalt pausägarskap får aldrig återanvändas efter
+observerad urkoppling, återanslutning eller
+inkonsekvent FC03-läge. Efter omstart krävs särskild
+omvalidering av session, pausägare och FC03 innan ny åtgärd.
+Pollning kan missa snabba ur-/inkopplingar; lösningen får **inte** utge sig för att
+vara en förlustfri fysisk stopphändelsekälla.
+
+**Viktigt kodgap, ännu inte löst:** Nuvarande
+`ev_price_pause_owner.read_manual_intent()` och
+`ev_price_controller.run_once()` kräver fortfarande
+en separat `/run/solinteg/ev-manual-intent.json` med
+`lossless=true`; sådan verifierad producent finns inte.
+`ev_price_activation_preflight.py` rapporterar därför
+fortfarande `lossless_manual_stop_source_verified=false`
+och blockerar autonom återstart. Detta tidigare generiska
+kontrakt måste **ersättas och testas** mot faktiskt
+enkelskrivarägarskap, beständig prispaus, kabel-epoch och
+avvikande EVCC-register. Vi ska **inte** syntetiskt
+skriva `manual_paused=false` eller `lossless=true`
+för att forcera ett GO. Inga ändringar i dessa kodspärrar
+ingår i detta dokumentationsbeslut.
+
+**Appscheman:** De två frånslagna appfunktionerna
+behöver ingen ny särskild logik nu. Den **redan driftsatta**
+femminutersavläsningen och den **redan implementerade**
+fail-closed-grinden för Smart Charging `off` behålls
+tills en separat kod- och säkerhetsändring är beslutad;
+det innebär inte att vi fortsätter utveckla app-stopp-
+detektion. Manuell schemaläggning behandlas som avstängd
+enligt användaren och får inte samtidigt användas som
+konkurrerande styrning utan ny bedömning.
+
+**Återstående tekniska GO-villkor för prisstyrning:**
+(1) verifierad och tillräckligt kalibrerad laddsession
+med kWh-/SoC-behov och rimlig deadline,
+(2) en verklig och testad pausägar-/kabelsessionsmodell
+utan påhittade manuella stoppintyg, samt
+(3) kontrollerade fysiska FC10-pauser/återstarter,
+säkrings-/fasbudget, avvikelsehantering och rollback.
+`solinteg-ev-price-controller.service`/`.timer`
+förblir oinstallerade. Dokumentationsbeslutet i sig
+ger **ingen** fysisk skrivbehörighet eller drift-GO.

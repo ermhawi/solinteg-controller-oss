@@ -70,12 +70,16 @@ EVCC-/bil-/inverterkommandon. Endast när
    För att i framtiden återstarta måste den skapa en **ny**
    kontrollerad session med känt energibehov, bekräftad
    laddningsavsikt och tillåtet pris-/fasfönster.
-3. **Användaren stoppar i Volvo-appen utan att dra ur kabeln:**
-   FC03 kan inte avgöra *vem* som gjorde det.
-   Även ett nytt fysisk reconnect-event är inte en förlustfri
-   registrering av appens manuella stopp. Den separata
-   `verified_manual_intent_audit`-källan och dess `manual_generation`
-   är därför fortsatt blockerande för automatisk återstart.
+3. **Volvo Cars-appen (användarverifierat 2026-11-04):**
+   Den aktuella XC40-appen har ingen stoppknapp för hemmaladdning.
+   Smart Charging och manuellt schema är avstängda och hanteras
+   inte som separata styrfunktioner i denna etapp.
+   Den äldre tanken om förlustfri *Volvo-appstoppsignal*
+   är inte längre ett produktkrav. Däremot är den nuvarande
+   generiska `verified_manual_intent_audit`-grinden i koden
+   fortfarande aktiv och måste ersättas med verifierad
+   prispausägare/kabelsessionslogik innan autonom återstart.
+   Ingen `lossless=true`-händelse får fabriceras.
 
 30 sekunders polling kan missa en mycket kort ur-/inkoppling,
 därför används **aldrig** `lossless=true`. Volvos egen
@@ -84,8 +88,9 @@ beskriver dessutom **ur-/återkoppling inom tre sekunder** för
 att åsidosätta ett aktivt laddningsschema. En sådan övergång
 kan inte garanterat observeras med vår 30-sekunderspollning.
 Säkrare framtida implementation kan behöva fysisk händelsekälla
-eller ett explicit ny-session-samtycke för att möta kravet på
-app-manualstopp och kabelstyrt åsidosättande.
+eller ett explicit ny-session-samtycke för att hantera
+kabelstyrd återanslutning och fysisk/manuell EVSE-paus.
+Ett separat Volvo-appstopp ingår inte i aktuell omfattning.
 
 ## Verifiering och driftsättning
 
@@ -151,5 +156,8 @@ eller ordinarie watchdog ändrades.
 
 **GO/NO-GO:** Kabelstatus är GO för observerande drift. Automatisk
 prispaus och återstart från `PWM=1000` är fortfarande **NO-GO**
-eftersom oberoende kalibrerad kWh-session, förlustfri
-Volvo-app-stoppdetektion och fysisk paus-/startkvalificering saknas.
+eftersom oberoende kalibrerad kWh-session, testad
+prispausägar-/kabelsessionsmodell i stället för den nuvarande
+generiska manuellt-intent-grinden, och fysisk paus-/
+startkvalificering saknas. **Ingen särskild Volvo-appstoppdetektor
+krävs för denna installation**, eftersom appen saknar stoppknapp.

@@ -133,15 +133,31 @@ Se [Volvo-/EVCC-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart
 **Ny EVCC-prisaktiverings-preflight (2026-11-04, enbart kod):**
 `scripts/tools/ev_price_activation_preflight.py` kontrollerar i
 **read-only** läge Volvos färska `off`, strikt kalibrerad
-`strict-session.json`, förlustfri manuell-intent-källa, färska
+`strict-session.json`, förlustfri manuell-intent-källa enligt
+**det ännu oförändrade kodkontraktet**, färska
 EVCC C2/6 A eller B2/paus, giltiga L3-/nätvärden och prisplan.
 Utdata är enbart JSON med `state=not_ready` och `device_writes=0`;
 fysiska FC10-testgrinden är avsiktligt **hårt blockerad** tills
 separat kvalificering görs. Den aktuella Dell-avläsningen klarade
-Volvo/EVCC/L3 men saknar kalibrerad session, manuell-intent-källa
-och fysiska prov. Kodfilen är **inte installerad i produktion**,
-och ingen EVCC-prisservice har installerats. Se
-[verklig preflight, risker och kvalificeringskrav](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+Volvo/EVCC/L3 men saknar kalibrerad session, manuellt-intent-källa
+i kodens nuvarande form och fysiska prov. Kodfilen är **inte
+installerad i produktion** och ingen EVCC-prisservice har installerats.
+Se [verklig preflight, risker och kvalificeringskrav](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
+**Scope-beslut 2026-11-04 – ingen manuell stoppknapp i Volvo Cars-appen:**
+Användaren har kontrollerat den egna XC40-appen: där går enbart att
+aktivera Smart Charging eller ange ett manuellt laddschema; **båda
+är avstängda**. En separat detektor för *manuellt stopp via Volvo-
+appen* behövs inte i den aktuella leveransen. Det tidigare planerade
+A/B-testet fick en läsande A-mätning men **inget B-prov** eftersom
+stoppknappen saknas. Inget ytterligare Volvo-app-stoppsökande ingår.
+Däremot kvarstår säkert prispausägarskap, manuell påverkan via
+kabeln/EVSE och de fysiska EVCC-testerna. Kodens generiska
+`read_manual_intent()`-krav på källdata med `lossless=true`
+finns ännu kvar; **skapa ingen falsk producent** för att kringgå det.
+Den redan befintliga Smart Charging-`off`-grinden bibehålls
+oförändrad som försiktighetsregel; inga nya appschemaregler införs.
+[Avgränsning och kvarstående kodgap](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
