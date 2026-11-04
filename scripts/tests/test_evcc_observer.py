@@ -132,6 +132,31 @@ class ObserverTests(unittest.TestCase):
         self.assertFalse(result["physical_control_eligible"])
         self.assertEqual(result["writes"], 0)
 
+    def test_watch_reuses_existing_fc03_for_cable_tracker(self):
+        # No extra serial/TCP read: the same one-shot JSON is tracked locally.
+        record = {"timestamp": datetime.now(timezone.utc).isoformat(),
+                  "source": "waveshare_evcc_fc03_readonly",
+                  "read_ok": True, "state": "A1", "writes": 0,
+                  "physical_control_eligible": False}
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "evcc.json"
+            cable = Path(tmp) / "cable.json"
+            env = {"EVCC_READ_ONLY_ENABLED": "1",
+                   "EVCC_READONLY_PATH": str(snapshot),
+                   "EVCC_CABLE_TRACK_PATH": str(cable)}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch.object(obs, "once", return_value=record) as once, \
+                 mock.patch.object(obs.time, "sleep", side_effect=StopIteration), \
+                 mock.patch.object(sys, "argv", ["evcc_observer.py", "--watch"]):
+                with self.assertRaises(StopIteration):
+                    obs.main()
+            self.assertEqual(once.call_count, 1)
+            self.assertEqual(json.loads(snapshot.read_text())["state"], "A1")
+            tracked = json.loads(cable.read_text())
+            self.assertEqual(tracked["candidate_status"], "disconnected")
+            self.assertFalse(tracked["lossless"])
+            self.assertEqual(tracked["device_writes"], 0)
+
     def test_source_contains_no_modbus_write_path(self):
         source = Path(obs.__file__).read_text()
         self.assertNotIn("set_limit_raw", source)

@@ -34,6 +34,18 @@ fasesäkring och ägarskap är verifierade. Aktuella HA-data är markerade
 Befintlig Modbus-broker, husbatterireglering och EVCC-observatör fortsätter
 som tidigare. Se [ADR och rollback](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
+**EVCC-kabeldetektor, källkod 2026-11-04:**
+Befintliga EVCC FC03-observatören kan även publicera en lokal,
+atomiskt uppdaterad 0600-status med observerad ur-/inkoppling
+(`A1`→`B2/C2`), tvåprovskvalificering och persistent kabel-epoch.
+`EVCC_CABLE_TRACK_PATH` i `solinteg-ev-observer.service` aktiverar
+funktionen utan ny tjänst eller ytterligare FC03-läsning. En framtida
+priscontroller kan därmed återkalla gamla pausägarskap efter urkoppling.
+**Kabelhändelser tillåter inte själva automatisk återstart** från
+`PWM=1000`: manuell app-stoppsignal, färsk verifierad session och
+fysisk EVCC-kvalificering saknas fortfarande. Se
+[kabel-/sessionsrunbook](../docs/evcc-cable-tracking-2026-11-04.md).
+
 **Volvo Smart Charging-spärr, endast källkod 2026-11-04:**
 `ev_price_controller.py` kräver nu även en skyddad, högst tio minuter
 gammal, VIN-hash-matchad och entydig `GetChargeLocations`-snapshot

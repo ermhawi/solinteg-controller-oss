@@ -13,6 +13,7 @@ import ipaddress
 import json
 import os
 import socket
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -206,6 +207,17 @@ def main() -> None:
             print(json.dumps(record, ensure_ascii=False))
             return
         common.write_json_atomic(path, record, indent=2)
+        cable_path = os.environ.get("EVCC_CABLE_TRACK_PATH")
+        if cable_path:
+            try:
+                # No new FC03 reads or services: reuse this exact observation.
+                import evcc_cable_tracker
+                evcc_cable_tracker.update(Path(cable_path), record,
+                                          now=datetime.now(timezone.utc))
+            except (OSError, ValueError) as exc:
+                # Preserve the existing observer; stale tracking inhibits resume.
+                print("EVCC cable tracking unavailable: " + type(exc).__name__,
+                      file=sys.stderr, flush=True)
         time.sleep(period)
 
 

@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 import ev_price_pause_owner as ownership  # noqa: E402
+import evcc_cable_tracker as cable_tracker  # noqa: E402
 import ev_volvo_smart_charging as smart  # noqa: E402
 from ev_price_policy import (  # noqa: E402
     decide_grid_price, read_ev_session, read_house_price_plan,
@@ -99,6 +100,10 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
         and manual["connection_epoch"] == session["connection_epoch"]
     )
     evcc = _json_file(root / "evcc-readonly.json")
+    try:
+        cable = cable_tracker.read_fresh_connected(root / "evcc-cable-state.json", now=now)
+    except cable_tracker.CableObservationError:
+        cable = None
     grid = _json_file(grid_path)
     price = (decide_grid_price(read_house_price_plan(str(price_db)),
                                now=now, session=session, max_current_a=6)
@@ -108,6 +113,7 @@ def inspect(*, now: datetime, root: Path = ROOT, vin_hash: str | None = None,
         "independently_calibrated_fresh_ev_session": session is not None,
         "lossless_manual_stop_source_verified": manual_ok,
         "fresh_consistent_evcc_fc03": _evcc_usable(evcc, now),
+        "fresh_debounced_evcc_cable_connection": cable is not None,
         "fresh_valid_grid_and_l3": _grid_usable(grid, now),
         "current_price_plan_verified": bool(price and price.buy_ore is not None),
         # Must be closed by separately controlled physical qualification.

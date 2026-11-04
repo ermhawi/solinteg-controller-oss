@@ -19,6 +19,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import ev_price_pause_owner as ownership
+import evcc_cable_tracker as cable_tracker
 import ev_volvo_smart_charging as smart
 from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan, PriceDecision
 from evcc_ascii import EvccAscii, RAW_PAUSE, EvccError, EvccUncertainWrite
@@ -188,6 +189,24 @@ def run_once(*, now: datetime | None = None) -> dict:
                     or manual["connection_epoch"] != session["connection_epoch"]):
                 return {"state": "inhibited", "writes": 0,
                         "reason": "independent manual-pause observer missing or manual pause active"}
+            # The optional FC03 cable tracker is additional evidence, NOT the
+            # lossless manual-intent source. A replug invalidates an old owner.
+            cable = None
+            cable_path = os.environ.get("EVCC_CABLE_TRACK_PATH")
+            if cable_path:
+                try:
+                    cable = cable_tracker.read_fresh_connected(Path(cable_path), now=now)
+                except cable_tracker.CableObservationError:
+                    cable = None
+                if cable is None:
+                    revoke("EVCC cable disconnected, transitioning or observation stale")
+                    return {"state": "inhibited", "writes": 0,
+                            "reason": "EVCC cable connection unverified"}
+                if (owner is not None and owner["state"] == "owned"
+                        and owner.get("evcc_cable_epoch") != cable["connection_epoch"]):
+                    revoke("EVCC cable epoch changed; old price pause cannot be resumed")
+                    return {"state": "inhibited", "writes": 0,
+                            "reason": "old price-pause ownership invalidated by cable epoch"}
             try:
                 evcc = json.loads(Path(os.environ.get("EVCC_READONLY_PATH", str(EVCC))).read_text())
                 live = json.loads(Path(os.environ.get("INVERTER_DATA_PATH", str(LIVE))).read_text())
@@ -224,6 +243,8 @@ def run_once(*, now: datetime | None = None) -> dict:
                     if command.action == "pause":
                         next_owner = ownership.new_owner(
                             session=session, manual=manual, now=now, owner_id=str(uuid4()))
+                        if cable is not None:
+                            next_owner["evcc_cable_epoch"] = cable["connection_epoch"]
                         ownership.write_owner(owner_path, next_owner)
                     else:
                         # If the FC10 outcome is uncertain or a process crashes,

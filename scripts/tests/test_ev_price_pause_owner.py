@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 import ev_price_controller as ctl  # noqa: E402
+import evcc_cable_tracker as cable  # noqa: E402
 import ev_price_pause_owner as ownership  # noqa: E402
 from ev_price_policy import PriceDecision  # noqa: E402
 from evcc_ascii import EvccUncertainWrite, RAW_PAUSE  # noqa: E402
@@ -67,6 +68,8 @@ class OwnershipTests(unittest.TestCase):
         self.evcc = root / "evcc.json"
         self.grid = root / "live.json"
         self.smart = root / "volvo-smart.json"
+        self.cable = root / "cable.json"
+        self.track_cable = False
         self.smart_state = {
             "captured_utc": NOW.isoformat(),
             "method": "read_only_graphql_and_chronos",
@@ -117,6 +120,8 @@ class OwnershipTests(unittest.TestCase):
             "EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH": str(self.smart),
             "EV_VOLVO_TARGET_VIN_SHA256": "a" * 64,
         }
+        if self.track_cable:
+            env["EVCC_CABLE_TRACK_PATH"] = str(self.cable)
         with patch.dict(os.environ, env, clear=True), \
              patch.object(ctl, "read_ev_session", return_value=session), \
              patch.object(ctl, "decide_grid_price", return_value=price), \
@@ -304,6 +309,80 @@ class OwnershipTests(unittest.TestCase):
                 self.manual_state = old
                 self.write_manual()
 
+
+    def setup_cable(self):
+        self.track_cable = True
+        first = {**EVCC_CHARGING,
+                 "timestamp": (NOW - timedelta(seconds=40)).isoformat()}
+        second = {**EVCC_CHARGING,
+                  "timestamp": (NOW - timedelta(seconds=20)).isoformat()}
+        record = cable.advance(None, first, now=NOW - timedelta(seconds=39))
+        record = cable.advance(record, second, now=NOW - timedelta(seconds=19))
+        cable.store(self.cable, record)
+        self.assertEqual(record["status"], "connected")
+        return record
+
+    def test_configured_cable_tracker_must_exist_and_be_fresh(self):
+        self.track_cable = True
+        self.assertEqual(self.invoke()["reason"], "EVCC cable connection unverified")
+        self.assertEqual(self.driver.calls, [])
+        self.setup_cable()
+        self.assertEqual(self.invoke()["state"], "pause")
+
+    def test_unplug_revokes_price_owner_before_any_resume(self):
+        self.setup_cable()
+        self.pause()
+        self.assertEqual(ownership.read_owner(self.owner)["evcc_cable_epoch"], 0)
+        self.evcc.write_text(json.dumps(EVCC_PAUSED))
+        record = cable.read(self.cable)
+        for sec in (15, 35):
+            unplugged = {**EVCC_PAUSED, "state": "A1",
+                         "pilot_pwm_raw": 267,
+                         "timestamp": (NOW + timedelta(seconds=sec)).isoformat()}
+            record = cable.advance(record, unplugged,
+                                   now=NOW + timedelta(seconds=sec + 1))
+        cable.store(self.cable, record)
+        self.assertEqual(record["status"], "disconnected")
+        result = self.invoke(price=CHEAP, at=NOW + timedelta(seconds=36))
+        self.assertEqual(result["reason"], "EVCC cable connection unverified")
+        self.assertEqual(ownership.read_owner(self.owner)["state"], "revoked")
+        self.assertEqual(self.driver.calls, [(RAW_PAUSE, 100, True)])
+
+    def test_replug_never_inherits_old_price_pause_owner(self):
+        self.setup_cable()
+        self.pause()
+        self.evcc.write_text(json.dumps(EVCC_PAUSED))
+        record = cable.read(self.cable)
+        for sec, state in ((15, "A1"), (35, "A1"), (55, "B2"), (75, "B2")):
+            snapshot = {**EVCC_PAUSED, "state": state,
+                        "pilot_pwm_raw": 267,
+                        "timestamp": (NOW + timedelta(seconds=sec)).isoformat()}
+            record = cable.advance(record, snapshot,
+                                   now=NOW + timedelta(seconds=sec + 1))
+        cable.store(self.cable, record)
+        self.assertTrue(record["confirmed_replug"])
+        self.assertEqual(record["connection_epoch"], 1)
+        self.manual_state["observed_at_utc"] = (NOW + timedelta(seconds=75)).isoformat()
+        self.write_manual()
+        result = self.invoke(price=CHEAP, at=NOW + timedelta(seconds=76))
+        self.assertEqual(result["reason"],
+                         "old price-pause ownership invalidated by cable epoch")
+        self.assertEqual(ownership.read_owner(self.owner)["state"], "revoked")
+        self.assertEqual(self.driver.calls, [(RAW_PAUSE, 100, True)])
+
+    def test_one_pending_unplug_blocks_even_before_debounce(self):
+        self.setup_cable()
+        self.pause()
+        record = cable.read(self.cable)
+        unplugged = {**EVCC_PAUSED, "state": "A1",
+                     "timestamp": (NOW + timedelta(seconds=15)).isoformat()}
+        record = cable.advance(record, unplugged,
+                               now=NOW + timedelta(seconds=16))
+        cable.store(self.cable, record)
+        self.assertEqual(record["candidate_status"], "disconnected")
+        result = self.invoke(price=CHEAP, at=NOW + timedelta(seconds=16))
+        self.assertEqual(result["reason"], "EVCC cable connection unverified")
+        self.assertEqual(ownership.read_owner(self.owner)["state"], "revoked")
 
 if __name__ == "__main__":
     unittest.main()

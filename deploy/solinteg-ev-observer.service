@@ -14,6 +14,8 @@ Environment=EV_ENABLED=0
 Environment=EVCC_CONTROL_ARMED=0
 Environment=EVCC_MANUAL_TEST=0
 Environment=EVCC_START_APPROVED=0
+# Reuse existing FC03 samples; optional private, debounced cable state.
+Environment=EVCC_CABLE_TRACK_PATH=/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json
 Restart=on-failure
 RestartSec=15
 UMask=0027

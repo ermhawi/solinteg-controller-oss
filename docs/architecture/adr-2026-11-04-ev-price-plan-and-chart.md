@@ -582,3 +582,28 @@ under redan prispausad EVCC eller en bevisat säker alternativ
 vid 6 A plus nätfel/omstart/fasvakt/rollback, med separat
 verifiering av hela kedjan. Ingen EVCC-priscontroller har
 installerats eller armerats och inga FC10-skrivningar utfördes.
+
+### Kabel bort/åter i EVCC – ytterligare sessionsgrind 2026-11-04
+
+Den befintliga FC03-observatören kan nu, **utan extra tjänst, Modbus-
+anrop eller styrkommando**, följa `A1` (inte ansluten) och
+`B2/C2` (ansluten) med tvåprovskvittens, beständig
+`connection_epoch` och spårbar observerad ur-/inkoppling.
+Priskontrollerns opt-in `EVCC_CABLE_TRACK_PATH` kontrollerar
+färsk, stabil kabelanslutning och knyter en prispaus till just denna
+kabel-epoch. En ny epoch eller ett kabelavbrott **återkallar**
+gammalt pausägarskap; gammal paus får inte ge automatisk
+återstart efter ny anslutning.
+
+Historisk FC03-replay verifierade `A1`→`B2` den
+4 november med `configured_pwm_raw=1000` men
+`pilot_pwm_raw=267`. Detta räcker för **fysisk
+anslutningsindikation**, inte för att tillåta
+`1000`→`100`-kommandot. Vid `raw=100` kan bilen starta
+utan nytt kommando när kabeln återansluts och bilen accepterar
+laddning; vid `raw=1000` måste en framtida controller göra
+en *ny* verifierad prövning innan återstart.
+Periodisk FC03 kan missa en kort ur-/inkoppling och säger
+inget om manuella stopp i Volvo-appen. Den separata förlustfria
+manuell-intent-grinden är därför **oförändrat obligatorisk**.
+[Separat detalj- och rollbackrunbook](../evcc-cable-tracking-2026-11-04.md).

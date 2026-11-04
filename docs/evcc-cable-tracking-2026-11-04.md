@@ -1,0 +1,146 @@
+# EVCC-kabeln som sessionsgräns – urkoppling/återanslutning
+
+**Datum:** 2026-11-04
+
+**Status:** Driftsatt som tillägg till befintlig läsande
+`solinteg-ev-observer.service` på Dell; anslutning bekräftad.
+**Ingen automatisk EVCC-prisstart är aktiverad.**
+
+## Krav och observerat faktum
+
+Befintlig `solinteg-ev-observer.service` gör endast två FC03-läsningar
+var cirka 30:e sekund. Styrpilotens EVCC-tillstånd tolkar vi som:
+
+| FC03 CP-state | Fysisk tolkning | Priscontroller |
+| --- | --- | --- |
+| `A1`, `A2` | Ingen bil ansluten | Ingen skrivning |
+| `B1`, `B2` | Bil ansluten, ej bekräftad 6 A-laddning | Ingen automatisk start utan övriga grindar |
+| `C1`, `C2` | Bil ansluten, `C2` kan ha fysisk laddström | Kontrollera Ict2 och L3 separat |
+| Övrigt, timeout, ogiltigt svar | Okänt/fel | Ingen skrivning |
+
+Historikern gav faktiska `A1`→`B2`-prover 2026-11-04.
+**Vid detta tillfälle var `configured_pwm_raw=1000` och
+`pilot_pwm_raw=267`.** Fysisk kabelstatus kommer från EVCC:s
+CP-state, inte av att dessa PWM-register råkar vara lika. Detta
+upphäver **inte** priscontrollerns strikta pilot/CAS-grind:
+automatisk återstart från denna kombination är ännu inte verifierad.
+
+## Implementation
+
+`scripts/services/evcc_cable_tracker.py` konsumerar samma lokala
+FC03-observation som den befintliga `evcc_observer.py --watch`.
+Inga ytterligare nätverksanrop, inga nya systemd-tjänster, inga
+EVCC-/bil-/inverterkommandon. Endast när
+`EVCC_CABLE_TRACK_PATH` är satt aktiveras den lokala uppföljningen.
+
+- En tillståndsändring kräver **två successiva skilda** aktuella
+  observationer. Det skapar `disconnected`, `connected` eller
+  `unknown`, med tidsstämplar från *FC03-läsningen*, inte tidpunkten
+  då användaren rent fysiskt drog ur kontakten.
+- Återanslutningen `disconnected`→`connected` ökar en
+  **persistent, monoton** `connection_epoch`. Första synliga
+  `connected` efter tjänstestart är inte en verifierad återanslutning.
+- FC03-fel, oväntade CP-states, gammal data och mellanrum över 100 s
+  sätter kontinuiteten till `unknown`. Två nya anslutna prover
+  utan observerad urkoppling skapar **inte** en falsk reconnect.
+- Filer skrivs atomiskt med fsync och `0600`; ogiltig tidigare
+  state överges inte automatiskt. `confirmed_replug`,
+  `lossless=false`, `physical_control_eligible=false` och
+  `device_writes=0` uttrycker begränsningarna. Läsaren
+  `read_fresh_connected()` avvisar även en pågående enprovstransition.
+- Priscontrollern kan läsa den nya filen som **extra interlock**:
+  frånkoppling/stale/pending stoppar kommandon och återkallar
+  ägarskap; pausägaren får `evcc_cable_epoch` vid skapandet.
+  Ändrad epoch efter ur-/inkoppling **återkallar** den gamla
+  prispausens möjlighet till återstart. Driftmallen kräver
+  en färsk kabelfil när priscontrollern en dag aktiveras.
+
+## Automatisk fortsättning efter att kabeln ansluts
+
+1. **EVCC redan på `raw=100` (6 A):** bilen kan börja ladda när
+   CP går till `C2`, om den själv accepterar laddning.
+   Ingen FC10-start behövs eller görs av tracker.
+2. **EVCC pausad på `raw=1000`:** återanslutning i `B2`
+   bekräftar kabeln men **startar inte laddningen**.
+   Priscontrollern får inte ärva ett tidigare pausägarskap.
+   För att i framtiden återstarta måste den skapa en **ny**
+   kontrollerad session med känt energibehov, bekräftad
+   laddningsavsikt och tillåtet pris-/fasfönster.
+3. **Användaren stoppar i Volvo-appen utan att dra ur kabeln:**
+   FC03 kan inte avgöra *vem* som gjorde det.
+   Även ett nytt fysisk reconnect-event är inte en förlustfri
+   registrering av appens manuella stopp. Den separata
+   `verified_manual_intent_audit`-källan och dess `manual_generation`
+   är därför fortsatt blockerande för automatisk återstart.
+
+30 sekunders polling kan missa en mycket kort ur-/inkoppling,
+därför används **aldrig** `lossless=true`. Säkrare framtida
+implementation kan behöva fysisk händelsekälla eller ett
+explicit ny-session-samtycke för att möta kravet på app-manualstopp.
+
+## Verifiering och driftsättning
+
+Offline: 1 522 Python-tester passerade efter införandet av
+kabelspårning (inklusive tracker, observerintegration,
+persistens, fel, utebliven observation, ägarskap och GO/NO-GO).
+Skrivskyddad replay från befintlig EVCC-historik gav
+`2026-11-04T09:51:47Z: reconnected`, `connection_epoch=1`,
+`B2`, `raw=1000`, `pilot=267`. Ingen FC10 skrevs.
+
+Installera endast den matchande observerkällan +
+`evcc_cable_tracker.py` i befintlig EVCC-observatör och sätt
+`EVCC_CABLE_TRACK_PATH=/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json`
+via en separat ägd systemd-drop-in. Verifiera två distinkta
+FC03-prover, filens `0600`, `device_writes=0`, och att
+`solinteg-ev-observer.service` fortfarande är aktiv. Bevara
+byteexakt original och manifest för rollback. Ta inte bort
+någon annan observationstjänst, dispatcher, broker eller watchdog.
+
+**Rollback:** stoppa endast EVCC-observatören, återställ den
+byteexakta tidigare `evcc_observer.py`, ta bort den specifikt
+ägda drop-in-filen och eventuellt den nyinstallerade
+tracker-modulen **enbart efter verifiering av ägarskap och hash**.
+`systemctl daemon-reload`, starta samma observatör igen och
+bekräfta FC03-status. Bevara spårbarhet och den senaste giltiga
+rollbackkopian. Ingen priscontroller-enhet installeras.
+
+## Faktisk Dell-release och rollbackbevis 2026-11-04
+
+**Driftsatt, enbart läsning:** Kl. 20:37 CET ersattes den
+byteexakt verifierade föregående `evcc_observer.py` efter att
+originalets SHA-256
+`03af4734c26449091a4874524588554e1c89b5eb154dea5d10908f44361d906f`
+kontrollerats. Ny `evcc_observer.py` SHA-256:
+`7c4e7916667fd03873be3de7d866aef2e308330edf6109e60663371e8f2beeb6`.
+Ny `evcc_cable_tracker.py` SHA-256:
+`9d19151378691babd5e682d91d9353ca0721fafd1f46ca0fa754bac58d38690a`.
+Båda ligger som `root:solinteg`, `0440`, under den
+**redan befintliga** EVCC-observatörens skriptkatalog.
+
+Endast denna nya drop-in installerades:
+`/etc/systemd/system/solinteg-ev-observer.service.d/95-cable-track.conf`,
+för `EVCC_CABLE_TRACK_PATH`. Efter `daemon-reload` startades
+**enbart** `solinteg-ev-observer.service` om. Verifierat
+`ActiveState=active`, `SubState=running`, `NRestarts=0`,
+och befintlig drop-in läses. Den första observationen var
+`unknown` med `candidate=connected` efter ett `C2`-prov,
+vilket är väntad tvåprovsgrind. Följande färska prov gav
+`status=connected`, `observed_state=C2`, `connection_epoch=0`,
+`confirmed_replug=false` (inget tidigare urkopplingsbevis i
+**den nya** trackerfilen). Privat statusfil `0600`,
+`device_writes=0`, ägd av observerprocessens konto.
+Ingen aktiv EVCC-priscontroller-service/timer finns.
+
+Byteexakt återställningsunderlag och SHA-manifest:
+`/var/lib/solinteg-evshadow-rollback/evcc-cable-tracker-20261104/`
+(root `0700`). Rollback gäller endast de två av releasen
+ägda skripten och den specifika `95-cable-track.conf`-
+drop-in-filen. Bevara trackerstatus och backup som driftbevis
+om ingen separat godkänd arkiv-/städrutin har körts.
+Inget annat i Modbus-broker, dispatcher, poller, inverter
+eller ordinarie watchdog ändrades.
+
+**GO/NO-GO:** Kabelstatus är GO för observerande drift. Automatisk
+prispaus och återstart från `PWM=1000` är fortfarande **NO-GO**
+eftersom oberoende kalibrerad kWh-session, förlustfri
+Volvo-app-stoppdetektion och fysisk paus-/startkvalificering saknas.

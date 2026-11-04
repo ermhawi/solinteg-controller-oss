@@ -49,6 +49,13 @@ class ReadinessTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.grid = self.root / "live.json"
         self._write("evcc-readonly.json", observed_evcc())
+        first = observed_evcc(timestamp=(NOW - timedelta(seconds=50)).isoformat())
+        second = observed_evcc(timestamp=(NOW - timedelta(seconds=30)).isoformat())
+        cable = pf.cable_tracker.advance(None, first,
+                                         now=NOW - timedelta(seconds=49))
+        cable = pf.cable_tracker.advance(cable, second,
+                                         now=NOW - timedelta(seconds=29))
+        pf.cable_tracker.store(self.root / "evcc-cable-state.json", cable)
         self.grid.write_text(json.dumps(observed_grid()))
         self._write("status.json", {
             "checked_at_utc": NOW.isoformat(),
@@ -159,6 +166,13 @@ class ReadinessTests(unittest.TestCase):
         })
         self.assertEqual(self.inspect()["planning_advisory"],
                          {"quality": "unverified_display_only"})
+
+    def test_cable_disconnected_or_tracker_missing_is_not_ready(self):
+        path = self.root / "evcc-cable-state.json"
+        path.unlink()
+        self.assertFalse(self.inspect()["checks"]["fresh_debounced_evcc_cable_connection"])
+        self._write("evcc-cable-state.json", {"schema_version": 99})
+        self.assertFalse(self.inspect()["checks"]["fresh_debounced_evcc_cable_connection"])
 
     def test_corrupt_json_never_passes_physical_inputs(self):
         (self.root / "evcc-readonly.json").write_text("not JSON")
