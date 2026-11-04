@@ -34,6 +34,21 @@ fasesäkring och ägarskap är verifierade. Aktuella HA-data är markerade
 Befintlig Modbus-broker, husbatterireglering och EVCC-observatör fortsätter
 som tidigare. Se [ADR och rollback](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
+**Volvo Smart Charging-spärr, endast källkod 2026-11-04:**
+`ev_price_controller.py` kräver nu även en skyddad, högst tio minuter
+gammal, VIN-hash-matchad och entydig `GetChargeLocations`-snapshot
+med `optimized_charging_enabled=false`, utan aktiv global timer
+eller väntande ändringar. Sätt `EV_VOLVO_TARGET_VIN_SHA256` och
+vid behov `EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH` i den **privata**
+priscontroller-miljön; standardfil
+`/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json`.
+Det befintliga privata `smart_schedule_read_only.py` exporterar
+sanerad JSON med `target_vin_sha256` efter användarautentiserat
+läsanrop. Inget oövervakat OAuth-refresh-/filpubliceringsflöde
+är ännu implementerat: utan färska data blir status `unknown` och
+alla EVCC-priskommandon blockeras. **Ingen ny producent, controller-timer
+eller EVCC-skrivare är installerad.** Se [pris-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
 EMS-urladdning med 1 100–1 300 W PV-laddning och uppmätt L3-import

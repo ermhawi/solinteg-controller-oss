@@ -66,6 +66,24 @@ class OwnershipTests(unittest.TestCase):
         self.manual = root / "manual.json"
         self.evcc = root / "evcc.json"
         self.grid = root / "live.json"
+        self.smart = root / "volvo-smart.json"
+        self.smart_state = {
+            "captured_utc": NOW.isoformat(),
+            "method": "read_only_graphql_and_chronos",
+            "set_amp_limit_calls": 0,
+            "target_vin_sha256": "a" * 64,
+            "chronos": {
+                "locations": {
+                    "locations": [{"optimized_charging_enabled": False,
+                                   "timers": [], "departure_times": []}],
+                    "pending_locations": 0,
+                },
+                "timer": {"global_timer": {"active": False}, "pending_global_timer": None},
+                "current_amp_limit": 8,
+                "pending_amp_limit": None,
+            },
+        }
+        self.write_smart()
         self.evcc.write_text(json.dumps(EVCC_CHARGING))
         self.grid.write_text(json.dumps(GRID))
         self.driver = FakeEvcc()
@@ -84,6 +102,9 @@ class OwnershipTests(unittest.TestCase):
     def write_manual(self):
         self.manual.write_text(json.dumps(self.manual_state))
 
+    def write_smart(self):
+        self.smart.write_text(json.dumps(self.smart_state))
+
     def invoke(self, *, price=EXPENSIVE, session=SESSION, at=NOW):
         env = {
             "EV_PRICE_CONTROL_ENABLED": "1", "EVCC_PRICE_CONTROL_ARMED": "1",
@@ -93,6 +114,8 @@ class OwnershipTests(unittest.TestCase):
             "EVCC_READER_LOCK": str(self.evcc_lock),
             "EVCC_READONLY_PATH": str(self.evcc),
             "INVERTER_DATA_PATH": str(self.grid),
+            "EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH": str(self.smart),
+            "EV_VOLVO_TARGET_VIN_SHA256": "a" * 64,
         }
         with patch.dict(os.environ, env, clear=True), \
              patch.object(ctl, "read_ev_session", return_value=session), \
@@ -115,6 +138,29 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual(result["state"], "resume", result)
         self.assertEqual(self.driver.calls[-1], (100, RAW_PAUSE, True))
         self.assertEqual(ownership.read_owner(self.owner)["state"], "released")
+
+    def test_smart_charging_on_blocks_initial_price_pause(self):
+        self.smart_state["chronos"]["locations"]["locations"][0]["optimized_charging_enabled"] = True
+        self.write_smart()
+        result = self.invoke()
+        self.assertEqual((result["state"], result["volvo_smart_charging"], result["writes"]),
+                         ("inhibited", "on", 0))
+        self.assertEqual(self.driver.calls, [])
+        self.assertFalse(self.owner.exists())
+
+    def test_smart_charging_lost_during_price_pause_revokes_resume(self):
+        self.pause()
+        self.evcc.write_text(json.dumps(EVCC_PAUSED))
+        self.smart_state["captured_utc"] = (NOW - timedelta(minutes=11)).isoformat()
+        self.write_smart()
+        result = self.invoke(price=CHEAP)
+        self.assertEqual((result["state"], result["volvo_smart_charging"], result["writes"]),
+                         ("inhibited", "unknown", 0))
+        self.assertEqual(ownership.read_owner(self.owner)["state"], "revoked")
+        self.assertEqual(len(self.driver.calls), 1)
+        self.smart_state["captured_utc"] = NOW.isoformat()
+        self.write_smart()
+        self.assertEqual(self.invoke(price=CHEAP)["writes"], 0)
 
     def test_manual_pause_while_owned_permanently_revokes_resume(self):
         self.pause()

@@ -19,6 +19,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import ev_price_pause_owner as ownership
+import ev_volvo_smart_charging as smart
 from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan, PriceDecision
 from evcc_ascii import EvccAscii, RAW_PAUSE, EvccError, EvccUncertainWrite
 
@@ -33,6 +34,7 @@ EV_W_6A = 1380
 OWNER = Path("/opt/solinteg/ev-shadow-runtime/var/ev-price-pause-owner.json")
 OWNER_LOCK = Path("/opt/solinteg/ev-shadow-runtime/var/ev-price-pause-owner.lock")
 MANUAL_INTENT = Path("/run/solinteg/ev-manual-intent.json")
+SMART_CHARGING = Path("/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json")
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,13 @@ def run_once(*, now: datetime | None = None) -> dict:
             if session is None:
                 revoke("verified vehicle session lost")
                 return {"state": "inhibited", "writes": 0, "reason": "no calibrated fresh EV session"}
+            smart_state, smart_reason = smart.read_smart_charging(
+                os.environ.get("EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH", str(SMART_CHARGING)),
+                now=now, expected_vin_sha256=os.environ.get("EV_VOLVO_TARGET_VIN_SHA256"))
+            if smart_state != "off":
+                revoke("Volvo Smart Charging: " + smart_reason)
+                return {"state": "inhibited", "writes": 0,
+                        "reason": smart_reason, "volvo_smart_charging": smart_state}
             try:
                 manual = ownership.read_manual_intent(
                     os.environ.get("EV_MANUAL_INTENT_PATH", str(MANUAL_INTENT)), now=now)

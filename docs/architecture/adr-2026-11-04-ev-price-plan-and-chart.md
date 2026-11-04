@@ -405,3 +405,41 @@ automatiska prispauser som återstart.
   av detta offlinearbete. Den aktiva Modbus-brokern, lastbalansering,
   50 W EMS-begränsning, SoC-/fasvakter och ordinarie watchdog
   är oförändrade. Kända risker i befintligt failure-scenario kvarstår.
+
+### Volvo Smart Charging – on/off-grind, endast offline 2026-11-04
+
+Den tidigare separat verifierade, privata skrivskyddade Android/Chronos-
+klienten `smart_schedule_read_only.py` använder mobilappens
+`ChargeLocationService/GetChargeLocations`. Enligt dekompilerad
+appkod är `hasIsOptimisedChargingEnabled()` närvaromarkören och
+`getIsOptimisedChargingEnabled()` värdet; explicit protobuf #7
+`false` får inte förväxlas med saknat fält. `availableOptimisedCharging`
+(#9) beskriver kapacitet, **inte** på/av.
+
+`ev_volvo_smart_charging.read_smart_charging()` kontrollerar den
+**sanerade** PoC-filen (ingen VIN, token eller plats-ID), inklusive
+`target_vin_sha256` mot ett separat privat konfigurerat
+`EV_VOLVO_TARGET_VIN_SHA256`. PoC:n skickar VIN-bundet läsanrop
+och exporterar endast SHA-256 av begärt VIN. Endast en laddplats,
+ingen väntande plats-/timer-/ampereändring, inaktiv global timer
+samt inga aktiva lokala timer-/avresescheman. Bara explicit
+booleskt `optimized_charging_enabled=false` och ett `captured_utc` högst **10 minuter** gammalt får ge `off`.
+`true`, för gammalt/saknat/felaktigt svar, VIN-missmatch, aktiv
+timer eller oklarhet ger `on` eller `unknown`.
+
+Priscontrollern läser från
+`EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH`
+(default `/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json`).
+Alla andra utfall än `off` ger **0 EVCC-skrivningar**; eventuellt
+`owned` pausägarskap återkallas permanent. Grinden kompletterar,
+men ersätter **inte**, oberoende mätt EV-session, manuell-intent-källa
+och fysiska EVCC-/säkringstester.
+
+**Ej driftsatt:** Den privata PoC:n har bara interaktiv, kortlivad
+OAuth; det finns ännu **ingen** verifierad, automatiskt förnyad
+producent som atomiskt levererar färska snapshots till Dell-runtime.
+En operatör måste tillhandahålla dem skyddat och tillräckligt ofta.
+Tidigare liveprov visade smartladdning `true`; användarens senare
+avstängning är **inte** verifierad med nytt autentiserat anrop.
+Ingen EVCC-tjänst/timer har installerats eller aktiverats.
+Offline: 410 EV-relaterade Python-tester, hela sviten 1 489 OK; ingen fysisk skrivning.
