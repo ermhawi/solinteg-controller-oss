@@ -454,22 +454,61 @@ friskhet, lokala/global timers och pending; avvisar osäkra källfiler,
 symlänkar och gammal data. Publikationen sker med `mkstemp`,
 0600, runtime-katalogens ägare/grupp, fsync och atomisk rename.
 
-**Verifierad Dell-runtime, enbart skrivskyddad statusfil:**
-`/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json`
-publicerades en gång med `off`, mode 0600,
-ägare `solinteg-evshadow:solinteg`, läsbar för servicekontot.
+### Aktiverad, enbart skrivskyddad Volvo-statusinsamling (2026-11-04)
+
+I Volvo Cars Android 7.5.0 bekräftades att
+`defpackage/vdd.java` använder en DPoP-bunden token-API med
+`grant_type=refresh_token`, `refresh_token` och valfri `scope`.
+`AuthenticationData.java` håller refresh-token, medan
+`AuthenticationRepositoryImpl` hanterar lyckat refresh-svar.
+En opt-in OAuth-inloggning gav `REFRESH_ENROLL_SAVED=True`.
+DPoP-nyckel och refresh-token lagras endast i en privat
+0600-vault `~/.local/share/volvo-smartcharging-oauth/.smart-schedule-refresh-vault.json`
+med 0700 föräldrakatalog; inga hemligheter, rått VIN eller access-token
+sparas i publika Git-filer eller loggar.
+
+**Live verifierat:** `smart_schedule_refresh.py` har förnyat
+access-token med HTTP 200 utan OTP och gjort ett nytt, läsande
+`GetChargeLocations` med `optimized_charging_enabled=false`.
+Volvos svar innehåller **ingen ersättande** `refresh_token`.
+I enlighet med OAuth 2.0 §6 behålls den tidigare giltiga
+refresh-token när ingen ny returneras; vid faktiskt tokenbyte görs
+0600, atomisk fsync/rename innan efterföljande läsningar.
+DPoP `cnf.jkt` ska matcha den skyddade privata nyckeln; avvikelse,
+saknat/ogiltigt svar och förlorad kontinuitet stoppar publikationen.
+
+En separat `solinteg-volvo-smart-status.service` och
+`solinteg-volvo-smart-status.timer` installerades på Dell.
+Timer är **enabled/active**, `OnUnitActiveSec=5min`.
+Den privata OAuth-processen körs som `User=hakan` med
+`NoNewPrivileges=true`. Root-körd `ExecStartPost=!`
+använder en rootägd, installerad kopia av publiceraren
+och dess granskade verifieringsmodul; den läser en 0600-källfil
+och skriver enbart sanerad JSON atomiskt till
+`/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json`.
+Filen har mode 0600, ägare `solinteg-evshadow:solinteg`,
+och kan läsas av det avsedda servicekontot.
+Första manuella systemd-körningen och nästa timerutlösta körning
+slutfördes med `Result=success` och `device_writes=0`.
 Ingen EVCC-priscontroller-service/timer är installerad
-(`LoadState=not-found`). Denna engångsstatus blir **stale efter
-10 minuter** och kan inte utgöra produktionskontinuitet.
+(`LoadState=not-found`).
 
-**Kvarstående produktionsblockerare:** Ingen verifierad automatisk
-mobilapp-OAuth-refresh och periodisk säker leverans finns;
-användarens manuella avstängning kan ändras när som helst och en
-tidigare `false` är inte ett abonnemang på ändringshändelser.
-Den oberoende kalibrerade laddsessionen, förlustfri
-manuell-stoppkälla och fysiska EVCC-/fasprov kvarstår.
-Automatisk priskontroll förblir helt oinstallerad och oarmerad.
+**Failure- och rollbackpolicy:** En misslyckad refresh-/Chronos-
+körning lämnar föregående status oförändrad; efter max 10 minuter
+ger kontrollerns färskhetsgrind `unknown` och **ingen EVCC-skrivning**.
+Token-återkallelse och förändrat app-API kan därför kräva ny
+engångsinloggning för att återansluta. Ingen omstartsautomatik
+återstartar bilen. För att stoppa insamlingen:
+`sudo systemctl disable --now solinteg-volvo-smart-status.timer`.
+Den nya statusinsamlingen är **inte** den förlustfria
+händelsekälla som behövs för manuella stopp via Volvo-appen.
 
-**Verifiering:** 7 publiceringstester, 1 496 Python-tester totalt,
-10 privata PoC-tester OK; `device_writes=0` och ingen fysisk
-styrning utförd.
+**Kvarstående EVCC-GO-blockerare:** en oberoende kalibrerad fysisk
+laddsession med korrekt kWh-behov, förlustfri manuell stopp-/start-
+händelsekälla, och fysiska EVCC-/fasbudgetstester. Före godkänt GO
+är EVCC-prisstyrningen fortsatt oinstallerad och oarmerad.
+
+**Verifiering:** 1 496 Python-tester för Solinteg, 18 privata
+OAuth-/DPoP- och Chronos-tester, `systemd-analyze verify`,
+och två live lyckade schemaläsningar efter tokenförnyelse.
+Ingen fysisk EVCC-, bil- eller inverterstyrning utfördes.

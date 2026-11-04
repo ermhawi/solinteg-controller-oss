@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Volvo Smart Charging read-only status every five minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=solinteg-volvo-smart-status.service
+
+[Install]
+WantedBy=timers.target

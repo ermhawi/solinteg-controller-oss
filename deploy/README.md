@@ -42,24 +42,38 @@ eller väntande ändringar. Sätt `EV_VOLVO_TARGET_VIN_SHA256` och
 vid behov `EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH` i den **privata**
 priscontroller-miljön; standardfil
 `/opt/solinteg/ev-shadow-runtime/var/volvo-smart-charging.json`.
-Det befintliga privata `smart_schedule_read_only.py` exporterar
-sanerad JSON med `target_vin_sha256` efter användarautentiserat
-läsanrop. Inget oövervakat OAuth-refresh-/filpubliceringsflöde
-är ännu implementerat: utan färska data blir status `unknown` och
-alla EVCC-priskommandon blockeras. **Ingen ny producent, controller-timer
-eller EVCC-skrivare är installerad.** Se [pris-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+Det privata `smart_schedule_read_only.py` exporterar sanerad
+JSON med `target_vin_sha256` efter en första autentiserad inloggning.
+Den separata, privata `smart_schedule_refresh.py` kan därefter
+förnya DPoP-access-token utan OTP genom en skyddad refresh-token
+(0600, ej Git). Nya access-token levereras med HTTP 200 men **utan**
+ny refresh-token; enligt OAuth 2.0 behålls den gamla i detta fall.
+Utebliven/utgången credential, misslyckad läsning eller för gammal
+snapshot ger `unknown` och blockerar EVCC-kommandon.
+**Ingen EVCC-priscontroller-service/timer är installerad.**
+Se [pris-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
-**Volvo-status engångsverifierad på Dell 2026-11-04:**
-Ett nytt skrivskyddat mobilappsanrop kl. 17:49 UTC visade
-`optimized_charging_enabled=false`, inaktiverad avgångstid och
-ingen aktiv global timer eller pending-ändring. En separat
-`scripts/tools/publish_ev_volvo_smart_charging.py` publicerade
-endast sanerade gate-fält atomiskt till ovanstående runtimefil,
-0600 och `solinteg-evshadow:solinteg`; servicekontot kan läsa den.
-Detta är en **engångssnapshot**, inte en kontinuerlig integration:
-statusen blir ogiltig efter 10 minuter. Saknat godkänt
-OAuth-refresh-/pollflöde betyder fortsatt **NO-GO för automatisk
-EVCC-prispaus/återstart**. Ingen EVCC- eller inverterstyrning ändrades.
+**Volvo-status kontinuerligt installerad på Dell 2026-11-04:**
+Den första liveavläsningen kl. 17:49 UTC visade
+`optimized_charging_enabled=false` och avstängd avgångstid.
+Efter ny, opt-in DPoP-inloggning lagras bara refresh-token och
+matchande privat nyckel i en separat 0600-vault under användaren
+`hakan`. Den privata klienten har liveverifierat
+`grant_type=refresh_token` utan ny OTP och ny `GetChargeLocations`-läsning.
+`solinteg-volvo-smart-status.{service,timer}` körs nu
+**var femte minut**. Tjänsten hämtar status med `User=hakan`;
+endast `ExecStartPost=!` kör rootägd publisher med strikt
+fältsanering och atomisk 0600-uppdatering av ovanstående statusfil.
+Den kan visa `off` eller `on`, aldrig påhittad `off`.
+Kommandot `systemctl status solinteg-volvo-smart-status.timer`
+visar kommande körning; `journalctl -u solinteg-volvo-smart-status.service`
+visar läsutfall. Vid upprepade fel blir filen äldre än 10 minuter
+och EVCC-prisstyrning spärras automatiskt. Återställning:
+`sudo systemctl disable --now solinteg-volvo-smart-status.timer`
+(stänger endast statusinsamlingen).
+**EVCC-prisstyrningen är fortfarande NO-GO** tills verifierad
+kWh-session, manuell stoppdetektion och fysiska EVCC-prov är godkända.
+Inga fordons-/EVCC-/inverterskrivningar gjordes i Volvo-integrationen.
 
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
