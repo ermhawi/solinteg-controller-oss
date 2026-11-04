@@ -1,11 +1,20 @@
 # Empirisk EVCC/Volvo-kalibrering av AC-kWh per SoC-punkt (2026-11-04)
 
-**Status:** Genomförd **empirisk uppskattningskalibrering**, inte
+**Efterföljande riskbeslut:** Användaren accepterade senare 2026-11-04
+denna empiriska faktor **0,8902 kWh/%** för den separat opt-in-styrda
+6 A-priscontrollern, trots saknad EM111-mätning och fysisk BMS-provtid.
+Själva revisionsverktygets `calibrated_ac_kwh_per_soc_pct=null` och
+`physical_control_eligible=false` är oförändrade: ingen felaktig
+oberoende kalibrering påstås. Se
+[driftsättnings-ADR, begränsningar och rollback](architecture/adr-2026-11-04-ev-price-empirical-live.md).
+
+**Historisk revisionsstatus före senare driftbeslut:** Genomförd **empirisk uppskattningskalibrering**, inte
 oberoende AC-kWh-mätarkalibrering. Endast befintliga read-only
 historikdatabaser användes; inga nya tjänster, timers, EVCC FC10-
 kommandon, inverter-/Volvokommandon eller ändringar i laddplanen.
 `physical_control_eligible=false`; `strict-session.json` skapas
-eller uppdateras **inte**. Automatisk EVCC-prisstyrning är NO-GO.
+eller uppdateras **inte**. Automatisk EVCC-prisstyrning var
+vid denna utredningspunkt NO-GO; senare aktivering beskrivs ovan.
 
 ## Dokumentationspreflight och källor
 

@@ -1,5 +1,13 @@
 # Smart elbilsladdning i Solinteg — designspecifikation
 
+**Nyare driftbeslut 2026-11-04:** Den separata
+EVCC-priscontrollern för maximalt 6 A är nu **driftsatt** med
+användargodkänd empirisk energifaktor 0,8902 kWh/SoC-%
+och fysiskt kvalificerad FC10 6 A/paus. Denna designspecifikation
+innehåller äldre, historiska begränsningar om endast shadow/driftsatt
+läsning. Se [aktuell live-ADR](../../architecture/adr-2026-11-04-ev-price-empirical-live.md)
+för faktisk omfattning, godkända avsteg och kvarvarande brister.
+
 Status: **Designspecifikation, revision 4, 2026-10-26**, med kompletteringar 2026-10-28 om två laddlägen, prisbaserad EV-skuggsimulering och en ny read-only kostnadsmodell för XC40-dashboardens kronor per mil (avsnitt 8.5). Bygger vidare på revision 3 (2026-10-21) och tidigare underlag på `Sundsvall`. Den separata skuggkoden har uppdaterats men **ingen produktionsdrift, driftskonfiguration, aktivering eller fysisk hårdvarustyrning ändras**.
 
 Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff46f056eb2a8823b9bf817955d8e`, ABL:s dokumenterade register, **separat godkända Modbus-läs- och skrivprov 2026-10-21** samt etapp-/L3-planen i `91c2802` (2026-10-24). Datum, råtelegram och bevisnivå skiljs åt i avsnitt 13. Fältproven gjordes före dokumentrevisionen; inga nya laddkommandon utförs här.

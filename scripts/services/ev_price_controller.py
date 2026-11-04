@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single EVCC price executor; disabled until a calibrated EV session exists.
+"""Single EVCC price executor; normally disabled without an accepted EV session.
 
 The house optimizer remains independent. EV power is measured by EVCC Ict2
 and never deducted from the physical CT fuse limits. There is one writer for
@@ -20,6 +20,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import ev_price_pause_owner as ownership
+import ev_price_empirical_session as empirical
 import evcc_cable_tracker as cable_tracker
 import ev_volvo_smart_charging as smart
 from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan, PriceDecision
@@ -102,11 +103,12 @@ def choose_action(*, session: dict | None, price: PriceDecision,
                 return no("vehicle already stopped; never take ownership of manual pause")
             return EvPriceAction("pause", raw, RAW_PAUSE, "confirmed expensive slot")
         if raw == EV_RAW_6A:
-            return EvPriceAction("no_change", raw, raw, "already charging in low-price slot")
+            return EvPriceAction("no_change", raw, raw,
+                                 "already charging at permitted 6 A: " + price.reason)
         # A manual EVCC pause must not be undone by the price timer. Only
         # a persisted, independently verified pause previously made by this
         # controller may ever be resumed automatically. That persistent owner
-        # protocol is intentionally not enabled in the current release.
+        # protocol is required for every automated resume, including empiric mode.
         if price_pause_owned is not True:
             return no("pause owner unknown; manual pause has priority")
         # A conservative grid-import start preflight; the existing electrical
@@ -130,6 +132,19 @@ def run_once(*, now: datetime | None = None) -> dict:
         return {"state": "disabled", "writes": 0, "reason": "price controller not armed"}
 
     session = read_ev_session(os.environ.get("EV_SESSION_PATH"), now=now)
+    if session is None and os.environ.get("EV_PRICE_ACCEPT_EMPIRICAL_ENERGY") == "1":
+        session = empirical.read_session(
+            status_path=Path(os.environ.get("EV_STATUS_PATH",
+                "/opt/solinteg/ev-shadow-runtime/var/status.json")),
+            settings_path=Path(os.environ.get("EV_SETTINGS_PATH",
+                "/opt/solinteg/ev-shadow-runtime/var/settings.json")),
+            cable_path=Path(os.environ.get("EVCC_CABLE_TRACK_PATH",
+                "/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json")),
+            ledger_path=Path(os.environ.get("EV_PRICE_EMPIRICAL_LEDGER_PATH",
+                "/opt/solinteg/ev-shadow-runtime/var/ev-price-empirical-session.json")),
+            now=now,
+            expected_vin_sha256=os.environ.get("EV_VOLVO_TARGET_VIN_SHA256"),
+        )
     price = (decide_grid_price(
         read_house_price_plan(os.environ.get("TELEMETRY_DB_PATH", "/opt/solinteg/telemetry.db")),
         now=now, session=session, max_current_a=6,

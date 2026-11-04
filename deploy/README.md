@@ -171,7 +171,21 @@ Den redan befintliga Smart Charging-`off`-grinden bibehålls
 oförändrad som försiktighetsregel; inga nya appschemaregler införs.
 [Avgränsning och kvarstående kodgap](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
-**EVCC/Volvo empirisk energikalibreringskandidat, endast analys (2026-11-04):**
+**EVCC-prisstyrning driftsatt, 2026-11-04:** Den tidigare förberedda
+`solinteg-ev-price-controller.timer` och service är nu installerade
+på Dell med egna skrivflaggor, pinning till laddboxens privata
+IPv4-adress och förregling mot existerande FC03-kabelobservatör.
+**Max 6 A** eller EVCC-paus, aldrig automatisk strömhöjning.
+Fysiskt paus-/återstartsprov passerade efter en första osäker
+kvittens som dokumenterat återställdes till 6 A. Den empiriska
+`0.8902 kWh/%` accepteras uttryckligen men är inte en oberoende
+kWh-mätning. Vid aktivering var `deadline` tidskritiskt, så
+första automatiska körning gav `state=no_change, writes=0`.
+**Stoppad timer återställer inte automatiskt PWM1000**: verifiera
+fysisk status före rollback.
+[Fullt driftsättnings-ADR och rollback](../docs/architecture/adr-2026-11-04-ev-price-empirical-live.md).
+
+**Historisk läsande mätkalibreringsutredning före driftsättning:**
 `scripts/tools/ev_ac_soc_empirical.py --days 1` läser befintliga
 privata SQLite-historiker med read-only-anslutning och rapporterar
 **0,8902 kWh per SoC-procentenhet** som regressionsestimat

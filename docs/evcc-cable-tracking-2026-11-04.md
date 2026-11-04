@@ -4,7 +4,12 @@
 
 **Status:** Driftsatt som tillägg till befintlig läsande
 `solinteg-ev-observer.service` på Dell; anslutning bekräftad.
-**Ingen automatisk EVCC-prisstart är aktiverad.**
+**Statusuppdatering 2026-11-04:** Automatisk EVCC-prisstyrning är
+**nu driftsatt**, med strikt FC10-ägarproveniens, 6 A-gräns och
+empiriskt accepterat energibehov. `A1` och nya kabel-epoker
+får fortfarande aldrig återstarta en gammal prispaus.
+Se [live-ADR](architecture/adr-2026-11-04-ev-price-empirical-live.md).
+Äldre avsnitt nedan beskriver driftsituationen före aktiveringen.
 
 ## Krav och observerat faktum
 

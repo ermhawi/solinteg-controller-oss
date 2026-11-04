@@ -1,7 +1,13 @@
 # ADR 2026-11-04: Prisplan för elbil och separat lager i Elpriser
 
-**Status:** Kod och UI-förhandsvisning färdig. Automatisk EVCC-verkställighet
-**inte aktiverad** eftersom strikt verifierad Volvo-laddsession saknas.
+**Statusuppdatering 2026-11-04, senare än återstående historik i detta dokument:**
+EVCC-priscontrollern är **driftsatt och aktiv på Dell** enligt
+[nytt ADR-beslut om användargodkänd empirisk energimodell](adr-2026-11-04-ev-price-empirical-live.md).
+Den strikta, oberoende laddsessionskalibreringen saknas fortfarande,
+men användaren accepterade uttryckligen denna brist för den avgränsade
+6 A-priscontrollern. Äldre NO-GO-avsnitt beskriver **läget före** den
+nya kvalificeringen och aktiveringen. UI-lagret är fortfarande en
+prisförhandsvisning, inte en direkt visning av faktiska FC10-åtgärder.
 **Branch:** `Sundsvall` (aldrig `main`).
 
 **Aktuell avgränsning 2026-11-04:** Användaren har verifierat att
@@ -11,9 +17,10 @@ hemmaladdningen**. Endast Smart Charging och manuellt laddschema kan
 hypotetiskt *appstopp* är därför **inte ett produktkrav eller ett eget
 GO-villkor** för denna installation. Äldre utredningsnoteringar nedan
 om obligatorisk förlustfri *Volvo-app*-stopphändelse är överspelade i
-denna avgränsning. **Det innebär inte att befintlig manuellt-intent-
-spärr i kod har tagits bort**, eller att ett EVCC-kommando får startas:
-se beslut och kodgap längst ned i dokumentet.
+denna avgränsning. Det äldre generiska manuellt-intent-kravet
+har därefter ersatts med verifierat FC10-pausägarskap och
+kabelsessioner. För aktuell aktiv styrning och säkerhetsvillkor,
+se den nyare [live-ADR:n](adr-2026-11-04-ev-price-empirical-live.md).
 
 ## Beslut och ekonomi
 

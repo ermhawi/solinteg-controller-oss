@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import os
 import socket
+import time
 from dataclasses import dataclass
 
 
@@ -216,20 +217,37 @@ class EvccAscii:
             raise EvccUncertainWrite("write outcome unknown; read state before any new action") from exc
         if ack != REG_CURRENT_LIMIT.to_bytes(2, "big") + b"\x00\x01":
             raise EvccUncertainWrite("unexpected EVCC write acknowledgement")
-        try:
-            after = self.status()
-        except (OSError, EvccError) as exc:
-            raise EvccUncertainWrite("write ACK received but readback unavailable") from exc
-        if (after.configured_raw != raw
-                or (raw == RAW_PAUSE and observed_evcc_mode(
-                    after.state, after.configured_raw,
-                    after.pilot_raw, after.currents_a) != "paused_connected")
-                or (scheduled and raw == 100 and not resume_setpoint_readback(
-                    after.state, after.configured_raw,
-                    after.pilot_raw, after.currents_a))
-                or (raw != RAW_PAUSE and after.pilot_raw != raw)):
-            raise EvccUncertainWrite("readback differs from requested PWM; do not retry")
-        return after
+        # A completed FC10 can precede the contactor/CP transition by a few
+        # seconds. Poll ONLY FC03 for bounded settling; NEVER resend FC10.
+        deadline = time.monotonic() + 9
+        while True:
+            try:
+                after = self.status()
+            except (OSError, EvccError) as exc:
+                raise EvccUncertainWrite("write ACK received but readback unavailable") from exc
+            paused = observed_evcc_mode(
+                after.state, after.configured_raw,
+                after.pilot_raw, after.currents_a) == "paused_connected"
+            resumed = resume_setpoint_readback(
+                after.state, after.configured_raw,
+                after.pilot_raw, after.currents_a)
+            if raw == RAW_PAUSE and paused:
+                return after
+            if raw == 100 and resumed:
+                return after
+            # Only a genuinely transitional CP while the EVCC is still
+            # closing/opening the same 6A contactor may be observed again.
+            if (after.state not in ("B2", "C2")
+                    or after.configured_raw not in (expected_raw, raw)
+                    or type(after.pilot_raw) is not int
+                    or after.pilot_raw not in (100, PAUSED_PILOT_RAW)
+                    or any(type(a) not in (int, float) or not math.isfinite(a)
+                           or a < 0 or a > (6.5 if i == 1 else .3)
+                           for i, a in enumerate(after.currents_a))):
+                raise EvccUncertainWrite("unexpected EVCC CP/PWM after FC10; no retry")
+            if time.monotonic() >= deadline:
+                raise EvccUncertainWrite("EVCC CP transition not settled; no retry")
+            time.sleep(0.5)
 
 
 def amps_to_raw(current_a: float) -> int:
