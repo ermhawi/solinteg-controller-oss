@@ -171,6 +171,18 @@ Den redan befintliga Smart Charging-`off`-grinden bibehålls
 oförändrad som försiktighetsregel; inga nya appschemaregler införs.
 [Avgränsning och kvarstående kodgap](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
+**EVCC/Volvo empirisk energikalibreringskandidat, endast analys (2026-11-04):**
+`scripts/tools/ev_ac_soc_empirical.py --days 1` läser befintliga
+privata SQLite-historiker med read-only-anslutning och rapporterar
+**0,8902 kWh per SoC-procentenhet** som regressionsestimat
+(18 nivåer 49–66 %, R² 0,99798). AC-energin bygger på
+EVCC Ict2 × *antagna* 230 V/PF1 och SoC på molnets
+ändringstider, inte EM111-kWh eller fysiska BMS-provtider.
+Den tidigare visningsschablonen 0,9068 kWh/% ändras inte.
+**`strict-session.json`, priscontrollern och fysisk laddstyrning
+förblir oaktiva.** Ingen ny tjänst eller timer har införts.
+[Metod, data, begränsningar och återstående mätarbete](../docs/ev-ac-soc-empirical-2026-11-04.md).
+
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
 EMS-urladdning med 1 100–1 300 W PV-laddning och uppmätt L3-import

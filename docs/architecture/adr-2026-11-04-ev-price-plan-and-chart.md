@@ -923,6 +923,17 @@ FC10-/säkrings-/feltester. Dessa blockerar aktivering
 oavsett hur många offline-tester som passerar.
 
 **Read-only energirevision efter ägarskapsändringen (2026-11-04):**
+Se även den senare [genomförda empiriska EVCC/Volvo-
+kalibreringsanalysen](../ev-ac-soc-empirical-2026-11-04.md):
+18 uppmätta *rapporterade* SoC-nivåer 49–66 %, 15,389 kWh
+uppskattad AC över nivåerna och regressionslutning
+**0,8902 kWh/SoC-procentenhet** (R² 0,99798). Detta är
+`empirical_candidate_only` utan oberoende AC-kWh-räknare
+eller verifierad fysisk BMS-provtid, inte `independent_ac_calibration`.
+Nuvarande 0,9068 kWh/SoC-procentenhet för displayens
+schablon lämnas oförändrad. Priscontroller-GO påverkas inte.
+
+**Tidigare energirevision i samma utredning:**
 `ev_ac_quality_audit.audit()` läste befintliga privata
 SQLite-källor, utan skrivning. Under senaste 24 h fanns
 2 876 historikprover, 15,139307 kWh **endast delvis
