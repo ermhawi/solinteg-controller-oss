@@ -13,6 +13,7 @@
 - [Nödfallback: SoC-/BMS-grind, syntetisk root/fencing-kedja, endast offline](modbus-broker-emergency-policy-offline-2026-11-03.md)
 - [Sundsvall: skrivskyddad inventering av SoC-skydd, firmwareläge och fallback-verifieringsmatris](solinteg-fallback-readonly-inventory-2026-11-03.md)
 - [ASUS daglig routeromstart: rotorsak till nätavbrott, avaktiverat schema, rollback](solinteg-network-incident-2026-11-03.md)
+- [Nattverifiering 4 november: inget 03:00-avbrott, kvarstående Modbus-svarskorsning](solinteg-modbus-overnight-2026-11-04.md)
 - [Frågor till Solinteg om EMS-/SoC-skydd och säker återställning](solinteg-vendor-ems-questions-2026-11-03.md)
 - [Föreslagen ADR: en Modbus-broker med oberoende nödfallback](architecture/adr-2026-11-01-single-owner-modbus-broker.md)
 - [ADR: Dell först för broker-observatör, flytt till Pi senare](architecture/adr-2026-11-03-dell-broker-observer.md)

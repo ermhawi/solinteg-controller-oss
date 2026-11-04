@@ -29,6 +29,14 @@ still a list of things to confirm on **your** hardware, and that script is there
   brief and infrequent minimizes overlap regardless, rather than treating that finding as
   airtight — it is not a documented guarantee from the vendor, just a repeated empirical result
   on this exact dongle/firmware.
+- **Sundsvall 2026-11-04 (separate MHT-10K-25 site):** a poller FC03 request
+  twice returned an unexpected `WriteSingleRegisterResponse` for `50207`, with
+  raw values matching the dispatcher's contemporaneous charge/discharge
+  requests. The poller rejected the mismatched responses and recovered,
+  but two ~60 s telemetry gaps resulted. This strongly suggests
+  multi-client Modbus response interference on the shared dongle;
+  root cause at TCP frame level is not proven. Do **not** add parallel
+  direct FC03 clients. [Site-specific read-only evidence](docs/solinteg-modbus-overnight-2026-11-04.md).
 - **The dongle stalls local Modbus for 4-8 s while it talks to the cloud — a design property of
   the hardware, not a fault, and it will affect YOUR install too (confirmed 2026-08-24).** It
   uploads to Solinteg's cloud **~once a minute** over the *same internal path* local Modbus uses;

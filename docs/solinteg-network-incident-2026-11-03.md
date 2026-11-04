@@ -65,11 +65,13 @@ ladd-/urladdningsstyrning över samma Wi-Fi.
 
 ## Avgränsning och nästa kontroll
 
-- **Verifiera efter nästa 03:00** att routerns uptime ökar
-  utan ny boot, att `wlp6s0` inte kopplas från, samt att
-  pollerns tidsstämplar förblir färska. Detta **har ännu inte
-  observerats över en hel natt**; den verifierade ändringen
-  är konfigurationen, inte framtida drift.
+- **Första natten verifierad 2026-11-04:** routern var fortfarande
+  igång med drygt ett dygns uptime och `reboot_schedule_enable=0`.
+  Dell behöll `wlp6s0` vid 03:00. Fönstret 02:45–03:35 CET
+  innehöll 99 giltiga mätningar med högst 30,8 s mellan,
+  utan Modbusfel eller misslyckad återställning. Se
+  [nattverifiering och kvarstående protokollfel](solinteg-modbus-overnight-2026-11-04.md).
+  Detta bekräftar **en natt**, inte framtida felri drift.
 - Följ separat upp `wanduck`/WAN-DHCP, särskilt om
   Modbusframefel återkommer **utan** routeromstart. En WAN-restart
   ska inte utan ytterligare bevis antas vara grundorsaken för
