@@ -1,5 +1,16 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**Volvo-SoC i Elpriser (2026-11-04):** Den befintliga EV-historikern
+publicerar nu endast Volvo-rapporterad SoC per svensk kvart i en atomiskt
+skapad, grupp-läsbar 0640 JSON-fil. Privata ev-history.sqlite förblir 0600.
+Elpriser visar separat solid historik och streckad illustrativ SoC-plan för
+bilen med egen Bil-SoC-knapp på dator och mobil. Prognosen följer det sparade
+läge som Volvo-läsaren rapporterar: deadline väljer billigaste möjliga
+kvartar före avresa och markerar om 80 % inte kan nås; economy väljer
+endast billiga kvartar. Antagen 81,608 kWh/90 % AC är fortfarande **inte
+kalibrerad**, visas öppet, och ingen fysisk EVCC-prisstyrning aktiveras.
+Se [SoC-ADR och rollback](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
 **EV-billigprisförslag i Elpriser (2026-11-04):** Nytt separat lager
 `Bil · prisfönster` visar billigaste 15-minutersköpfönster, prognosrisk
 och beräknad 6 A-energi. **Endast visning, inte faktisk EVCC-laddplan.**

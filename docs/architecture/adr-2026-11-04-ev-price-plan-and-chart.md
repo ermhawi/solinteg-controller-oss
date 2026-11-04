@@ -190,6 +190,109 @@ och dokumentationsbygge OK. Direkt test av oarmerad
 och den nya pris-kontrollerns frånvarospärr testades utan
 fysiska EVCC-telegram.
 
+
+## Volvo-SoC i Elpriser: historik och illustrativ plan (2026-11-04)
+
+Källa: befintliga produktionshistorikern solinteg-ev-history.service
+och den privata SQLite-filen ev-history.sqlite (fortsatt mode 0600).
+build_soc_timeline() läser högst 48 timmars HA/Volvo API-observationer
+och publicerar endast time, socPct, capturedAtUtc och reportedAtUtc i
+gruppläsbara ev-soc-timeline.json (0640, atomisk ersättning) under
+samma 0750-runtimekatalog. Inga fullständiga EV-loggar, HA-token
+eller privata sensorer görs läsbara för webbapplikationen.
+Det sista rapporterade SoC-värdet i varje Stockholm-kvart visas;
+saknad kvart blir en lucka, inte 0 % eller påhittad interpolation.
+Höstdygnets andra 02:xx får nyckeln #2.
+
+Kvalitet: historikradernas Volvo-SoC har kvalitet
+api_recent_field_change_unverified, alltså API-rapporterat,
+inte verifierade fysiska BMS-prov. Två tider skiljs åt:
+capturedAtUtc när historikern läste status och reportedAtUtc
+när Volvo senast ÄNDRADE nivån. UI får aldrig påstå att dessa
+är samma mätögonblick.
+
+Serverdelen lib/ev-soc-state.ts läser den sanerade SoC-historiken
+och den redan grupp-läsbara HA status.json. En färsk API-observation,
+ansluten bil, 80 %-mål samt explicit angivna och obekräftade
+kapacitets-/verkningsgradsvärden krävs för prognosen. Saknas
+eller åldras underlaget visas historisk kurva utan prognos.
+Inga UI-kurvor eller scenario-JSON får påverka fysisk EVCC.
+
+lib/ev-soc-plan.ts beräknar per 15-minutersslot:
+  Delta EV-SoC i procentenheter =
+  0,25 h * 230 V * 6 A * antagen AC-verkningsgrad
+  / (1000 * antagen användbar batterikapacitet kWh) * 100
+
+Befintliga laddlägen skiljs:
+- Deadline/Klar till avresa: de billigaste kvartarna väljs före
+  närmaste avresetid; dyrare kvarter får användas om 80 % kräver
+  det. Om ens kontinuerliga 6 A inte räcker visas tydligt att
+  80 % inte nås inom horisonten.
+- Economy: samma fullständiga köppris och prognosrisk som
+  husoptimeraren, billigaste kvartilen och valfritt maxpris,
+  ingen avresetidsgaranti. Både beräknad energi och SoC begränsas
+  till 80 %.
+
+Historisk Volvo-SoC visas SOLID och framtida SoC STRECKAD, med
+egen färg och egen Bil-SoC-lagerknapp, på samma högra 0–100 %-
+axel som husbatteriet. Tooltip säger Volvo rapporterat respektive
+beräknad bil-SoC. Prisfönstren använder samma hypotetiska
+laddkvartar som framtids-SoC när färsk session finns.
+Ingen förändring av husoptimerarens köp, sälj eller SoC.
+
+Prognosen är ILLUSTRATIV: 230 V nominellt, 6 A, antagen
+kapacitet/verkningsgrad, API-rapporterad start-SoC och
+ingen aktiverad EVCC-priskontroller. Dells aktuella historiska
+HA-scenario använder 81,608 kWh och 90 % AC-verkningsgrad,
+men dessa är INTE kalibrerade. De visas som antaganden.
+För aktiv plan krävs riktig kalibrering, korrekta BMS-tider,
+EVCC-stopptest och persistent ägarskap för manuell paus.
+
+Rollback: backupa webbens berörda originalfiler och tidigare
+.next-bygge; backupa historikerns enda ev_history.py separat.
+Installera/restarta endast webb och historian; dispatcher,
+broker, Modbus, EVCC-skrivning och befintliga vakter förblir
+orörda.
+
+
+
+### Verifierad Dell-release 2026-11-04
+
+- Produktionswebben uppgraderad från build-ID
+  `-wdTiqvWMysN32fTxf8eF` till
+  `aF6E6oCYGEE8dqY_UOu2Z` med
+  `NEXT_BASE_PATH=/solinteg`. Vid verifieringen var både
+  `/solinteg` och `/solinteg/api/inverter` HTTP 200,
+  och sidans serverrenderade HTML innehöll `Bil-SoC`.
+- Historikern är enda nya datakällan och publicerade
+  **193 sanerade kvartsvärden**, där sista Volvo-rapporterade
+  nivån vid release var **56 %**. JSON mode 0640,
+  privat SQLite mode 0600. Tjänstens dataåtkomst
+  för webbanvändaren `solinteg` verifierad separat.
+- Exakt fyra webbkällor och två nya rena TypeScript-moduler
+  installerades med SHA-verifiering, plus historikerns
+  enda uppdaterade Python-fil. Den tidigare
+  produktionsspecifika tooltip-/hover-fixen bevarades.
+  Endast `solinteg-web.service` och
+  `solinteg-ev-history.service` startades om.
+- Rollback och byteexakta original finns under
+  `/var/lib/solinteg-evshadow-rollback/ev-soc-chart-20261104/`,
+  inklusive gamla `.next` och installationsmanifestet
+  `status=deployed_verified`. Två tidigare avbrutna
+  Next-byggen återställdes automatiskt. Grundorsaker:
+  ett saknat typimportberoende i produktionsinstallationen
+  och rootägd `.next/trace`. Slutbygget kördes i en
+  ny tom `.next` som ordinarie `solinteg`-användare.
+- Live dispatcher, Modbus-broker, poller, EVCC-observatör,
+  Volvo-läsare och ordinarie watchdog var fortsatt aktiva.
+  EVCC-prisstyrningens service/timer var fortfarande
+  **not-found** och inga fysiska EVCC-/inverterskrivningar
+  utfördes.
+- Verifiering före release: 1 461 Python-unittester OK,
+  **734 Vitest godkända (ett överhoppat)** inklusive
+  12 nya riktade tester, TypeScript, ESLint, Zensical
+  och Next-produktionsbygge utan blockerande fel.
+
 ## Känd lucka
 
 Nuvarande historiska förbrukningsprognos för huset

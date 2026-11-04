@@ -9,6 +9,7 @@ export interface ChartLayers {
   soc: boolean;
   zones: boolean;
   ev: boolean;
+  evSoc: boolean;
 }
 
 function ToggleChip({
@@ -33,11 +34,12 @@ function ToggleChip({
   );
 }
 
-function LayerControls({ layers, setLayers, hasPlan, hasEvPreview }: {
+function LayerControls({ layers, setLayers, hasPlan, hasEvPreview, hasEvSoc }: {
   layers: ChartLayers;
   setLayers: React.Dispatch<React.SetStateAction<ChartLayers>>;
   hasPlan: boolean;
   hasEvPreview: boolean;
+  hasEvSoc: boolean;
 }) {
   return (
     <>
@@ -49,6 +51,12 @@ function LayerControls({ layers, setLayers, hasPlan, hasEvPreview }: {
         <ToggleChip on={layers.ev} onClick={() => setLayers((s) => ({ ...s, ev: !s.ev }))}>
           <span className="h-[9px] w-[16px] rounded-sm" style={{ background: 'var(--logo-color)' }} />
           Bil · prisfönster
+        </ToggleChip>
+      )}
+      {hasEvSoc && (
+        <ToggleChip on={layers.evSoc} onClick={() => setLayers((s) => ({ ...s, evSoc: !s.evSoc }))}>
+          <span className="w-[18px] border-t-[3px]" style={{ borderColor: 'var(--logo-color)' }} />
+          Bil-SoC
         </ToggleChip>
       )}
       {hasPlan && (
@@ -73,12 +81,14 @@ export default function ChartLegend({
   hasPlan,
   hasMixedPriceSources,
   hasEvPreview,
+  hasEvSoc,
 }: {
   layers: ChartLayers;
   setLayers: React.Dispatch<React.SetStateAction<ChartLayers>>;
   hasPlan: boolean;
   hasMixedPriceSources: boolean;
   hasEvPreview: boolean;
+  hasEvSoc: boolean;
 }) {
   return (
     <div className="mb-2">
@@ -99,7 +109,7 @@ export default function ChartLegend({
         )}
         <div className="hidden flex-wrap items-center gap-2 min-[700px]:flex">
           <span className="text-xs font-bold uppercase" style={{ color: 'var(--text-muted)' }}>Lager</span>
-          <LayerControls layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasEvPreview={hasEvPreview} />
+          <LayerControls layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasEvPreview={hasEvPreview} hasEvSoc={hasEvSoc} />
         </div>
       </div>
 
@@ -109,7 +119,7 @@ export default function ChartLegend({
           <span className="ml-2 text-xs" style={{ color: 'var(--text-muted)' }}>· Anpassa grafen</span>
         </summary>
         <div className="mt-2 flex flex-wrap gap-2">
-          <LayerControls layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasEvPreview={hasEvPreview} />
+          <LayerControls layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasEvPreview={hasEvPreview} hasEvSoc={hasEvSoc} />
           {hasMixedPriceSources && (
             <span className="flex items-center text-xs" style={{ color: 'var(--text-muted)' }}>
               Gul bakgrund = prisprognos

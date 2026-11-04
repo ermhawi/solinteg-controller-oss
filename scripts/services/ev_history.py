@@ -11,9 +11,11 @@ import argparse
 import json
 import math
 import os
+import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import common
 
@@ -23,6 +25,8 @@ EVCC_MAX_AGE_S = 90
 HA_MAX_AGE_S = 150
 PLAN_MAX_AGE_S = 150
 DEFAULT_RETENTION_DAYS = 30
+STOCKHOLM = ZoneInfo("Europe/Stockholm")
+SOC_CHART_LOOKBACK_H = 48
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ev_samples (
@@ -291,6 +295,84 @@ def append(path: str, record: dict, *, retention_days: int = DEFAULT_RETENTION_D
         con.commit()
 
 
+def build_soc_timeline(db_path: str, *, now: datetime | None = None) -> dict:
+    """Summarise Volvo's *reported* level per local 15-min chart slot.
+
+    Captured/API reception is NOT a new OEM BMS sample. Keep the last
+    credible API observation in each slot, retain the separate last-changed
+    timestamp, and never interpolate gaps or promote this to control input.
+    """
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    since_ms = int((now - timedelta(hours=SOC_CHART_LOOKBACK_H)).timestamp() * 1000)
+    until_ms = int(now.timestamp() * 1000)
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3) as db:
+        rows = db.execute(
+            "SELECT captured_at_utc, volvo_soc_pct, volvo_battery_last_changed_utc, "
+            "volvo_api_received_at_utc "
+            "FROM ev_samples WHERE captured_epoch_ms BETWEEN ? AND ? "
+            "AND ha_record_fresh = 1 AND volvo_observation_usable = 1 "
+            "AND volvo_quality IN (?, ?) AND volvo_soc_pct BETWEEN 0 AND 100 "
+            "ORDER BY captured_epoch_ms ASC",
+            (since_ms, until_ms,
+             "api_recent_field_change_unverified", "api_recent_fields_changed_recently"),
+        )
+        # Each slot keeps the last actually observed value; never claim a
+        # repeated poll refreshes the upstream Volvo/BMS measurement time.
+        per_slot: dict[str, dict] = {}
+        for captured, soc, last_changed, api_received in rows:
+            sample_at = _time(captured)
+            source_at = _time(last_changed)
+            api_at = _time(api_received)
+            if (sample_at is None or api_at is None or source_at is None
+                    or api_at > sample_at + timedelta(seconds=5)
+                    or source_at > api_at + timedelta(seconds=5)):
+                continue
+            local = sample_at.astimezone(STOCKHOLM)
+            quarter = local.replace(minute=local.minute // 15 * 15, second=0,
+                                    microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")
+            if local.fold:
+                quarter += "#2"
+            per_slot[quarter] = {
+                "time": quarter,
+                "socPct": float(soc),
+                "capturedAtUtc": sample_at.isoformat(),
+                "reportedAtUtc": source_at.isoformat(),
+            }
+    points = list(per_slot.values())
+    return {
+        "version": 1,
+        "generatedAtUtc": now.isoformat(),
+        "source": "volvo_energy_api_observation",
+        "quality": "api_reported_not_verified_bms_sample",
+        "points": points,
+        "latest": points[-1] if points else None,
+    }
+
+
+def publish_soc_timeline(db_path: str, output_path: str, *,
+                         now: datetime | None = None) -> dict:
+    """Export only rounded SoC, not the private 30-day EV telemetry DB.
+
+    Use an atomic group-readable 0640 JSON in the historian's existing
+    0750 runtime directory so the Solinteg web process can display it.
+    The SQLite database itself stays 0600 and never becomes web-readable.
+    """
+    value = build_soc_timeline(db_path, now=now)
+    tmp = f"{output_path}.{secrets.token_hex(6)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(value, output, separators=(",", ":"))
+            output.flush()
+            os.fchmod(output.fileno(), 0o640)
+            os.fsync(output.fileno())
+        os.replace(tmp, output_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watch", action="store_true", help="capture periodically")
@@ -306,6 +388,15 @@ def main() -> None:
     while True:
         record = capture()
         append(path, record, retention_days=days, prune=iteration % 120 == 0)
+        if iteration % 4 == 0:
+            try:
+                publish_soc_timeline(path, os.environ.get(
+                    "EV_SOC_TIMELINE_PATH",
+                    "/opt/solinteg/ev-shadow-runtime/var/ev-soc-timeline.json"),
+                    now=datetime.now(UTC))
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                # The optional UI export must not interrupt the private historian.
+                print(f"EV SoC chart export unavailable: {type(exc).__name__}", flush=True)
         if not args.watch:
             print(json.dumps({
                 "captured_at_utc": record["captured_at_utc"],

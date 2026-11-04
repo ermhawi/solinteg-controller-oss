@@ -244,6 +244,55 @@ class HistoryTests(unittest.TestCase):
                 "SELECT captured_at_utc FROM ev_samples").fetchall()
             self.assertEqual(rows, [(third["captured_at_utc"],)])
 
+    def test_public_soc_chart_export_preserves_api_provenance_and_0640(self):
+        first = self.capture()
+        first["volvo_soc_pct"] = 52
+        history.append(str(self.db), first)
+        later_at = NOW + timedelta(minutes=6)
+        later = {**first,
+                 "captured_at_utc": later_at.isoformat(),
+                 "captured_epoch_ms": int(later_at.timestamp() * 1000),
+                 "volvo_soc_pct": 53,
+                 "volvo_api_received_at_utc": later_at.isoformat()}
+        history.append(str(self.db), later)
+        # A failed/new sample cannot overwrite the most recent valid value.
+        bad_at = later_at + timedelta(minutes=1)
+        invalid = {**later, "captured_at_utc": bad_at.isoformat(),
+                   "captured_epoch_ms": int(bad_at.timestamp() * 1000),
+                   "volvo_quality": None, "volvo_soc_pct": 99}
+        history.append(str(self.db), invalid)
+
+        target = self.db.with_name("soc-timeline.json")
+        result = history.publish_soc_timeline(
+            str(self.db), str(target), now=NOW + timedelta(minutes=8))
+        self.assertEqual(result["quality"], "api_reported_not_verified_bms_sample")
+        self.assertEqual(len(result["points"]), 1)
+        self.assertEqual(result["latest"]["time"], "2026-10-28T16:00:00")
+        self.assertEqual(result["latest"]["socPct"], 53)
+        self.assertEqual(result["latest"]["reportedAtUtc"],
+                         first["volvo_battery_last_changed_utc"])
+        self.assertEqual(os.stat(target).st_mode & 0o777, 0o640)
+        self.assertEqual(json.loads(target.read_text()), result)
+
+    def test_soc_chart_keeps_two_autumn_dst_02_quarters_distinct(self):
+        first = self.capture()
+        stamps = (datetime(2026, 10, 25, 0, 15, tzinfo=timezone.utc),
+                  datetime(2026, 10, 25, 1, 15, tzinfo=timezone.utc))
+        for i, stamp in enumerate(stamps):
+            row = {**first,
+                   "captured_at_utc": stamp.isoformat(),
+                   "captured_epoch_ms": int(stamp.timestamp() * 1000),
+                   "volvo_soc_pct": 60+i,
+                   "volvo_api_received_at_utc": stamp.isoformat(),
+                   "volvo_battery_last_changed_utc":
+                       (stamp-timedelta(minutes=1)).isoformat()}
+            history.append(str(self.db), row)
+        result = history.build_soc_timeline(
+            str(self.db), now=datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc))
+        self.assertEqual([p["time"] for p in result["points"]],
+                         ["2026-10-25T02:15:00", "2026-10-25T02:15:00#2"])
+        self.assertEqual([p["socPct"] for p in result["points"]], [60., 61.])
+
     def test_old_historian_schema_migrates_without_filling_past_ict2(self):
         old_schema = history.SCHEMA
         for name, kind in history.ADDED_METER_COLUMNS.items():

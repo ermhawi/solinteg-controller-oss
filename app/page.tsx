@@ -19,6 +19,7 @@ import { buildWeatherCardData } from '@/lib/weather-card';
 import { fetchCurrentHourGhiForecast, fetchDailyMeanTemp } from '@/lib/forecast';
 import { buildActualSocByTime } from '@/lib/chart-utils';
 import { buildActualFlowsByTime } from '@/lib/actual-flows';
+import { readEvSocChartState } from '@/lib/ev-soc-state';
 import { summarize, stockholmDateOf } from '@/lib/economics';
 import { BATTERY_KWH, SKATT_OVERFÖRING, BATTERY_MIN_SOC_KWH, FORECAST_RISK_PREMIUM_ORE } from '@/lib/constants';
 import AppShell from '@/app/components/AppShell';
@@ -62,6 +63,9 @@ export default async function Home() {
   } catch {
     // non-fatal — the comparison card renders its empty state
   }
+
+  // Volvo API SoC history and separate illustrative EV scenario (no control writes).
+  const evSoc = await readEvSocChartState();
 
   // Actual SoC history, for the chart's plan-vs-actual overlay (best-effort).
   let actualSocByTime: Record<string, number> = {};
@@ -169,6 +173,8 @@ export default async function Home() {
             skattOverforing={SKATT_OVERFÖRING}
             batteryFloorKwh={BATTERY_MIN_SOC_KWH}
             evForecastRiskOre={FORECAST_RISK_PREMIUM_ORE}
+            evSocHistory={evSoc.history}
+            evSocScenario={evSoc.scenario}
           />
         ) : (
           <section className="card-surface box-border min-w-0 p-5 order-1 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:1]">

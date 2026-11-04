@@ -3,6 +3,8 @@
 import { CHARGE_LABEL, interventionLabel, isBandDivergent, shouldShowSupplementalBatteryExport } from '@/lib/chart-utils';
 import type { ActionBand, BandActualSummary, ChartPoint } from '@/lib/chart-utils';
 import type { EvPriceWindow } from '@/lib/ev-price-windows';
+import type { EvProjectedSlot } from '@/lib/ev-soc-plan';
+import type { EvSocObservedPoint } from '@/lib/ev-soc-state';
 
 /**
  * The hover detail panel — plain HTML positioned over the SVG, not SVG itself, so it can use
@@ -49,6 +51,8 @@ export default function ChartTooltip({
   placement,
   hasPlan,
   evSlot = null,
+  evReported = null,
+  evProjected = null,
   inline = false,
 }: {
   point: ChartPoint;
@@ -57,6 +61,8 @@ export default function ChartTooltip({
   placement: TooltipPlacement;
   hasPlan: boolean;
   evSlot?: EvPriceWindow | null;
+  evReported?: EvSocObservedPoint | null;
+  evProjected?: EvProjectedSlot | null;
   inline?: boolean;
 }) {
   // Resolves the hovered slot's decision to the one quantity block to show (see DECISION_ROWS).
@@ -120,6 +126,14 @@ export default function ChartTooltip({
       {evSlot && (
         <TooltipRow color="var(--logo-color)" label="Bil · prisförslag"
           value={evSlot.charging ? `Ladda 6 A (≈1,38 kW)${evSlot.forecast ? ' · prognos' : ''}` : 'Vänta'} />
+      )}
+      {evReported && (
+        <TooltipRow color="var(--logo-color)" label="Bil-SoC · Volvo rapporterat"
+          value={`${evReported.socPct.toFixed(0)} % (API, ej BMS-verifierat)`} />
+      )}
+      {evProjected && (
+        <TooltipRow color="var(--logo-color)" label="Bil-SoC · beräknad (6 A)"
+          value={`${evProjected.socPct.toFixed(1)} % · illustrativt, ej aktiv styrning`} />
       )}
       <TooltipRow
         color="var(--color-solar)"

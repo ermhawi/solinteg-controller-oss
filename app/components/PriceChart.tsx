@@ -17,6 +17,8 @@ import {
 } from '@/lib/chart-utils';
 import type { ActualSlotFlows } from '@/lib/actual-flows';
 import { buildEvPriceWindows } from '@/lib/ev-price-windows';
+import { buildEvSocProjection } from '@/lib/ev-soc-plan';
+import type { EvSocObservedPoint, EvSocScenario } from '@/lib/ev-soc-state';
 import { useChartData } from './useChartData';
 import { buildFrame } from './price-chart/frame';
 import { useContainerWidth, useMobileViewport } from './useResponsiveLayout';
@@ -70,6 +72,8 @@ interface Props {
   skattOverforing: number;
   batteryFloorKwh: number;
   evForecastRiskOre: number; // server-resolved, shared with house optimizer
+  evSocHistory: EvSocObservedPoint[];
+  evSocScenario: EvSocScenario | null;
 }
 
 type Point = [number, number];
@@ -142,6 +146,8 @@ export default function PriceChart({
   skattOverforing,
   batteryFloorKwh,
   evForecastRiskOre,
+  evSocHistory,
+  evSocScenario,
 }: Props) {
   const {
     actionBands,
@@ -182,15 +188,20 @@ export default function PriceChart({
   const isMobile = useMobileViewport();
   const geo = useMemo(() => containerWidth != null && containerWidth < 800 ? buildChartGeometry(containerWidth, 270) : geometry, [containerWidth, geometry]);
 
-  const [layers, setLayers] = useState<ChartLayers>({ solar: true, soc: true, zones: true, ev: true });
+  const [layers, setLayers] = useState<ChartLayers>({ solar: true, soc: true, zones: true, ev: true, evSoc: true });
   const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null);
   const [rangePreset, setRangePreset] = useState<'now' | 'today' | 'tomorrow' | 'all' | 'custom'>('now');
   const count = chartData.length;
   const fullEnd = Math.max(0, count - 1);
   const [nowTime, setNowTime] = useState<string | null>(null);
+  const [nowEpochMs, setNowEpochMs] = useState<number | null>(null);
   useEffect(() => {
     const times = chartData.map((d) => d.time);
-    const update = () => setNowTime(computeNowSlotTime(new Date(), times));
+    const update = () => {
+      const now = new Date();
+      setNowTime(computeNowSlotTime(now, times));
+      setNowEpochMs(now.getTime());
+    };
     update();
     const id = setInterval(update, 60_000);
     return () => clearInterval(id);
@@ -200,10 +211,26 @@ export default function PriceChart({
     () => buildEvPriceWindows(chartData, nowTime, evForecastRiskOre),
     [chartData, nowTime, evForecastRiskOre],
   );
-  const evWindowsByTime = useMemo(
-    () => new Map(evPriceWindows.slots.map((slot) => [slot.time, slot])),
-    [evPriceWindows],
+  const evSocProjection = useMemo(
+    () => buildEvSocProjection(chartData, nowTime, evSocScenario, evForecastRiskOre, nowEpochMs),
+    [chartData, nowTime, evSocScenario, evForecastRiskOre, nowEpochMs],
   );
+  // If a recent Volvo session exists, price bands and the SoC curve must use
+  // the SAME hypothetical slots. Otherwise keep the economy-only preview.
+  const evDisplayedWindows = evSocProjection?.windows ?? evPriceWindows.slots;
+  const evWindowsByTime = useMemo(
+    () => new Map(evDisplayedWindows.map((slot) => [slot.time, slot])),
+    [evDisplayedWindows],
+  );
+  const evReportedByTime = useMemo(
+    () => new Map(evSocHistory.map((point) => [point.time, point])),
+    [evSocHistory],
+  );
+  const evProjectedByTime = useMemo(
+    () => new Map(evSocProjection?.slots.map((slot) => [slot.time, slot]) ?? []),
+    [evSocProjection],
+  );
+  const hasEvSoc = evSocHistory.some((p) => timeIndex.has(p.time)) || !!evSocProjection;
   const nowPoint = nowTime ? chartData.find((d) => d.time === nowTime) : undefined;
   const nowIndex = nowPoint ? timeIndex.get(nowPoint.time) : undefined;
   const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
@@ -285,6 +312,23 @@ export default function PriceChart({
         ),
       ),
     [chartData, viewStartIndex, viewEndIndex, geo, xAt],
+  );
+
+  const evReportedRuns = useMemo(
+    () => contiguousRuns(chartData.map((d, i): Point | null => {
+      const reported = evReportedByTime.get(d.time);
+      return i < viewStartIndex || i > viewEndIndex || !reported
+        ? null : [xAt(i), socYScale(reported.socPct, geo)];
+    })),
+    [chartData, evReportedByTime, viewStartIndex, viewEndIndex, xAt, geo],
+  );
+  const evProjectedRuns = useMemo(
+    () => contiguousRuns(chartData.map((d, i): Point | null => {
+      const projected = evProjectedByTime.get(d.time);
+      return i < viewStartIndex || i > viewEndIndex || !projected
+        ? null : [xAt(i), socYScale(projected.socPct, geo)];
+    })),
+    [chartData, evProjectedByTime, viewStartIndex, viewEndIndex, xAt, geo],
   );
 
   const peakSolarIdx = useMemo(() => {
@@ -431,12 +475,12 @@ export default function PriceChart({
       </div>
 
       <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasMixedPriceSources={hasMixedPriceSources}
-        hasEvPreview={evPriceWindows.status === 'preview'} />
+        hasEvPreview={evDisplayedWindows.length > 0} hasEvSoc={hasEvSoc} />
       {nowTime && (
         <p className="mb-2 text-[12px]" style={{ color: 'var(--text-muted)' }}>
-          {evPriceWindows.status === 'preview'
-            ? `Bil (prisförslag, inte aktiverad styrning): ${evPriceWindows.chargeSlots} billiga kvartar · upp till ${evPriceWindows.estimatedKwhAt6A.toFixed(1)} kWh vid 6 A. ${evPriceWindows.hasForecast ? 'Delvis prognos.' : ''}`
-            : `Bil: ${evPriceWindows.reason}`}
+          {evSocProjection
+            ? `Bil · Volvo rapporterat ${evSocScenario?.socPct.toFixed(0)} %. Illustrativ ${evSocProjection.mode === 'deadline' ? 'avreseplan' : 'ekonomiplan'}: ${evSocProjection.endSocPct.toFixed(1)} %${evSocProjection.departureKey ? ` till ${evSocProjection.departureKey.slice(11, 16)}` : ''}${evSocProjection.mode === 'deadline' && evSocProjection.deadlineCovered && !evSocProjection.targetReached ? ' (80 % hinns inte vid 6 A)' : ''}. Antaget ${evSocProjection.assumedUsableKwh.toFixed(1)} kWh, ${Math.round(evSocProjection.assumedEfficiency * 100)} % AC – inte aktiv EVCC-styrning.`
+            : `${evSocHistory.length ? `Bil · Volvo rapporterat ${evSocHistory.at(-1)?.socPct.toFixed(0)} % (API, ej verifierat BMS-prov). ` : ''}${evPriceWindows.status === 'preview' ? `Prisförslag: ${evPriceWindows.chargeSlots} billiga kvartar, upp till ${evPriceWindows.estimatedKwhAt6A.toFixed(1)} kWh vid 6 A. Ingen säker SoC-prognos.` : evPriceWindows.reason}`}
         </p>
       )}
       {forecastPlanIsAdvisory && (
@@ -558,7 +602,7 @@ export default function PriceChart({
 
           {layers.zones && <MinorChargeBands frame={frame} />}
           {layers.zones && <DecisionBands frame={frame} bands={actionBands} />}
-          {layers.ev && evPriceWindows.status === 'preview' && evPriceWindows.slots.filter((slot) => slot.charging).map((slot) => {
+          {layers.ev && evDisplayedWindows.filter((slot) => slot.charging).map((slot) => {
             const i = timeIndex.get(slot.time);
             if (i == null || i < viewStartIndex || i > viewEndIndex) return null;
             return (
@@ -569,7 +613,7 @@ export default function PriceChart({
           })}
 
           <PriceAxis frame={frame} />
-          {hasPlan && layers.soc && <SocAxis frame={frame} />}
+          {((hasPlan && layers.soc) || (hasEvSoc && layers.evSoc)) && <SocAxis frame={frame} />}
 
           {/* solar area */}
           {layers.solar && (
@@ -611,6 +655,25 @@ export default function PriceChart({
             hasActualSoc &&
             socActualRuns.map((run, i) => (
               <path key={`actual-${i}`} d={buildLinePath(run)} fill="none" stroke="var(--color-soc)" strokeWidth={2.4} strokeLinecap="round" />
+            ))}
+
+          {/* Volvo API observations (solid) and estimated EV SoC (dashed).
+              Shares the 0-100% SoC axis with the house but uses a distinct color. */}
+          {layers.evSoc && evProjectedRuns.map((run, i) => (
+            <path key={'ev-projected-' + i} d={buildLinePath(run)} fill="none"
+              stroke="var(--logo-color)" strokeWidth={2} strokeDasharray="4 5"
+              strokeLinecap="round" opacity={0.75} />
+          ))}
+          {layers.evSoc && evReportedRuns.map((run, i) => (
+            <path key={'ev-reported-' + i} d={buildLinePath(run)} fill="none"
+              stroke="var(--logo-color)" strokeWidth={2.8} strokeLinecap="round" />
+          ))}
+          {layers.evSoc && evSocHistory.filter((p, i) =>
+            i === evSocHistory.length - 1 && timeIndex.has(p.time) &&
+            (timeIndex.get(p.time) ?? -1) >= viewStartIndex &&
+            (timeIndex.get(p.time) ?? Infinity) <= viewEndIndex).map((p) => (
+              <circle key={'ev-now-' + p.time} cx={tx(p.time) ?? 0} cy={socYScale(p.socPct, geo)}
+                r={3.5} fill="var(--logo-color)" stroke="var(--card-bg)" strokeWidth={1.5} />
             ))}
 
           {/* actual/forecast handover — provenance boundary, independent of the day divider */}
@@ -737,6 +800,8 @@ export default function PriceChart({
             placement={{ x: hover.x, y: hover.y, containerWidth: hover.containerWidth }}
             hasPlan={hasPlan}
             evSlot={layers.ev ? evWindowsByTime.get(hoverPoint.time) ?? null : null}
+            evReported={layers.evSoc ? evReportedByTime.get(hoverPoint.time) ?? null : null}
+            evProjected={layers.evSoc ? evProjectedByTime.get(hoverPoint.time) ?? null : null}
           />
         )}
       </div>
@@ -745,7 +810,9 @@ export default function PriceChart({
         <div className="mt-3" aria-live="polite">
           <ChartTooltip point={hoverPoint} band={hoverBand} bandActual={hoverBandActual}
             placement={{ x: hover.x, y: hover.y, containerWidth: hover.containerWidth }} hasPlan={hasPlan}
-            evSlot={layers.ev ? evWindowsByTime.get(hoverPoint.time) ?? null : null} inline />
+            evSlot={layers.ev ? evWindowsByTime.get(hoverPoint.time) ?? null : null}
+            evReported={layers.evSoc ? evReportedByTime.get(hoverPoint.time) ?? null : null}
+            evProjected={layers.evSoc ? evProjectedByTime.get(hoverPoint.time) ?? null : null} inline />
         </div>
       ) : <p className="mt-2 text-[13px]" style={{ color: 'var(--text-muted)' }}>Tryck på grafen för pris och batteriplan per kvart.</p>)}
 
