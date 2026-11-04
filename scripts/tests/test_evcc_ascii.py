@@ -8,7 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services"))
 from evcc_ascii import (
     EvccAscii, EvccError, EvccUncertainWrite, RAW_PAUSE,
-    amps_to_raw, frame, parse_reply,
+    PAUSED_PILOT_RAW, observed_evcc_mode, amps_to_raw, frame, parse_reply,
 )
 
 
@@ -21,8 +21,8 @@ def config(raw):
     return reply_read([0x0F00, 0, 0, raw, 0])
 
 
-def live(raw, current=100, state=0xC2):
-    return reply_read([0x2E00 | state, 0x8000 | raw, 0x03E8, current, 0x03E8])
+def live(raw, current=100, state=0xC2, side_current=0):
+    return reply_read([0x2E00 | state, 0x8000 | raw, side_current, current, side_current])
 
 
 class FakeSocket:
@@ -106,7 +106,7 @@ class DriverTests(unittest.TestCase):
 
     def test_unknown_current_is_not_zero(self):
         client = EvccAscii("example.invalid")
-        answers = [FakeSocket(config(1000)), FakeSocket(live(1000, current=1000, state=0xA1))]
+        answers = [FakeSocket(config(1000)), FakeSocket(live(1000, current=1000, state=0xA1, side_current=1000))]
         with mock.patch("evcc_ascii.socket.create_connection", side_effect=answers):
             self.assertIsNone(client.status().measured_current_a)
 
@@ -124,14 +124,14 @@ class DriverTests(unittest.TestCase):
         responses = [
             FakeSocket(config(166)), FakeSocket(live(166, current=98)),
             FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
-            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(RAW_PAUSE, current=0, state=0xB2)),
+            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(PAUSED_PILOT_RAW, current=1, state=0xB2)),
         ]
         with mock.patch.dict(os.environ, {
             "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1", "EVCC_MANUAL_TEST": "1",
         }), mock.patch("evcc_ascii.socket.create_connection", side_effect=responses) as dial:
             after = client.set_limit_raw(RAW_PAUSE, expected_raw=166)
         self.assertEqual(after.configured_raw, RAW_PAUSE)
-        self.assertEqual(after.pilot_raw, RAW_PAUSE)
+        self.assertEqual(after.pilot_raw, PAUSED_PILOT_RAW)
         self.assertEqual(dial.call_count, 5)
         self.assertEqual(responses[2].sent[0], frame(bytes.fromhex("0110001400010203E8")))
 
@@ -172,7 +172,7 @@ class DriverTests(unittest.TestCase):
         responses = [
             FakeSocket(config(100)), FakeSocket(live(100, current=60)),
             FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
-            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(RAW_PAUSE, current=0, state=0xB2)),
+            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(PAUSED_PILOT_RAW, current=1, state=0xB2)),
         ]
         with mock.patch.dict(os.environ, {
             "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
@@ -191,6 +191,131 @@ class DriverTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 client.set_limit_raw(100, expected_raw=RAW_PAUSE, scheduled=True)
             dial.assert_not_called()
+
+    def test_observed_modes_are_strictly_cp_pilot_and_phase_bound(self):
+        self.assertEqual(observed_evcc_mode(
+            "C2", 100, 100, (0.1, 6.0, 0.1)), "charging_6a")
+        self.assertEqual(observed_evcc_mode(
+            "B2", RAW_PAUSE, PAUSED_PILOT_RAW, (0.1, 0.1, 0.1)),
+            "paused_connected")
+        for state, cfg, pilot, currents in (
+            ("A1", RAW_PAUSE, PAUSED_PILOT_RAW, (0.1, 0.1, 0.1)),
+            ("C2", RAW_PAUSE, PAUSED_PILOT_RAW, (0.1, 0.1, 0.1)),
+            ("B2", RAW_PAUSE, RAW_PAUSE, (0.1, 0.1, 0.1)),
+            ("B2", RAW_PAUSE, 266, (0.1, 0.1, 0.1)),
+            ("B2", RAW_PAUSE, PAUSED_PILOT_RAW, (0.1, 5.5, 0.1)),
+            ("B2", RAW_PAUSE, PAUSED_PILOT_RAW, (0.4, 0.1, 0.1)),
+            ("B2", RAW_PAUSE, PAUSED_PILOT_RAW, (None, 0.1, 0.1)),
+            ("C2", 100, 100, (0.1, 0.0, 0.1)),
+            ("C2", 100, RAW_PAUSE, (0.1, 6.0, 0.1)),
+            ("B2", 100, 100, (0.1, 0.1, 0.1)),
+            ("C2", 100, 100, (0.1, float("nan"), 0.1)),
+        ):
+            with self.subTest(state=state, config=cfg, pilot=pilot, currents=currents):
+                self.assertIsNone(observed_evcc_mode(state, cfg, pilot, currents))
+
+    def test_scheduled_pause_refuses_changed_cp_before_fc10(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        responses = [FakeSocket(config(100)), FakeSocket(live(100, current=0, state=0xB2))]
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1",
+        }, clear=True), mock.patch(
+            "evcc_ascii.socket.create_connection", side_effect=responses
+        ) as dial:
+            with self.assertRaises(EvccError):
+                client.set_limit_raw(RAW_PAUSE, expected_raw=100, scheduled=True)
+        self.assertEqual(dial.call_count, 2)
+
+    def test_scheduled_resume_requires_confirmed_b2_1000_267(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        valid = [
+            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(PAUSED_PILOT_RAW, current=1, state=0xB2)),
+            FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
+            FakeSocket(config(100)), FakeSocket(live(100, current=60, state=0xC2)),
+        ]
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1", "EVCC_START_APPROVED": "1",
+        }, clear=True), mock.patch(
+            "evcc_ascii.socket.create_connection", side_effect=valid
+        ) as dial:
+            after = client.set_limit_raw(100, expected_raw=RAW_PAUSE, scheduled=True)
+        self.assertEqual((after.state, after.configured_raw, after.pilot_raw), ("C2", 100, 100))
+        self.assertEqual(dial.call_count, 5)
+
+        # An unplugged CP or a changed pilot can never reach FC10.
+        for state, pilot in ((0xA1, PAUSED_PILOT_RAW), (0xB2, 1000), (0xB2, 100)):
+            with self.subTest(state=state, pilot=pilot):
+                responses = [
+                    FakeSocket(config(RAW_PAUSE)),
+                    FakeSocket(live(pilot, current=1, state=state)),
+                ]
+                with mock.patch.dict(os.environ, {
+                    "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+                    "EVCC_PRICE_CONTROL_ARMED": "1", "EVCC_START_APPROVED": "1",
+                }, clear=True), mock.patch(
+                    "evcc_ascii.socket.create_connection", side_effect=responses
+                ) as dial:
+                    with self.assertRaises(EvccError):
+                        client.set_limit_raw(100, expected_raw=RAW_PAUSE, scheduled=True)
+                self.assertEqual(dial.call_count, 2)
+
+    def test_resume_readback_b2_is_pending_not_6a_verified(self):
+        self.assertIsNone(observed_evcc_mode(
+            "B2", 100, 100, (0.1, 0.1, 0.1)))
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        responses = [
+            FakeSocket(config(RAW_PAUSE)),
+            FakeSocket(live(PAUSED_PILOT_RAW, current=1, state=0xB2)),
+            FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
+            FakeSocket(config(100)), FakeSocket(live(100, current=1, state=0xB2)),
+        ]
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1", "EVCC_START_APPROVED": "1",
+        }, clear=True), mock.patch(
+            "evcc_ascii.socket.create_connection", side_effect=responses
+        ) as dial:
+            after = client.set_limit_raw(100, expected_raw=RAW_PAUSE, scheduled=True)
+        self.assertEqual((after.state, after.configured_raw), ("B2", 100))
+        self.assertEqual(dial.call_count, 5)
+
+    def test_unplug_during_scheduled_resume_is_uncertain_no_retry(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        responses = [
+            FakeSocket(config(RAW_PAUSE)),
+            FakeSocket(live(PAUSED_PILOT_RAW, current=1, state=0xB2)),
+            FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
+            FakeSocket(config(100)),
+            FakeSocket(live(100, current=1000, state=0xA1, side_current=1000)),
+        ]
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1", "EVCC_START_APPROVED": "1",
+        }, clear=True), mock.patch(
+            "evcc_ascii.socket.create_connection", side_effect=responses
+        ) as dial:
+            with self.assertRaises(EvccUncertainWrite):
+                client.set_limit_raw(100, expected_raw=RAW_PAUSE, scheduled=True)
+        self.assertEqual(dial.call_count, 5)
+
+    def test_pause_bad_pilot_readback_is_uncertain_without_retry(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        responses = [
+            FakeSocket(config(100)), FakeSocket(live(100, current=60)),
+            FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
+            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(RAW_PAUSE, current=1, state=0xB2)),
+        ]
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1",
+        }, clear=True), mock.patch(
+            "evcc_ascii.socket.create_connection", side_effect=responses
+        ) as dial:
+            with self.assertRaises(EvccUncertainWrite):
+                client.set_limit_raw(RAW_PAUSE, expected_raw=100, scheduled=True)
+        self.assertEqual(dial.call_count, 5)
 
     def test_current_round_down_and_limits(self):
         self.assertEqual(amps_to_raw(6), 100)

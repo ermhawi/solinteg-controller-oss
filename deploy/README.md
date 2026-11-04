@@ -46,6 +46,22 @@ priscontroller kan därmed återkalla gamla pausägarskap efter urkoppling.
 fysisk EVCC-kvalificering saknas fortfarande. Se
 [kabel-/sessionsrunbook](../docs/evcc-cable-tracking-2026-11-04.md).
 
+**EVCC2 paus-pilot/kontroll, endast källkod 2026-11-04:**
+Historikern har 178 `B2`-prover med konfigurerad PWM `1000`
+men **piloten `267`**, varav 16 har komplett Ict1/2/3
+och bekräftar låg ström. Den framtida schemalagda
+priscontrollern och dess read-only preflight använder nu en
+gemensam strikt tvålägestolkning:
+`C2/100/100` med Ict2 5,5–6,5 A respektive
+`B2/1000/267` med Ict2 högst 0,5 A.
+Utebliven pilot-/fasbekräftelse stoppar FC10 och
+osäkert skrivutfall återförs inte med blind retry.
+**En verifierad paus ger inte automatiskt rätt att återstarta.**
+Förlustfri manuellt stopp-signal, kalibrerad EV-session och
+fysiska EVCC-prover kvarstår. **Ingen EVCC-prisservice
+installerades och inga EVCC-skrivningar gjordes** i detta steg.
+Se [källkods-ADR](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
 **Volvo Smart Charging-spärr, endast källkod 2026-11-04:**
 `ev_price_controller.py` kräver nu även en skyddad, högst tio minuter
 gammal, VIN-hash-matchad och entydig `GetChargeLocations`-snapshot

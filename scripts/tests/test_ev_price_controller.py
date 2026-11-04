@@ -45,7 +45,7 @@ class PriceControllerTests(unittest.TestCase):
 
     def test_cheap_price_resumes_only_6a_and_in_budget(self):
         paused = {**EVCC, "state": "B2", "configured_pwm_raw": RAW_PAUSE,
-                  "pilot_pwm_raw": RAW_PAUSE, "channel_currents_a": [0.1, 0.1, 0.1]}
+                  "pilot_pwm_raw": 267, "channel_currents_a": [0.1, 0.1, 0.1]}
         self.assertEqual(self.choose(evcc=paused).action, "inhibited")
         action = self.choose(evcc=paused, price_pause_owned=True)
         self.assertEqual((action.action, action.expected_raw, action.target_raw),
@@ -54,6 +54,23 @@ class PriceControllerTests(unittest.TestCase):
         self.assertEqual(self.choose(price=EXPENSIVE, evcc=paused).action, "no_change")
         self.assertEqual(self.choose(evcc=paused, price_pause_owned=False).reason,
                          "pause owner unknown; manual pause has priority")
+
+    def test_paused_state_requires_exact_pilot_and_low_current(self):
+        paused = {**EVCC, "state": "B2", "configured_pwm_raw": RAW_PAUSE,
+                  "pilot_pwm_raw": 267, "channel_currents_a": [0.1, 0.1, 0.1]}
+        self.assertEqual(self.choose(evcc=paused, price_pause_owned=True).action, "resume")
+        for updated in (
+            {"pilot_pwm_raw": RAW_PAUSE},
+            {"pilot_pwm_raw": 266},
+            {"state": "C2"},
+            {"state": "A1"},
+            {"channel_currents_a": [0.1, 5.6, 0.1]},
+            {"channel_currents_a": [None, 0.1, None]},
+        ):
+            with self.subTest(updated=updated):
+                row = {**paused, **updated}
+                self.assertEqual(
+                    self.choose(evcc=row, price_pause_owned=True).action, "inhibited")
 
     def test_no_verified_session_never_writes(self):
         self.assertEqual(self.choose(session=None).action, "inhibited")
@@ -83,7 +100,7 @@ class PriceControllerTests(unittest.TestCase):
 
     def test_fuse_preflight_is_physical_not_house_ex_ev_budget(self):
         paused = {**EVCC, "state": "B2", "configured_pwm_raw": RAW_PAUSE,
-                  "pilot_pwm_raw": RAW_PAUSE, "channel_currents_a": [0.1, .1, .1]}
+                  "pilot_pwm_raw": 267, "channel_currents_a": [0.1, .1, .1]}
         for measurement in [{**LIVE, "meter_l3_w": -2200},
                             {**LIVE, "grid_w": -5200},
                             {**LIVE, "grid_unbalanced_output_raw": 1},

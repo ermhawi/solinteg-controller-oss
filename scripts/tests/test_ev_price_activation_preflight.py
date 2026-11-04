@@ -156,11 +156,30 @@ class ReadinessTests(unittest.TestCase):
 
     def test_valid_paused_b2_and_bad_phase(self):
         self._write("evcc-readonly.json", observed_evcc(
-            state="B2", configured_pwm_raw=1000, pilot_pwm_raw=1000,
+            state="B2", configured_pwm_raw=1000, pilot_pwm_raw=267,
             channel_currents_a=[0.1, 0, 0.1]))
         self.assertTrue(self.inspect()["checks"]["fresh_consistent_evcc_fc03"])
         self.grid.write_text(json.dumps(observed_grid(grid_unbalanced_output_raw=1)))
         self.assertFalse(self.inspect()["checks"]["fresh_valid_grid_and_l3"])
+
+    def test_paused_pilot_profile_rejects_mismatched_cp_or_current(self):
+        baseline = observed_evcc(
+            state="B2", configured_pwm_raw=1000, pilot_pwm_raw=267,
+            channel_currents_a=[0.1, 0.1, 0.1])
+        for changed in (
+            {"pilot_pwm_raw": 1000},
+            {"pilot_pwm_raw": 100},
+            {"state": "A1"},
+            {"state": "C2"},
+            {"channel_currents_a": [0.1, 2.0, 0.1]},
+            {"channel_currents_a": [None, 0.1, 0.1]},
+        ):
+            with self.subTest(changed=changed):
+                self._write("evcc-readonly.json", {**baseline, **changed})
+                self.assertFalse(
+                    self.inspect()["checks"]["fresh_consistent_evcc_fc03"])
+        self._write("evcc-readonly.json", baseline)
+        self.assertTrue(self.inspect()["checks"]["fresh_consistent_evcc_fc03"])
 
     def test_smart_activated_or_unknown_fails(self):
         for state in ("on", "unknown"):

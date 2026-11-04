@@ -21,9 +21,13 @@ var cirka 30:e sekund. Styrpilotens EVCC-tillstånd tolkar vi som:
 Historikern gav faktiska `A1`→`B2`-prover 2026-11-04.
 **Vid detta tillfälle var `configured_pwm_raw=1000` och
 `pilot_pwm_raw=267`.** Fysisk kabelstatus kommer från EVCC:s
-CP-state, inte av att dessa PWM-register råkar vara lika. Detta
-upphäver **inte** priscontrollerns strikta pilot/CAS-grind:
-automatisk återstart från denna kombination är ännu inte verifierad.
+CP-state, inte av att dessa PWM-register råkar vara lika.
+**Senare offlinekorrigering 2026-11-04:** Strikt, tillståndsberoende
+kontroll kan verifiera en ansluten paus som `B2/1000/267`
+**om** alla tre Ict-kanaler är färska och Ict2 är högst 0,5 A.
+Detta är **inte** en återstartsrätt: prispausägarskap,
+förlustfri manuell stoppavsikt och fysisk FC10-kvalificering
+är fortsatt nödvändiga. Se [uppdaterad pris-ADR](architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
 
 ## Implementation
 

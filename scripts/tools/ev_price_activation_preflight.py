@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 import ev_price_pause_owner as ownership  # noqa: E402
 import evcc_cable_tracker as cable_tracker  # noqa: E402
+from evcc_ascii import observed_evcc_mode  # noqa: E402
 import ev_volvo_smart_charging as smart  # noqa: E402
 from ev_price_policy import (  # noqa: E402
     decide_grid_price, read_ev_session, read_house_price_plan,
@@ -56,18 +57,9 @@ def _evcc_usable(row: dict | None, now: datetime) -> bool:
             or row.get("state") not in ("B2", "C2")
             or not _fresh(row.get("timestamp"), now=now, max_seconds=MAX_SAMPLE_AGE_SECONDS)):
         return False
-    config = row.get("configured_pwm_raw")
-    pilot = row.get("pilot_pwm_raw")
-    if type(config) is not int or config != pilot or config not in (100, 1000):
-        return False
-    currents = row.get("channel_currents_a")
-    if (not isinstance(currents, list) or len(currents) != 3
-            or any(type(x) not in (float, int) or not math.isfinite(x) for x in currents)
-            or not 0 <= currents[0] <= 0.3 or not 0 <= currents[2] <= 0.3
-            or not 0 <= currents[1] <= 6.5):
-        return False
-    return ((config == 100 and row["state"] == "C2" and currents[1] >= 5.5)
-            or (config == 1000 and row["state"] == "B2" and currents[1] <= 0.5))
+    return observed_evcc_mode(
+        row["state"], row.get("configured_pwm_raw"),
+        row.get("pilot_pwm_raw"), row.get("channel_currents_a")) is not None
 
 
 def _grid_usable(row: dict | None, now: datetime) -> bool:

@@ -22,7 +22,8 @@ import ev_price_pause_owner as ownership
 import evcc_cable_tracker as cable_tracker
 import ev_volvo_smart_charging as smart
 from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan, PriceDecision
-from evcc_ascii import EvccAscii, RAW_PAUSE, EvccError, EvccUncertainWrite
+from evcc_ascii import (EvccAscii, RAW_PAUSE, EvccError, EvccUncertainWrite,
+                        observed_evcc_mode)
 
 EVCC = Path("/opt/solinteg/ev-shadow-runtime/var/evcc-readonly.json")
 LIVE = Path("/opt/solinteg/live.json")
@@ -76,14 +77,10 @@ def choose_action(*, session: dict | None, price: PriceDecision,
                 or evcc.get("state") not in ("B2", "C2")):
             return no("EVCC state or independent FC03 source unverified")
         raw = evcc["configured_pwm_raw"]
-        if type(raw) is not int or raw != evcc.get("pilot_pwm_raw") or raw not in (RAW_PAUSE, EV_RAW_6A):
-            return no("EVCC pilot changed externally; never overwrite")
         currents = evcc["channel_currents_a"]
-        if (not isinstance(currents, list) or len(currents) != 3
-                or any(type(v) not in (int, float) or not math.isfinite(v) for v in currents)
-                or not (0 <= currents[0] <= .3 and 0 <= currents[2] <= .3)
-                or not 0 <= currents[1] <= 6.5):
-            return no("EVCC phase/current mismatch")
+        if observed_evcc_mode(
+                evcc["state"], raw, evcc.get("pilot_pwm_raw"), currents) is None:
+            return no("EVCC pilot, state or phase current inconsistent; never overwrite")
         if (live.get("grid_unbalanced_output_raw") != 0
                 or any(type(live.get(k)) not in (int, float) or not math.isfinite(live[k])
                        for k in ("grid_w", "meter_l3_w"))):
@@ -256,7 +253,11 @@ def run_once(*, now: datetime | None = None) -> dict:
                     after = client.set_limit_raw(
                         command.target_raw, expected_raw=command.expected_raw, scheduled=True)
                     if (after.configured_raw != command.target_raw
-                            or after.pilot_raw != command.target_raw):
+                            or (command.action == "pause" and observed_evcc_mode(
+                                after.state, after.configured_raw,
+                                after.pilot_raw, after.currents_a) != "paused_connected")
+                            or (command.action == "resume"
+                                and after.pilot_raw != command.target_raw)):
                         raise EvccUncertainWrite("EVCC readback mismatched")
                     ownership.write_owner(
                         owner_path, {**next_owner,

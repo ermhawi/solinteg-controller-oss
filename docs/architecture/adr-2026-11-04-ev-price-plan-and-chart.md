@@ -677,3 +677,69 @@ i den filtrerade runtimefilen vid denna kontroll. Detta är ett
 **förväntat fail-closed-utfall**, inte ett lyckat färskt BMS-prov.
 `solinteg-ev-price-controller.service` är fortsatt `not-found`.
 Ingen EVCC-, bil- eller inverterstyrning ändrades.
+
+### EVCC2:s pilot vid prispaus – offlinekorrigering 2026-11-04
+
+Det tidigare antagandet att `configured_pwm_raw == pilot_pwm_raw`
+alltid gäller vid paus var **fel** för installationens EVCC2-firmware.
+Den befintliga, read-only EVCC-historikern visade följande
+`FC03`-kombinationer (ackumulerad replay vid granskningen):
+
+| CP | Konfigurerad PWM | Observerad pilot | Prover | Tolkning |
+| --- | ---: | ---: | ---: | --- |
+| `C2` | 100 | 100 | 1 779 | Laddkandidat, ca 6 A |
+| `B2` | 1000 | 267 | 178 | Ansluten paus, ca 0,1 A när Ict2 finns |
+| `A1` | 1000 | 267 | 4 259 | Frånkopplad; **ej återstartbar** |
+| `B2` | 100 | 100 | 1 | Kort tvetydig övergång; **avvisa** |
+| `C2` | 1000 | 267 | 1 | Kort tvetydig övergång; **avvisa** |
+
+I totalt 6 442 historikposter validerade den nya **gemensamma
+rena** `observed_evcc_mode()` 1 229 som `charging_6a` och
+16 som `paused_connected`; 5 197 avvisades. Bland de
+avvisade fanns 550 äldre `C2`- och 162 äldre `B2`-poster
+utan alla tre Ict-fasvärden. Det är **täckningsbrist i
+historikerfält**, inte verifierade felaktiga aktuella
+FC03-mätningar. Endast kompletta färska mätningar används.
+
+`scripts/services/evcc_ascii.py` definierar nu
+`PAUSED_PILOT_RAW=267` som en **observerad pilotindikering,
+aldrig skrivbörvärde**, och `observed_evcc_mode()` kräver
+exakt `C2 / 100 / 100 / Ict2 5,5–6,5 A` eller
+`B2 / 1000 / 267 / Ict2 0–0,5 A` med
+Ict1/Ict3 vardera 0–0,3 A. Alla andra lägen,
+frånkoppling `A1`, saknade/ogiltiga fasvärden och
+felklassning är **NO-GO**. Samma kontroll används av
+`ev_price_controller.choose_action()` och
+`ev_price_activation_preflight.py`.
+
+I den framtida **schemalagda** FC10-drivern görs nu en
+ny fysisk läsning **under EVCC:s befintliga seriallås**:
+paus får endast skickas om laddning just då är
+verifierad `C2/6 A`, och återstart får endast skickas
+om ansluten paus just då är verifierad `B2/1000/267`.
+Schemalagt skrivbörvärde begränsas dessutom till endast
+`100` (6 A) eller `1000` (paus).
+Efter en paus krävs `B2/1000/267` och högst
+0,5 A vid readback; osäkert ACK, läsfel, fortsatt ström
+eller oväntad pilot ger **osäkert utfall utan retry**.
+Efter `100` krävs även att bilen fortfarande ses ansluten.
+`B2/100/100` med låg ström får kvittera en **ännu inte
+fysiskt startad** laddare direkt efter kommandot; det används
+aldrig som förkontroll för en ny åtgärd. Om en urkoppling
+`A1` ses före eller efter FC10 markeras resultatet
+**osäkert och får inte upprepas automatiskt**. En redan
+skickad FC10 kan dock inte göras ogjord genom läsning:
+just detta race återstår att kvalificera fysiskt.
+Efter `100` bekräftar föraren fortfarande börvärdet,
+inte att bilen faktiskt har börjat ladda.
+
+**Driftbeslut:** Det nya priscontroller-/FC10-spåret
+är fortfarande **endast källkod och offlineverifierat**.
+Inget EVCC-kommando skickades i denna ändring. Detta
+löser den tidigare falska pilotspärren vid
+normala pausprover, **inte** de kvarstående hindren:
+förlustfri Volvo-app-manualstoppkälla, verifierbar
+kWh-/SoC-session, fysiskt skyddat paus-/återstartprov,
+eller driftens väggbox-/fassäkringsverifiering.
+Befintlig EVCC-observatör, Volvo-statuspoller, inverter-
+och husbatteridispatch ändras inte.

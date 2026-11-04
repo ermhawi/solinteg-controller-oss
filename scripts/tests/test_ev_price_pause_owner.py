@@ -36,7 +36,7 @@ EVCC_CHARGING = {
 }
 EVCC_PAUSED = {
     **EVCC_CHARGING, "state": "B2", "configured_pwm_raw": RAW_PAUSE,
-    "pilot_pwm_raw": RAW_PAUSE, "channel_currents_a": [0.0, 0.0, 0.0],
+    "pilot_pwm_raw": 267, "channel_currents_a": [0.0, 0.1, 0.0],
 }
 GRID = {
     "timestamp": NOW.isoformat(), "grid_w": -400, "meter_l3_w": -200,
@@ -54,7 +54,10 @@ class FakeEvcc:
         self.calls.append((raw, expected_raw, scheduled))
         if self.fail:
             raise EvccUncertainWrite("synthetic uncertain FC10")
-        return SimpleNamespace(configured_raw=raw, pilot_raw=raw)
+        return SimpleNamespace(
+            configured_raw=raw, pilot_raw=267 if raw == RAW_PAUSE else raw,
+            state="B2" if raw == RAW_PAUSE else "C2",
+            currents_a=(0.0, 0.1, 0.0) if raw == RAW_PAUSE else (0.0, 6.0, 0.0))
 
 
 class OwnershipTests(unittest.TestCase):

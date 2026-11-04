@@ -18,6 +18,7 @@ REG_STATUS = 0x002E
 REG_CONFIG = 0x000F
 REG_CURRENT_LIMIT = 0x0014
 RAW_PAUSE = 0x03E8  # 100% PWM: no permitted charging current, NOT 0 A.
+PAUSED_PILOT_RAW = 267  # Observed EVCC2 pilot during B2/configured=1000, not a setpoint.
 MAX_TEST_CURRENT_A = 16
 MAX_TEST_RAW = math.floor(MAX_TEST_CURRENT_A / 0.06)
 
@@ -68,6 +69,50 @@ class EvccStatus:
     def measured_current_a(self) -> float | None:
         valid = [current for current in self.currents_a if current is not None]
         return sum(valid) if valid else None
+
+
+def observed_evcc_mode(state: str, configured_raw: object, pilot_raw: object,
+                       currents_a: object) -> str | None:
+    """Validated physical 6 A / connected pause; never infer manual intent.
+
+    EVCC2 FC03 history on this installation: C2/100/100 with Ict2 ~6 A,
+    B2/1000/267 with Ict2 ~0.1 A. The 267 pilot is a *readback*, not
+    permission to apply 16 A or to resume an unowned pause.
+    """
+    if (type(configured_raw) is not int or type(pilot_raw) is not int
+            or not isinstance(currents_a, (tuple, list)) or len(currents_a) != 3
+            or any(type(a) not in (int, float) or not math.isfinite(a)
+                   for a in currents_a)):
+        return None
+    ict1, ict2, ict3 = currents_a
+    if not (0 <= ict1 <= .3 and 0 <= ict3 <= .3):
+        return None
+    if (state == "C2" and configured_raw == 100 and pilot_raw == 100
+            and 5.5 <= ict2 <= 6.5):
+        return "charging_6a"
+    if (state == "B2" and configured_raw == RAW_PAUSE
+            and pilot_raw == PAUSED_PILOT_RAW and 0 <= ict2 <= .5):
+        return "paused_connected"
+    return None
+
+
+def resume_setpoint_readback(state: str, configured_raw: object,
+                             pilot_raw: object, currents_a: object) -> bool:
+    """FC10=100 read back with car connected; not proof charging started."""
+    if observed_evcc_mode(state, configured_raw, pilot_raw, currents_a) == "charging_6a":
+        return True
+    # Immediately after FC10 the car can still be connected in B2,
+    # waiting to close its contactor. Never admit an unplugged A1.
+    return bool(
+        state == "B2" and type(configured_raw) is int and configured_raw == 100
+        and type(pilot_raw) is int and pilot_raw == 100
+        and isinstance(currents_a, (list, tuple)) and len(currents_a) == 3
+        and all(type(a) in (int, float) and math.isfinite(a)
+                for a in currents_a)
+        and 0 <= currents_a[0] <= .3
+        and 0 <= currents_a[1] <= .5
+        and 0 <= currents_a[2] <= .3
+    )
 
 
 class EvccAscii:
@@ -146,6 +191,8 @@ class EvccAscii:
             raise PermissionError("EVCC writing disabled: explicit owner and action opt-ins required")
         if raw != RAW_PAUSE and not (100 <= raw <= MAX_TEST_RAW):
             raise ValueError("current outside 6-16 A or pause sentinel")
+        if scheduled and raw not in (100, RAW_PAUSE):
+            raise ValueError("scheduled EVCC control supports only 6 A or pause")
         if not (0 <= expected_raw <= 0x0FFF):
             raise ValueError("invalid expected PWM")
         if raw != RAW_PAUSE and os.environ.get("EVCC_START_APPROVED") != "1":
@@ -155,6 +202,12 @@ class EvccAscii:
             raise EvccError("EVCC changed since preflight; no write")
         if before.state.startswith("F") or before.state.startswith("E"):
             raise EvccError("EVCC fault/disabled state; no write")
+        if scheduled:
+            actual = observed_evcc_mode(
+                before.state, before.configured_raw, before.pilot_raw, before.currents_a)
+            expected = "charging_6a" if raw == RAW_PAUSE else "paused_connected"
+            if actual != expected:
+                raise EvccError("EVCC current/pilot state changed before write; no write")
         request = (bytes([self.address, 0x10]) + REG_CURRENT_LIMIT.to_bytes(2, "big") +
                    b"\x00\x01\x02" + raw.to_bytes(2, "big"))
         try:
@@ -167,7 +220,14 @@ class EvccAscii:
             after = self.status()
         except (OSError, EvccError) as exc:
             raise EvccUncertainWrite("write ACK received but readback unavailable") from exc
-        if after.configured_raw != raw or after.pilot_raw != raw:
+        if (after.configured_raw != raw
+                or (raw == RAW_PAUSE and observed_evcc_mode(
+                    after.state, after.configured_raw,
+                    after.pilot_raw, after.currents_a) != "paused_connected")
+                or (scheduled and raw == 100 and not resume_setpoint_readback(
+                    after.state, after.configured_raw,
+                    after.pilot_raw, after.currents_a))
+                or (raw != RAW_PAUSE and after.pilot_raw != raw)):
             raise EvccUncertainWrite("readback differs from requested PWM; do not retry")
         return after
 
