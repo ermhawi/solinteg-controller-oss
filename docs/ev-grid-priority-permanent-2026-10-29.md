@@ -1,5 +1,7 @@
 # Permanent nätprioritering för XC40 på L3 – releaseförberedelse 2026-10-29
 
+**Aktuell driftstatus 2026-11-04:** Shadow-hooken från 31 oktober återkallades senare. Den nu installerade ARMED-dispatchern saknar både EV-grid-priority-hooken och `coordinate_l3_battery()`; `DISPATCH_L3_BATTERY_MODE=shadow` i processmiljön är därmed verkningslös. Root-gate `gate.json` saknas, EVCC hade senast `read_ok=false` och SoC var 20 %. Modbus-brokern är driftsatt men ändrar inte EV-policyn. **Fysisk EV-prioritering: NO-GO.** Se [aktuell kod-/driftgranskning och historiktest](ev-l3-code-drift-review-2026-11-04.md). Allt nedan med datum 2026-10-31 beskriver **historisk** drift, inte nuläge.
+
 **Status 2026-10-31 10:25 CET:** Den minimala EV-hooken är installerad,
 `mode=shadow` är aktiverat och root-watchdoggen kör var 15:e sekund.
 **Ingen fysisk EV-nätprioritering är aktiverad** (`mode=active` ej godkänt).

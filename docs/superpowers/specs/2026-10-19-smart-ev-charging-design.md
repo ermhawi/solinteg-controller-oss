@@ -4,6 +4,8 @@ Status: **Designspecifikation, revision 4, 2026-10-26**, med kompletteringar 202
 
 Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff46f056eb2a8823b9bf817955d8e`, ABL:s dokumenterade register, **separat godkända Modbus-läs- och skrivprov 2026-10-21** samt etapp-/L3-planen i `91c2802` (2026-10-24). Datum, råtelegram och bevisnivå skiljs åt i avsnitt 13. Fältproven gjordes före dokumentrevisionen; inga nya laddkommandon utförs här.
 
+**Aktuellt driftkomplement 2026-11-04:** Den äldre EV-prioritetens shadow-hook är återkallad och den installerade dispatchern saknar även Git-kodens `coordinate_l3_battery()`. Env-värdet `DISPATCH_L3_BATTERY_MODE=shadow` aktiverar därför ingen L3-batterisamordning. Read-only EV-observation finns kvar; automatisk EVCC-/Volvostyrning och fysisk EV-prioritet är inte driftsatta. Läs [verifierad kod–drift-jämförelse, 6 A-återspelning och aktiveringsgrindar](../../ev-l3-code-drift-review-2026-11-04.md). Följande 31 oktober-stycken är historiska.
+
 **Driftkomplettering 2026-10-31:** Den checksummebundna EV-prioriteringen
 är nu aktiverad **endast i shadow-läge** på Dell. Historiska
 `idle → Auto`-perioder har återspelats; en oberoende, read-only
