@@ -153,15 +153,33 @@ class GridPriceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "volvo.json"
             record = dict(source="home_assistant", connected=True,
+                          session_id="9b8fca5c-0e2d-4702-a877-a22451fd32a1",
+                          connection_epoch=5, physical_control_eligible=True,
+                          observation_time_semantics="verified_physical_sample",
+                          energy_requirement_quality="independent_ac_calibration",
+                          calibrated_at_utc=NOW.isoformat(),
+                          calibrated_ac_kwh_per_soc_pct=0.8, vehicle_soc_pct=79.5,
                           observed_at_utc=NOW.isoformat(),
                           departure_at_utc=DEPARTURE.isoformat(),
                           remaining_ac_kwh=0.4)
             path.write_text(json.dumps(record))
-            self.assertEqual(read_ev_session(str(path), now=NOW)["remaining_ac_kwh"], 0.4)
+            actual = read_ev_session(str(path), now=NOW)
+            self.assertEqual(actual["remaining_ac_kwh"], 0.4)
+            self.assertEqual(actual["connection_epoch"], 5)
             self.assertIsNone(read_ev_session(str(path), now=NOW + timedelta(minutes=21)))
-            record["source"] = "unverified"
-            path.write_text(json.dumps(record))
-            self.assertIsNone(read_ev_session(str(path), now=NOW))
+            for unsafe in [
+                {"source": "home_assistant_shadow"},
+                {"physical_control_eligible": False},
+                {"observation_time_semantics": "api_fetch_not_bms_sample"},
+                {"energy_requirement_quality": "assumed_ac_efficiency"},
+                {"calibrated_ac_kwh_per_soc_pct": 0.9},
+                {"connection_epoch": True},
+                {"session_id": "unknown"},
+                {"vehicle_soc_pct": 80},
+            ]:
+                with self.subTest(unsafe=unsafe):
+                    path.write_text(json.dumps({**record, **unsafe}))
+                    self.assertIsNone(read_ev_session(str(path), now=NOW))
             self.assertIsNone(read_ev_session(None, now=NOW))
 
     def test_deadline_prioritizes_80_even_when_price_is_very_high(self):
@@ -246,9 +264,15 @@ class GridPriceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "volvo.json"
             record = dict(source="home_assistant", connected=True,
+                          session_id="9b8fca5c-0e2d-4702-a877-a22451fd32a1",
+                          connection_epoch=5, physical_control_eligible=True,
+                          observation_time_semantics="verified_physical_sample",
+                          energy_requirement_quality="independent_ac_calibration",
+                          calibrated_at_utc=NOW.isoformat(),
+                          calibrated_ac_kwh_per_soc_pct=0.8,
                           observed_at_utc=NOW.isoformat(),
                           charge_mode="economy", target_soc_pct=80,
-                          vehicle_soc_pct=67, remaining_ac_kwh=10.0)
+                          vehicle_soc_pct=67, remaining_ac_kwh=10.4)
             path.write_text(json.dumps(record))
             s = read_ev_session(str(path), now=NOW)
             self.assertEqual(s["charge_mode"], "economy")

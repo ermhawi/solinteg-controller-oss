@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 
@@ -98,21 +99,37 @@ def read_ev_session(path: str | None, *, now: datetime) -> dict | None:
     try:
         with open(path, encoding="utf-8") as source:
             value = json.load(source)
+        if not isinstance(value, dict):
+            return None
         mode = value.get("charge_mode", "deadline")  # older sessions default to Smart
         if mode not in CHARGE_MODES:
             return None
+        # API fetch or OEM 'last changed' is NOT a physical BMS sample.
+        # AC-kWh-per-SoC-point must be independently calibrated; nominal
+        # 230 V times Ict2 and an assumed battery capacity cannot qualify.
+        if (value.get("physical_control_eligible") is not True
+                or value.get("observation_time_semantics") != "verified_physical_sample"
+                or value.get("energy_requirement_quality") != "independent_ac_calibration"):
+            return None
+        session_id = str(UUID(value["session_id"]))
+        connection_epoch = value["connection_epoch"]
+        if type(connection_epoch) is not int or connection_epoch < 0:
+            return None
         age = (now - _instant(value["observed_at_utc"])).total_seconds()
+        calibration_age = (now - _instant(value["calibrated_at_utc"])).total_seconds()
         remaining = _number(value["remaining_ac_kwh"])
         target = _number(value.get("target_soc_pct", 80))
+        actual_soc = _number(value["vehicle_soc_pct"])
+        ac_per_pct = _number(value["calibrated_ac_kwh_per_soc_pct"])
+        expected = max(0, target - actual_soc) * ac_per_pct
         if (value.get("connected") is not True or value.get("source") != "home_assistant"
                 or not 0 <= age <= MAX_SESSION_AGE_S
-                or not 0 <= remaining <= 100 or target != 80):
+                or not 0 <= calibration_age <= 90 * 24 * 3600
+                or not 0.4 <= ac_per_pct <= 1.5
+                or not 0 <= actual_soc <= 100
+                or not 0 <= remaining <= 100 or target != 80
+                or abs(remaining - expected) > 0.03):
             return None
-        raw_soc = value.get("vehicle_soc_pct")
-        if raw_soc is not None:
-            actual_soc = _number(raw_soc)
-            if not 0 <= actual_soc <= 100 or (actual_soc >= target and remaining > 0):
-                return None
         price_cap = value.get("max_buy_ore_per_kwh")
         if price_cap is not None:
             price_cap = _number(price_cap)
@@ -125,6 +142,7 @@ def read_ev_session(path: str | None, *, now: datetime) -> dict | None:
                 return None
         return dict(charge_mode=mode, departure_at_utc=departure,
                     remaining_ac_kwh=remaining, target_soc_pct=80,
+                    session_id=session_id, connection_epoch=connection_epoch,
                     max_buy_ore_per_kwh=price_cap)
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
         return None

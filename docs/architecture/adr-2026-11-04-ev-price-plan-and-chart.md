@@ -302,3 +302,106 @@ För tider utan mätbar EVCC-ström ligger rålasten kvar,
 vilket är avsiktligt konservativt. Nät-CT, råtelemetri
 samt visad huslast och separat bil är oförändrade.
 Se [lastprognosens ADR](adr-2026-11-04-weekday-ev-load-profile.md).
+
+## Offlineutveckling: EV-prissession och persistent pausägarskap 2026-11-04
+
+**Status: implementerat och Python-verifierat i Git `Sundsvall`, inte
+installerat, aktiverat eller fysiskt kvalificerat.** Dokumentationspreflight
+utgick från ren `3912b94`, en worktree, inga stashes/omergerade grenar och
+`origin/Sundsvall` synkroniserad. Aktuell driftskontroll: de befintliga
+`solinteg-broker-control`, `solinteg-dispatch`, `solinteg-poller`,
+`solinteg-web`, `solinteg-ev-ha`, `solinteg-ev-observer` och
+`solinteg-ev-history` var aktiva; EV-priskontrollerns service och timer
+var fortfarande `not-found`. EVCC rapporterade färsk `C2`, PWM
+konfig/pilot `100/100` och Ict2 cirka 6,1 A vid read-only-kontrollen.
+**Inga produktionsfiler, env-gates, tjänster eller enheter ändrades.**
+
+### Energiunderlag och sessionskontrakt
+
+- Den installerade Volvo/HA-läsaren använder
+  `oem_timestamp_role=last_changed_not_sampled`, och skriver endast
+  `physical_control_eligible=false` till den strikta sessionen.
+  Ett nytt HA-/Volvo-API-GET bevisar inte ett nytt BMS-prov.
+- Verklig **read-only** 72-timmarskontroll via
+  `ev_ac_quality_audit.audit()` gav 8,934851 kWh **delvis täckt,
+  nominellt uppskattad** AC-energi över 23 388,74 s och 8 628 synkade
+  historikrader. 779 relevanta Volvo-rader innehöll 11 rapporterade
+  SoC-nivåer med totalt 10 procentenheters uppgång. Rapporten är
+  `diagnostic_not_calibration`: varken kalibrerat AC/DC-förhållande,
+  användbar fysisk kWh eller nettolagrad BMS-energi kunde fastställas.
+  Dessa observationer får **inte** multipliceras upp till en godkänd
+  sessionsenergi eller medge fysisk EVCC-skrivning.
+- `read_ev_session()` för **verkställbar** session kräver nu en
+  oberoende `verified_physical_sample`, uttryckligen
+  `physical_control_eligible=true`,
+  `energy_requirement_quality=independent_ac_calibration`, en högst
+  20 minuter gammal faktisk mätnivå, en högst 90 dagar gammal
+  verifierad kWh-per-SoC-procentenhet-kalibrering, unik
+  `session_id` och heltalig `connection_epoch`. Kalkylen till exakt
+  80 % kontrolleras mot levererat `remaining_ac_kwh` och avvisar
+  motsägelser, avbrott och inaktuella värden. Enbart kapacitetsantagande
+  (t.ex. 81,608 kWh/90 %) eller `230 V × Ict2` kvalificerar inte.
+  Båda beslutade lägena `economy` och `deadline` bibehålls.
+- **Nästa datakvalificering:** instrumentera en *oberoende kalibrerad
+  AC-kWh-mätare* med tidsstämplad laddning/icke-laddning, samkör den med
+  EVCC C2/Ict2 och verkliga, källtidsstämplade Volvo/BMS-SoC-steg över
+  flera obrutna laddintervall. Härled och begränsa robust kWh per
+  SoC-procentenhet med mätosäkerhet; avvisa luckor, start/stop från
+  andra system, kabelbyten och äldre än angivna prov. En ny
+  verifierad källa måste ge `session_id` och `connection_epoch`
+  per fysisk inkoppling. Befintlig `ha_ev_session.once()` får
+  **inte** märka om API-uppdateringar till verifierad fysik.
+
+### Pausägarskap och manuell överordning
+
+`ev_price_pause_owner.py` inför ett persistent tillståndsprotokoll:
+`pending` före FC10 paus, `owned` först efter säker readback,
+`releasing` före återstart, `released` efter säker readback och
+`revoked` vid förlorad tillit. 0600-JSON skrivs med atomisk rename,
+fil-/katalog-fsync. Ett separat icke-blockerande exklusivt owner-lås
+skyddar parallella kontrollinstanser; EVCC-observatörens befintliga
+`evcc-reader.lock` skyddar FC03/FC10. Osäker skrivning, omstart
+i `pending` eller `releasing`, korrupt ägarfil, felaktig PWM,
+ändrat läge, ny session, kabelbyte, gammal telemetri eller utebliven
+källkontinuitet ger **ingen automatisk start och ingen blind retry**.
+
+**Absolut aktiveringsblockerare:** `read_manual_intent()` kräver en
+oberoende, förlustfri, färsk (högst 90 s) händelsekälla med explicit
+`manual_paused`, monoton `manual_generation`,
+`continuous_since_utc`, `session_id` och `connection_epoch`.
+Ett manuellt stopp eller ändrad generation återkallar ägandet
+permanent för den sessionen. Denna producent **finns inte ännu**
+och kan inte ersättas med EVCC:s PWM, Volvos
+`charging_status` eller en HA GET-tidpunkt: särskilt en paus i
+Volvo-appen *under en redan prispausad period* kan förbli osynlig.
+Den framtida producenten måste dokumentera att **samtliga** manuella
+start-/stoppvägar täcks, skydda sitt runtimebevis mot kontrollerns
+egna skrivningar (avsedd read-only-källa `/run/solinteg/ev-manual-intent.json`),
+samordna händelser med ägarlåset och kunna visa kontinuitet även över
+återstarter. Tills detta bevis är etablerat vägras såväl nya
+automatiska prispauser som återstart.
+
+### Offline-test, fysisk spärr och framtida GO
+
+- 75 riktade Python-tester och därefter hela Python-sviten med
+  **1 480 tester OK**. Falska/stale EVCC- och nätvärden,
+  förlorad session, ny inkoppling, återstart, ändrade laddlägen,
+  högt/lågt pris, manuell paus, okänd pausägare, extern PWM,
+  avbruten/oklar FC10, två kontrollinstanser och trasigt auditbevis
+  gav förväntade no-write-/revoke-fall. EVCC i dessa tester var
+  *mockad*, inte fysiskt kontaktad.
+- Vid separat framtida och **uttryckligen godkänd** aktivering får
+  en enda EVCC-skrivare via **FC10 register 0x0014** endast utföra
+  `raw=1000` (prispaus) eller `raw=100` (6 A återstart);
+  FC03 jämför före/efter. Det är **inte** nya kommandon till
+  Solintegs inverter, Modbus-broker eller husbatteri. Vid frånkoppling,
+  B2 utan belagt ägande, C2 utan tillräcklig faktisk ström,
+  mätfel och pris-/säkringsspärr blir åtgärden ingen skrivning.
+- Produktions-GO kräver separat verifiering av en äkta laddsession,
+  kWh-kalibrering, fullständig manuell interventionstäckning,
+  EVCC B2↔C2 och Ict2-fall/stigning, strömbudget/säkringsmarginal,
+  Volvo-appens egna smartladdschema, rollback, och sanningsenlig
+  journal över utförd FC10. **Ingen fysisk aktivering är godkänd**
+  av detta offlinearbete. Den aktiva Modbus-brokern, lastbalansering,
+  50 W EMS-begränsning, SoC-/fasvakter och ordinarie watchdog
+  är oförändrade. Kända risker i befintligt failure-scenario kvarstår.
