@@ -1,7 +1,8 @@
 # Releaseförberedelse: brokerägda hela styrtransaktioner (2026-11-04)
 
-**Status:** Implementation färdig för offlineverifiering; **INTE
-DRIFTSATT**. Befintlig Dell-produktion använder fortfarande
+**Status 2026-11-04:** Fullständig preprodverifiering, separerad
+root-skyddad rollbackbackup och isolerat återläsningsprov **GODKÄNDA**;
+**INTE DRIFTSATT**. Befintlig Dell-produktion använder fortfarande
 `SOLINTEG_MODBUS_SOURCE=broker` och brokern accepterar individuella
 FC03/FC06 från dispatcher. Denna release växlar till
 `broker_transaction`, där en worker utför hela registersekvensen.
@@ -183,3 +184,65 @@ Watchdog/BMS-/SoC-/stale-EMS-failure-scenariot förblir
 uttryckligen **utanför omfattningen**. Det är en känd
 brist i [normalbroker-ADR](architecture/adr-2026-11-04-broker-legacy-failure-scope.md)
 och blir inte löst av att registersekvenserna körs odelat.
+
+## 7. Genomförd preprodverifiering 2026-11-04 – **ingen aktivering**
+
+**Källbas:** `ea2b490242bfecb6529f1bb6cf164382218e0f9c`,
+`origin/Sundsvall`. Separata verifieringskommandon slutfördes
+med exitkod 0:
+
+| Grind | Resultat |
+| --- | --- |
+| Full Python-regression | **1 366 tester OK**, inga fel |
+| Frontend, ESLint och TypeScript | **705 tester OK, 1 överhoppat**, lint och typecheck OK |
+| Riktig pymodbus mot `127.0.0.1` | **Tre** smoke-tester OK: hela transaktioner, ordinarie kontroll och read-only |
+| Dokumentation och systemd | Zensical-build OK, `systemd-analyze verify` för basenheten **och båda sammansatta kandidatoverläggen** OK, `git diff --check` OK |
+| Aktuell driftbaslinje | Broker, poller, dispatcher, watchdog och observer aktiva; **en TCP:502-ägare**; färsk telemetri |
+
+**Förberedda, separat från aktiv produktion:**
+
+- Root-skyddad katalog
+  `/opt/solinteg/preprod-broker-transactions-ea2b490-20261104`
+  (endast root, `0700`) med **fem** bytekopierade originalmoduler,
+  dokumenterad frånvaro av den sjätte nya modulen, baslinjekopior av
+  fem systemd-enheter och två befintliga `20-broker-control.conf`.
+  Båda nya `30-transactions.conf` saknades i produktion och är
+  markerade som **frånvarande** i backupens metadata.
+- Kandidatpaket med **sex** Pythonmoduler och **två** separata opt-in
+  systemd-överlägg. `SHA256SUMS` verifierar kopiorna; de befintliga
+  originalfilerna och `20-...`-överläggen jämfördes byte för byte
+  mot den oförändrade produktionen.
+- **Återläsningsprov utan driftpåverkan:** originalen kopierades till
+  en *isolerad tillfällig katalog* och jämfördes med både backuper
+  och installerat innehåll. Även kandidaterna kontrollerades efter
+  kopiering. Den tillfälliga katalogen städades.
+- `preflight.sh` kontrollerar **endast läsande**: samtliga
+  hashvärden, att den gamla koden/konfigurationen fortfarande gäller,
+  exakt en brokerägd TCP:502-session, aktiva ordinarie enheter,
+  färsk telemetri och `healthy`-observer.
+  **Preflight: GODKÄND.**
+- `rollback.sh --check` verifierar artefakter utan sidoeffekter.
+  **Syntax, checksumma och torrkörning godkända**.
+  `rollback.sh --execute` är **avsiktligt inte körd**; verklig
+  återställning och all systemd-/Modbuspåverkan får först provas
+  efter separat beslutat produktionsfönster.
+- Den tidigare fulla brokerns rollback i
+  `/opt/solinteg/rollback-broker-20261104` bevaras. Den nya
+  preprodbackupen finns **lokalt på Dell**, inte på en separat
+  återställningsvärd; det är en release-/rollbackbackup, inte
+  en oberoende katastrofbackup.
+
+**Oförändrad drift:** Inga filer under aktiv
+`/opt/solinteg/app`, `/etc/systemd/system` eller
+`/run` har skrivits av denna preprodkontroll. Inga tjänster
+har stoppats/startats, ingen ny TCP:502-anslutning eller fysisk
+registerskrivning har genomförts. Den driftsatta dispatchern
+använder fortsatt `SOLINTEG_MODBUS_SOURCE=broker`,
+inte `broker_transaction`. Watchdoggen och de tidigare
+accepterade failure-brister har inte ändrats.
+
+**Återstår enbart för produktionsbeslutet:** separat
+godkänd cutover, faktisk naturlig transaktionsreadback och
+uppföljning 24–72 h. Backupens återläsning i en separat katalog
+är inte liktydig med testad fysisk systemd-rollback eller
+hårdvaruatomära writes.
