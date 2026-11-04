@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Opt-in single TCP owner for poller FC03 and legacy dispatcher FC03/FC06.
 
-No installed service is modified by importing this module. The original
-watchdog/recovery implementation is deliberately NOT migrated in this stage.
-See docs/plans/modbus-broker-2026-11-01.md for that known limitation.
+The existing Dell service remains in raw legacy IPC mode by default.
+Whole transactions require an explicit additional environment flag;
+no watchdog/recovery or systemd service is altered by importing this code.
+See docs/modbus-broker-transactions-release-2026-11-04.md.
 """
 from __future__ import annotations
 
@@ -79,11 +80,16 @@ def build_control_broker(environ, *, client_factory=None) -> Broker:
             or not 0 < span <= 60):
         raise ValueError("invalid broker timing or battery capacity")
 
+    transaction_opt_in = environ.get("SOLINTEG_BROKER_TRANSACTIONS_ENABLED", "0")
+    if transaction_opt_in not in ("0", "1"):
+        raise ValueError("broker transaction mode must be explicitly 0 or 1")
+
     return Broker(
         lambda: ControlModbusTransport(
             host, port=port, timeout=timeout, client_factory=client_factory,
         ),
         armed=True, runtime_mode="control",
+        transactions_enabled=transaction_opt_in == "1",
         battery_kwh=capacity, max_sample_s=span,
         charge_sign=environ["SOLINTEG_50207_SIGN"],
         rejection_sink=lambda event: log.warning(

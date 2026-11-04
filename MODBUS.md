@@ -4,6 +4,8 @@
 
 **2026-11-04:** [Gemensam serialiserad broker för pollerns FC03 och dispatcherns FC03/FC06](docs/modbus-broker-control-stage-2026-11-04.md) är **driftsatt på Dell sedan 2026-11-04 kl. 05:45 CET** med en normal TCP-session och bevarad gammal watchdog. [ADR](docs/architecture/adr-2026-11-04-broker-legacy-failure-scope.md): befintlig watchdog/failure-kod behålls; bristande absolut TCP-exklusivitet vid fel dokumenteras som känd brist. Kontrollbroker och read-only-broker är alternativa tjänster, aldrig samtidiga.
 
+**2026-11-04, next release (source only):** [Complete worker-owned charge/discharge/hold/Auto/import-limit transactions](docs/modbus-broker-transactions-release-2026-11-04.md) are implemented and tested but **NOT deployed**. Existing production still uses one TCP owner with individual dispatcher FC03/FC06 IPC calls. Whole transactions prevent *local poller interleaving*, not partial inverter writes on failure; the old watchdog is unchanged. [ADR](docs/architecture/adr-2026-11-04-broker-complete-transactions.md).
+
 Source-verified against `plugin_solinteg.py` @ commit `350266f`
 (wills106/homeassistant-solax-modbus), cross-checked with the official Solinteg
 Hybrid Inverter MODBUS Protocol PDF (MHT-25-50). 31/31 register addresses/encodings

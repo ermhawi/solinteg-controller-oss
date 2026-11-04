@@ -10,6 +10,8 @@ Rollback och originalhashar finns under den skyddade lokala
 `/opt/solinteg/rollback-broker-20261104`. Den gamla
 read-only-brokern förblir **inaktiv**.
 
+**Separat efterföljare i källkod 2026-11-04:** [Hela transaktioner i broker-worker](modbus-broker-transactions-release-2026-11-04.md) är implementerade/testade men **inte driftsatta**. Nuläget använder fortfarande separata FC03/FC06-IPC-anrop per register, och gamla watchdoggen är orörd.
+
 **Beslut:** Fokusera på en gemensam TCP-anslutning. Ingen ny
 nödfallback, förändrad watchdog, ändrat native EndSOC eller
 SoC-baserad supervisorkontroll införs i detta steg.

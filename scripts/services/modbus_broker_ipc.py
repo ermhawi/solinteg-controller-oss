@@ -1,9 +1,9 @@
 """Local Unix-domain socket IPC for Solinteg's injected Modbus broker.
 
-Phases 0-2 used in-memory fake transport. An opt-in READ-ONLY transport and
-service entry point are staged for a future cutover, NOT installed here.
-Roles are derived from peer OS credentials, NEVER from request JSON.
-A future control/safety migration needs distinct UIDs and host fencing.
+The normal control broker is deployed on Dell, with optional complete
+worker-owned control transactions staged separately. Roles come from kernel
+peer credentials + the service's cgroup, NEVER from request JSON.
+The existing watchdog/failure mode is intentionally unchanged.
 """
 from __future__ import annotations
 
@@ -48,16 +48,17 @@ class _Handler(socketserver.StreamRequestHandler):
             if not isinstance(message, dict):
                 raise ValueError("expected request object")
             if set(message) - {"operation", "request_id", "watts", "timeout_s",
-                               "address", "count", "value"}:
+                               "address", "count", "value", "min_soc_pct"}:
                 raise ValueError("unsupported IPC request field")
             response = self.server.broker.submit(
                 message.get("operation"), role=role, request_id=message.get("request_id"),
                 watts=message.get("watts"), address=message.get("address"),
                 count=message.get("count"), value=message.get("value"),
+                min_soc_pct=message.get("min_soc_pct"),
                 timeout_s=message.get("timeout_s", 30),
             )
             envelope = {"ok": True, "result": response}
-        except (ValueError, TypeError, PermissionError, RuntimeError, TimeoutError) as exc:
+        except Exception as exc:  # noqa: BLE001 - never drop an IPC reply on Modbus exceptions
             envelope = {"ok": False, "error": type(exc).__name__}
         self.wfile.write((json.dumps(envelope, separators=(",", ":")) + "\n").encode())
 

@@ -92,6 +92,16 @@ med kernelvald port, FC03, två FC06, och IPC-behörighetskontroll.
 Det körs inte automatiskt i stdlib-unittestupptäckten och öppnar aldrig
 anslutning till riktig växelriktare.
 
+`test_modbus_broker_transactions.py` tests the **not-yet-deployed** complete
+worker-owned operations: unchanged charge/discharge/hold/freeze/Auto/import
+sequencing and readback, 50 W fast path, protective 300 W recovery, no
+polling between writes, permissions and opt-in gate, request-id replay,
+timeout invalidating remaining writes, typed FreezeNotEnforced and
+independent RateLimiter lifecycle. `wire_smoke_transactions.py` is an
+explicit **real pymodbus** loopback 127.0.0.1 smoke with a *single*
+TCP session, charge/retarget/Auto and poller read, never real hardware.
+See [release runbook](../../docs/modbus-broker-transactions-release-2026-11-04.md).
+
 `wire_smoke_readonly.py` is an **explicit standalone real-pymodbus
 integration smoke** (not included in default unittest discovery).
 Run it only with an environment containing pymodbus>=3.13; it uses

@@ -1,9 +1,10 @@
 """Solinteg single-owner Modbus broker core, with injected transport.
 
 The broker itself imports no pymodbus and opens no TCP connections directly.
-A separate opt-in read-only service/transport exists for a FUTURE approved
-poller cutover; control migration and fenced watchdog are NOT installed.
-See docs/plans/modbus-broker-2026-11-01.md.
+Ordinary FC03/FC06 control runs on Dell; complete legacy control transactions
+are an additional opt-in source feature, not deployed by default.
+The old watchdog/failure mode is intentionally unchanged.
+See docs/modbus-broker-control-stage-2026-11-04.md.
 """
 from __future__ import annotations
 
@@ -28,6 +29,15 @@ RAW_READ = "read_registers"
 RAW_WRITE = "write_register"
 READS = {"status", "read_snapshot", RAW_READ}
 CONTROLS = {"charge", "discharge", "reserve_hold", "auto", RAW_WRITE}
+TRANSACTIONS = frozenset({
+    "transaction_charge", "transaction_discharge", "transaction_hold",
+    "transaction_auto", "transaction_freeze", "transaction_import_limit",
+    "transaction_clear_import_limit",
+})
+TRANSACTION_POWER = frozenset({
+    "transaction_charge", "transaction_discharge", "transaction_import_limit",
+})
+TRANSACTION_MIN_SOC = frozenset({"transaction_hold", "transaction_freeze"})
 SAFETY = {"safety_auto"}
 # Only the legacy Inverter interface needs these registers. No arbitrary FC06.
 CONTROL_READS = frozenset({
@@ -38,7 +48,7 @@ CONTROL_READS = frozenset({
 CONTROL_WRITES = frozenset({50000, 50007, 50009, 50207, 50208, 50209, 50210})
 ROLES = {
     "read": READS,
-    "control": READS | CONTROLS | {RAW_READ},
+    "control": READS | CONTROLS | TRANSACTIONS,
     "safety": READS | SAFETY,
 }
 WORK_MODE_NAMES = {
@@ -122,6 +132,7 @@ class Broker:
         charge_sign: str | None = None,
         rejection_sink: Callable[[dict], None] | None = None,
         runtime_mode: str = "offline",
+        transactions_enabled: bool = False,
     ):
         if not callable(transport_factory):
             raise TypeError("transport_factory required")
@@ -131,12 +142,16 @@ class Broker:
             armed or phase_guard is not None or allow_hold or charge_sign is not None
         ):
             raise PermissionError("read-only mode cannot be armed for control")
+        if transactions_enabled and (runtime_mode != "control" or not armed):
+            raise PermissionError("complete transactions require armed control runtime")
         if min_write_interval_s < 0 or max_sample_s <= 0 or battery_kwh <= 0:
             raise ValueError("invalid timing or battery capacity")
         if charge_sign not in (None, "neg_charge", "pos_charge"):
             raise ValueError("invalid confirmed 50207 polarity")
         self._factory = transport_factory
         self._runtime_mode = runtime_mode
+        self._transactions_enabled = bool(transactions_enabled)
+        self._transaction_worker = None
         self._transport = None
         self._armed = bool(armed)
         self._phase_guard = phase_guard
@@ -180,18 +195,22 @@ class Broker:
                 "offline_only": self._runtime_mode == "offline",
                 "read_only": self._runtime_mode == "readonly",
                 "control_runtime": self._runtime_mode == "control",
+                "transactions_enabled": self._transactions_enabled,
             }
 
     def submit(
         self, operation: str, *, role: str = "read",
         request_id: str | None = None, watts: int | None = None,
         address: int | None = None, count: int | None = None,
-        value: int | None = None, timeout_s: float = 30.0,
+        value: int | None = None, min_soc_pct: float | None = None,
+        timeout_s: float = 30.0,
     ) -> dict:
         if operation not in ROLES.get(role, frozenset()):
             raise PermissionError("operation is not authorized for peer role")
-        if self._runtime_mode == "control" and operation not in READS | {RAW_READ, RAW_WRITE}:
-            raise PermissionError("control runtime exposes legacy register IPC only")
+        if self._runtime_mode == "control":
+            allowed = READS | (TRANSACTIONS if self._transactions_enabled else {RAW_WRITE})
+            if operation not in allowed:
+                raise PermissionError("control runtime operation is not enabled")
         if type(timeout_s) not in (float, int) or not math.isfinite(timeout_s) or not 0 < timeout_s <= 120:
             raise ValueError("timeout_s must be finite and in (0, 120]")
         if operation == "status":
@@ -214,8 +233,21 @@ class Broker:
                 raise ValueError("raw register request does not accept watts")
         elif any(arg is not None for arg in (address, count, value)):
             raise ValueError("register fields only allowed for raw operations")
+        transaction = operation in TRANSACTIONS
+        if transaction:
+            if not self._transactions_enabled:
+                raise PermissionError("complete control transactions not enabled")
+            if operation in TRANSACTION_MIN_SOC:
+                if (type(min_soc_pct) not in (int, float)
+                        or not math.isfinite(min_soc_pct)
+                        or not 0 <= min_soc_pct <= 100):
+                    raise ValueError("transaction minimum SoC must be in 0..100")
+            elif min_soc_pct is not None:
+                raise ValueError("min_soc_pct only allowed for hold/freeze transactions")
+        elif min_soc_pct is not None:
+            raise ValueError("min_soc_pct only allowed for transactions")
 
-        control = operation in CONTROLS | SAFETY
+        control = operation in CONTROLS | SAFETY | TRANSACTIONS
         if control:
             if not isinstance(request_id, str) or not request_id or len(request_id) > MAX_REQUEST_ID:
                 raise ValueError("control request needs a nonempty bounded request_id")
@@ -226,10 +258,16 @@ class Broker:
         if operation in {"charge", "discharge", "reserve_hold"}:
             if type(watts) is not int or not 0 < watts <= 11000 or watts % 10:
                 raise ValueError("power must be 10..11000 W in steps of 10")
+        elif operation in TRANSACTION_POWER:
+            if (type(watts) is not int or watts < (1 if operation == "transaction_import_limit" else 0)
+                    or watts > 100_000):
+                raise ValueError("transaction power must be a bounded integer W")
         elif watts is not None:
             raise ValueError("watts only allowed for power actions")
         if raw:
             watts = (address, count if operation == RAW_READ else value)
+        elif transaction:
+            watts = (watts, min_soc_pct)
 
         with self._lock:
             if self._closed:
@@ -274,7 +312,7 @@ class Broker:
                     # return_to_auto on failure, so do not add a new persistent
                     # broker latch to that path in this migration.
                     self._generation += 1
-                    if operation != RAW_WRITE:
+                    if operation != RAW_WRITE and operation not in TRANSACTIONS:
                         self._safety_latched = True
             raise TimeoutError("broker request result unknown; control fenced") from exc
 
@@ -520,6 +558,14 @@ class Broker:
                     address, value = watts
                     self._write_raw(address, value, epoch)
                     result = {"status": "sent_unverified"}
+                elif operation in TRANSACTIONS:
+                    from modbus_broker_transactions import LegacyTransactionWorker
+                    if self._transaction_worker is None:
+                        self._transaction_worker = LegacyTransactionWorker(self)
+                    power, min_soc_pct = watts
+                    result = self._transaction_worker.execute(
+                        operation, power, min_soc_pct, epoch,
+                    )
                 else:
                     result = self._apply(operation, watts, epoch)
                 future.set_result(result)

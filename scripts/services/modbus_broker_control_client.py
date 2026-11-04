@@ -1,8 +1,9 @@
 """Optional ModbusTcpClient-compatible shim backed by the single-owner IPC broker.
 
-Used only when the dispatch service explicitly selects broker mode. The
-existing inverter_control force_*/return_to_auto algorithms and watchdog
-defaults remain unchanged. This object never creates an IP socket.
+Used only when the dispatch service explicitly selects a broker mode.
+The optional transaction_mode sends whole actions to the broker worker;
+the existing inverter_control algorithms execute there unchanged.
+The old watchdog remains unchanged. This object never creates an IP socket.
 """
 from __future__ import annotations
 
@@ -23,16 +24,20 @@ class _Reply:
 
 
 class BrokerModbusClient:
-    def __init__(self, socket_path: str = DEFAULT_SOCKET, *, ipc_client=None):
+    def __init__(self, socket_path: str = DEFAULT_SOCKET, *, ipc_client=None,
+                 transaction_mode: bool = False):
         if socket_path != DEFAULT_SOCKET and ipc_client is None:
             raise ValueError("unapproved broker socket path")
         self._ipc = ipc_client or BrokerIpcClient(Path(socket_path))
+        self.transaction_mode = transaction_mode
         self.connected = False
 
     def connect(self):
         info = self._ipc.request("status", timeout_s=5)
         if info.get("control_runtime") is not True or info.get("armed") is not True:
             raise PermissionError("broker is not armed for dispatcher control")
+        if self.transaction_mode and info.get("transactions_enabled") is not True:
+            raise PermissionError("broker does not support complete control transactions")
         self.connected = True
         return True
 
@@ -62,6 +67,17 @@ class BrokerModbusClient:
         if result.get("status") != "sent_unverified":
             raise RuntimeError("broker FC06 outcome is not acknowledged")
         return _Reply()
+
+    def run_transaction(self, action: str, *, watts: int | None = None,
+                        min_soc_pct: float | None = None) -> dict:
+        if not self.transaction_mode:
+            raise PermissionError("complete transactions require broker_transaction mode")
+        if not self.connected:
+            self.connect()
+        return self._ipc.request(
+            "transaction_" + action, watts=watts, min_soc_pct=min_soc_pct,
+            request_id=uuid.uuid4().hex, timeout_s=90,
+        )
 
     def close(self):
         self.connected = False

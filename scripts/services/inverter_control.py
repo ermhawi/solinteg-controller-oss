@@ -123,18 +123,22 @@ class RateLimiter:
 class Inverter:
     """Thin pymodbus wrapper: persistent connection, checked + verified writes."""
 
-    def __init__(self, host: str = HOST, port: int = PORT, unit: int = SLAVE_ID):
+    def __init__(self, host: str = HOST, port: int = PORT, unit: int = SLAVE_ID, *,
+                 client=None):
         self.unit = unit
         source = os.environ.get("SOLINTEG_MODBUS_SOURCE", "direct")
-        if source == "broker":
+        if client is not None:
+            # The broker worker injects its owned transport. No second TCP client.
+            self.client = client
+        elif source in ("broker", "broker_transaction"):
             from modbus_broker_control_client import BrokerModbusClient
-            self.client = BrokerModbusClient()
+            self.client = BrokerModbusClient(transaction_mode=source == "broker_transaction")
         elif source == "direct":
             if not host:
                 raise ValueError("SOLINTEG_HOST not set")
             self.client = ModbusTcpClient(host, port=port, timeout=5)
         else:
-            raise ValueError("SOLINTEG_MODBUS_SOURCE must be direct or broker")
+            raise ValueError("SOLINTEG_MODBUS_SOURCE must be direct, broker or broker_transaction")
         self._rl = RateLimiter()
 
     # — connection —
@@ -205,6 +209,28 @@ class Inverter:
 
 # ── Control sequences ──────────────────────────────────────────────────────────
 
+def _broker_transaction(inv: Inverter, action: str, *, watts: int | None = None,
+                        min_soc_pct: float | None = None) -> dict:
+    """Delegate the ENTIRE existing algorithm to the one broker worker.
+
+    The worker calls these same functions with an injected physical transport,
+    so it never loops back through IPC. Direct and legacy-broker modes are
+    unchanged; this helper is used only by explicit broker_transaction mode.
+    """
+    if not ARMED:
+        log.warning("DISARMED: skipping broker transaction %s", action)
+        return {"status": "disarmed"}
+    try:
+        result = inv.client.run_transaction(action, watts=watts, min_soc_pct=min_soc_pct)
+    except RuntimeError as exc:
+        if action == "freeze" and str(exc) == "broker IPC rejected request: FreezeNotEnforced":
+            raise FreezeNotEnforced("freeze not enforced by inverter (broker)") from exc
+        raise
+    if result.get("status") != "applied":
+        raise RuntimeError("broker transaction did not complete")
+    return result
+
+
 def _charge_sign() -> int:
     """+1 or -1 for the charge direction of reg 50207, per the confirmed probe."""
     if SIGN == "neg_charge":
@@ -264,6 +290,9 @@ def restore_ac_limits(inv: Inverter) -> None:
 def return_to_auto(inv: Inverter) -> None:
     """Hand dispatch back to the inverter's self-use logic. The fail-safe state."""
     global _forced_active
+    if getattr(inv.client, "transaction_mode", False):
+        _broker_transaction(inv, "auto")
+        return
     log.info("return_to_auto: working mode -> General (0x101)")
     # Gated on _forced_active for the same reason the exit/signal fail-safe below is: only a
     # forced EMS BattCtrl state this process established can have restricted caps, so the
@@ -315,6 +344,9 @@ def set_import_limit(inv: Inverter, watts: int) -> None:
     failure (value stored but not enforced) as the expected failure mode: it is what 50209=0
     turned out to do when written pre-mode.
     """
+    if getattr(inv.client, "transaction_mode", False):
+        _broker_transaction(inv, "import_limit", watts=watts)
+        return
     if not (0 < watts <= 100_000):
         raise ValueError(f"import limit {watts} W outside 1..100000")
     raw = int(round(watts / 100))  # 0.1 kW per LSB
@@ -332,6 +364,9 @@ def clear_import_limit(inv: Inverter) -> None:
     dispatch loop never calls it, because an import limit is a safety bound and should outlive any
     single run of the controller.
     """
+    if getattr(inv.client, "transaction_mode", False):
+        _broker_transaction(inv, "clear_import_limit")
+        return
     log.info("clear_import_limit: switch off (value register left as-is)")
     inv.write_u16(REG_IMPORT_LIMIT_ENABLE, 0)
 
@@ -398,6 +433,9 @@ def freeze_battery(inv: Inverter, min_soc_pct: float = SOC_FLOOR_PCT + 5.0) -> N
     slots — including on the abort paths.
     """
     global _forced_active
+    if getattr(inv.client, "transaction_mode", False):
+        _broker_transaction(inv, "freeze", min_soc_pct=min_soc_pct)
+        return
     if not ARMED:
         # Every other write path short-circuits inside write_u16, but this one polls for a mode
         # change that can never happen when the writes are no-ops — it would spend the confirmation
@@ -468,6 +506,9 @@ def _already_set_for(inv: "Inverter", priority: int) -> bool:
 
 def force_charge(inv: Inverter, power_w: int) -> None:
     global _forced_active
+    if getattr(inv.client, "transaction_mode", False):
+        _broker_transaction(inv, "charge", watts=power_w)
+        return
     sign = _charge_sign()
     power_w = clamp_power_w(power_w)
     if power_w == 0:
@@ -499,6 +540,9 @@ def force_charge(inv: Inverter, power_w: int) -> None:
 
 def force_discharge(inv: Inverter, power_w: int) -> None:
     global _forced_active
+    if getattr(inv.client, "transaction_mode", False):
+        _broker_transaction(inv, "discharge", watts=power_w)
+        return
     sign = _charge_sign()
     power_w = clamp_power_w(power_w)
     if power_w == 0:
@@ -546,6 +590,8 @@ def force_hold(inv: Inverter, min_soc_pct: float) -> bool:
     battery that low has little left worth holding anyway.
     """
     global _forced_active
+    if getattr(inv.client, "transaction_mode", False):
+        return bool(_broker_transaction(inv, "hold", min_soc_pct=min_soc_pct).get("held"))
     soc = inv.soc_pct()
     if soc < min_soc_pct:
         log.info("force_hold: SoC %.1f%% < hold minimum %.1f%% — returning to auto instead", soc, min_soc_pct)
