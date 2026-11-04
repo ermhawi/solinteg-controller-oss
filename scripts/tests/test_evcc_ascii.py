@@ -155,6 +155,43 @@ class DriverTests(unittest.TestCase):
                 client.set_limit_raw(RAW_PAUSE, expected_raw=166)
         self.assertEqual(dial.call_count, 3)
 
+    def test_scheduled_control_has_separate_owner_gate_from_manual_test(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_MANUAL_TEST": "1", "EVCC_PRICE_CONTROL_ARMED": "0",
+        }, clear=True), mock.patch("evcc_ascii.socket.create_connection") as dial:
+            with self.assertRaises(PermissionError):
+                client.set_limit_raw(RAW_PAUSE, expected_raw=100, scheduled=True)
+            with self.assertRaises(PermissionError):
+                client.set_limit_raw(RAW_PAUSE, expected_raw=100)
+            dial.assert_not_called()
+
+    def test_scheduled_pause_uses_single_cas_fc10_and_readback(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        responses = [
+            FakeSocket(config(100)), FakeSocket(live(100, current=60)),
+            FakeSocket(frame(bytes.fromhex("011000140001"), reply=True)),
+            FakeSocket(config(RAW_PAUSE)), FakeSocket(live(RAW_PAUSE, current=0, state=0xB2)),
+        ]
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1",
+        }, clear=True), mock.patch("evcc_ascii.socket.create_connection", side_effect=responses) as dial:
+            after = client.set_limit_raw(RAW_PAUSE, expected_raw=100, scheduled=True)
+        self.assertEqual(after.configured_raw, RAW_PAUSE)
+        self.assertEqual(dial.call_count, 5)
+
+    def test_scheduled_resume_requires_start_approval(self):
+        client = EvccAscii("example.invalid", scheduled_control=True)
+        with mock.patch.dict(os.environ, {
+            "EV_ENABLED": "1", "EVCC_CONTROL_ARMED": "1",
+            "EVCC_PRICE_CONTROL_ARMED": "1",
+        }, clear=True), mock.patch("evcc_ascii.socket.create_connection") as dial:
+            with self.assertRaises(PermissionError):
+                client.set_limit_raw(100, expected_raw=RAW_PAUSE, scheduled=True)
+            dial.assert_not_called()
+
     def test_current_round_down_and_limits(self):
         self.assertEqual(amps_to_raw(6), 100)
         self.assertEqual(amps_to_raw(10), 166)

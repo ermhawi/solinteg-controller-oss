@@ -2,6 +2,7 @@
 
 import { CHARGE_LABEL, interventionLabel, isBandDivergent, shouldShowSupplementalBatteryExport } from '@/lib/chart-utils';
 import type { ActionBand, BandActualSummary, ChartPoint } from '@/lib/chart-utils';
+import type { EvPriceWindow } from '@/lib/ev-price-windows';
 
 /**
  * The hover detail panel — plain HTML positioned over the SVG, not SVG itself, so it can use
@@ -47,6 +48,7 @@ export default function ChartTooltip({
   bandActual,
   placement,
   hasPlan,
+  evSlot = null,
   inline = false,
 }: {
   point: ChartPoint;
@@ -54,6 +56,7 @@ export default function ChartTooltip({
   bandActual: BandActualSummary | null;
   placement: TooltipPlacement;
   hasPlan: boolean;
+  evSlot?: EvPriceWindow | null;
   inline?: boolean;
 }) {
   // Resolves the hovered slot's decision to the one quantity block to show (see DECISION_ROWS).
@@ -114,6 +117,10 @@ export default function ChartTooltip({
 
       <TooltipRow color="var(--color-buy)" label={`Köp${point.priceSource === 'forecast' ? ' (prognos)' : ''}`} value={`${point.buy.toFixed(1)} öre/kWh`} />
       <TooltipRow color="var(--color-sell)" label={`Sälj${point.priceSource === 'forecast' ? ' (prognos)' : ''}`} value={`${point.sell.toFixed(1)} öre/kWh`} />
+      {evSlot && (
+        <TooltipRow color="var(--logo-color)" label="Bil · prisförslag"
+          value={evSlot.charging ? `Ladda 6 A (≈1,38 kW)${evSlot.forecast ? ' · prognos' : ''}` : 'Vänta'} />
+      )}
       <TooltipRow
         color="var(--color-solar)"
         label={point.solarSource === 'forecast' ? 'Sol (prognos)' : 'Sol (typisk)'}

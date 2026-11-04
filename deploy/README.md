@@ -1,5 +1,18 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**EV-billigprisförslag i Elpriser (2026-11-04):** Nytt separat lager
+`Bil · prisfönster` visar billigaste 15-minutersköpfönster, prognosrisk
+och beräknad 6 A-energi. **Endast visning, inte faktisk EVCC-laddplan.**
+Automatisk EVCC-priskontroller finns som opt-in-kod i
+`scripts/services/ev_price_controller.py` och inaktiva unitmallar
+`deploy/solinteg-ev-price-controller.{service,timer}`, men **ingen
+EVCC-skrivartjänst får installeras eller aktiveras** innan Volvo-sessionens
+användbara kapacitet, energibehov, BMS-tidsstämplar, lågpris-/pausprov,
+fasesäkring och ägarskap är verifierade. Aktuella HA-data är markerade
+`energy_estimate_unverified=true` och skapar ingen godkänd EV-session.
+Befintlig Modbus-broker, husbatterireglering och EVCC-observatör fortsätter
+som tidigare. Se [ADR och rollback](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
 EMS-urladdning med 1 100–1 300 W PV-laddning och uppmätt L3-import

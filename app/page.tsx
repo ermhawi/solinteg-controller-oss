@@ -20,7 +20,7 @@ import { fetchCurrentHourGhiForecast, fetchDailyMeanTemp } from '@/lib/forecast'
 import { buildActualSocByTime } from '@/lib/chart-utils';
 import { buildActualFlowsByTime } from '@/lib/actual-flows';
 import { summarize, stockholmDateOf } from '@/lib/economics';
-import { BATTERY_KWH, SKATT_OVERFÖRING, BATTERY_MIN_SOC_KWH } from '@/lib/constants';
+import { BATTERY_KWH, SKATT_OVERFÖRING, BATTERY_MIN_SOC_KWH, FORECAST_RISK_PREMIUM_ORE } from '@/lib/constants';
 import AppShell from '@/app/components/AppShell';
 import EarningsCard from '@/app/components/EarningsCard';
 import LiveInverterPanel from '@/app/components/LiveInverterPanel';
@@ -168,6 +168,7 @@ export default async function Home() {
             batteryKwh={BATTERY_KWH}
             skattOverforing={SKATT_OVERFÖRING}
             batteryFloorKwh={BATTERY_MIN_SOC_KWH}
+            evForecastRiskOre={FORECAST_RISK_PREMIUM_ORE}
           />
         ) : (
           <section className="card-surface box-border min-w-0 p-5 order-1 min-[700px]:col-span-2 min-[1600px]:order-none min-[1600px]:[grid-column:1/span_2] min-[1600px]:[grid-row:1]">

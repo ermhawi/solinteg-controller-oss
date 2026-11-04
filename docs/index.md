@@ -27,6 +27,7 @@
 - [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
 - [Aktuell EV/L3-status: dokumentation mot kod och drift, test och GO/NO-GO](ev-l3-code-drift-review-2026-11-04.md)
 - [Driftsatt: EV/L3 nätprioritet i live-dispatch, separat bil i Systemstatus och avvecklade shadow-tjänster](architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md)
+- [Bilens billiga prisfönster i Elpriser och separat, ännu ej aktiverad EVCC-priskontroller](architecture/adr-2026-11-04-ev-price-plan-and-chart.md)
 - [Historisk ADR: EVCC Ict2 som primär lastmätning och tidigare shadowmodell](architecture/adr-2026-11-04-evcc-ict2-metered-priority.md)
 - [Tillfälligt husbatteriprov 20–25 %](temporary-soc25-pilot-2026-10-31.md)
 - [Adaptivt 1,5 kW-prov till 25 %](temporary-soc25-adaptive-pilot-2026-10-31.md)

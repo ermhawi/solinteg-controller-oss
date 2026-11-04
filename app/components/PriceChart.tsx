@@ -16,6 +16,7 @@ import {
   sumActualForBand,
 } from '@/lib/chart-utils';
 import type { ActualSlotFlows } from '@/lib/actual-flows';
+import { buildEvPriceWindows } from '@/lib/ev-price-windows';
 import { useChartData } from './useChartData';
 import { buildFrame } from './price-chart/frame';
 import { useContainerWidth, useMobileViewport } from './useResponsiveLayout';
@@ -68,6 +69,7 @@ interface Props {
   batteryKwh: number;
   skattOverforing: number;
   batteryFloorKwh: number;
+  evForecastRiskOre: number; // server-resolved, shared with house optimizer
 }
 
 type Point = [number, number];
@@ -139,6 +141,7 @@ export default function PriceChart({
   batteryKwh,
   skattOverforing,
   batteryFloorKwh,
+  evForecastRiskOre,
 }: Props) {
   const {
     actionBands,
@@ -179,7 +182,7 @@ export default function PriceChart({
   const isMobile = useMobileViewport();
   const geo = useMemo(() => containerWidth != null && containerWidth < 800 ? buildChartGeometry(containerWidth, 270) : geometry, [containerWidth, geometry]);
 
-  const [layers, setLayers] = useState<ChartLayers>({ solar: true, soc: true, zones: true });
+  const [layers, setLayers] = useState<ChartLayers>({ solar: true, soc: true, zones: true, ev: true });
   const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null);
   const [rangePreset, setRangePreset] = useState<'now' | 'today' | 'tomorrow' | 'all' | 'custom'>('now');
   const count = chartData.length;
@@ -193,6 +196,14 @@ export default function PriceChart({
     return () => clearInterval(id);
   }, [chartData]);
 
+  const evPriceWindows = useMemo(
+    () => buildEvPriceWindows(chartData, nowTime, evForecastRiskOre),
+    [chartData, nowTime, evForecastRiskOre],
+  );
+  const evWindowsByTime = useMemo(
+    () => new Map(evPriceWindows.slots.map((slot) => [slot.time, slot])),
+    [evPriceWindows],
+  );
   const nowPoint = nowTime ? chartData.find((d) => d.time === nowTime) : undefined;
   const nowIndex = nowPoint ? timeIndex.get(nowPoint.time) : undefined;
   const tomorrowIndex = chartData.findIndex((point) => point.time.startsWith(data.tomorrow));
@@ -419,7 +430,15 @@ export default function PriceChart({
         )}
       </div>
 
-      <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasMixedPriceSources={hasMixedPriceSources} />
+      <ChartLegend layers={layers} setLayers={setLayers} hasPlan={hasPlan} hasMixedPriceSources={hasMixedPriceSources}
+        hasEvPreview={evPriceWindows.status === 'preview'} />
+      {nowTime && (
+        <p className="mb-2 text-[12px]" style={{ color: 'var(--text-muted)' }}>
+          {evPriceWindows.status === 'preview'
+            ? `Bil (prisförslag, inte aktiverad styrning): ${evPriceWindows.chargeSlots} billiga kvartar · upp till ${evPriceWindows.estimatedKwhAt6A.toFixed(1)} kWh vid 6 A. ${evPriceWindows.hasForecast ? 'Delvis prognos.' : ''}`
+            : `Bil: ${evPriceWindows.reason}`}
+        </p>
+      )}
       {forecastPlanIsAdvisory && (
         <p className="mb-2 text-[12px]" style={{ color: 'var(--text-muted)' }}>
           Tredygnsplanen är en prognos, inte en aktiv laddorder. Den fysiska styrningen följer separat plan med fastställda spotpriser.
@@ -539,6 +558,15 @@ export default function PriceChart({
 
           {layers.zones && <MinorChargeBands frame={frame} />}
           {layers.zones && <DecisionBands frame={frame} bands={actionBands} />}
+          {layers.ev && evPriceWindows.status === 'preview' && evPriceWindows.slots.filter((slot) => slot.charging).map((slot) => {
+            const i = timeIndex.get(slot.time);
+            if (i == null || i < viewStartIndex || i > viewEndIndex) return null;
+            return (
+              <rect key={`ev-${slot.time}`} x={xAt(i)} y={geo.baseY - 11}
+                width={frame.stepX} height={9} rx={2}
+                fill="var(--logo-color)" opacity={slot.forecast ? 0.45 : 0.85} />
+            );
+          })}
 
           <PriceAxis frame={frame} />
           {hasPlan && layers.soc && <SocAxis frame={frame} />}
@@ -708,6 +736,7 @@ export default function PriceChart({
             bandActual={hoverBandActual}
             placement={{ x: hover.x, y: hover.y, containerWidth: hover.containerWidth }}
             hasPlan={hasPlan}
+            evSlot={layers.ev ? evWindowsByTime.get(hoverPoint.time) ?? null : null}
           />
         )}
       </div>
@@ -715,7 +744,8 @@ export default function PriceChart({
       {isMobile && (hover && hoverPoint ? (
         <div className="mt-3" aria-live="polite">
           <ChartTooltip point={hoverPoint} band={hoverBand} bandActual={hoverBandActual}
-            placement={{ x: hover.x, y: hover.y, containerWidth: hover.containerWidth }} hasPlan={hasPlan} inline />
+            placement={{ x: hover.x, y: hover.y, containerWidth: hover.containerWidth }} hasPlan={hasPlan}
+            evSlot={layers.ev ? evWindowsByTime.get(hoverPoint.time) ?? null : null} inline />
         </div>
       ) : <p className="mt-2 text-[13px]" style={{ color: 'var(--text-muted)' }}>Tryck på grafen för pris och batteriplan per kvart.</p>)}
 

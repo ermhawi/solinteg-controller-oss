@@ -1,7 +1,8 @@
 """ABL eMH1 EVCC2 over Waveshare transparent Modbus ASCII (38400/8E1).
 
-FC03 is read-only. FC10 to register 0x0014 is deliberately manual-only and
-disabled unless three independent opt-ins are present; no automatic control.
+FC03 is read-only. FC10 to register 0x0014 is disabled by default.
+Manual field tests retain their original gates. The scheduled EV-price writer
+has separate opt-ins and must be the single EVCC writer when installed.
 The charger has NOT been proven to stop on communication loss.
 See docs/superpowers/specs/2026-10-19-smart-ev-charging-design.md.
 """
@@ -71,12 +72,14 @@ class EvccStatus:
 
 class EvccAscii:
     def __init__(self, host: str, port: int = 4196, address: int = 1,
-                 timeout_s: float = 2.5, *, manual_test: bool = False):
+                 timeout_s: float = 2.5, *, manual_test: bool = False,
+                 scheduled_control: bool = False):
         if not host or not (1 <= port <= 65535) or not (1 <= address <= 16):
             raise ValueError("explicit EVCC host, TCP port and valid device address required")
         self.host, self.port, self.address = host, port, address
         self.timeout_s = timeout_s
         self.manual_test = manual_test
+        self.scheduled_control = scheduled_control
 
     def _exchange(self, request: bytes, function: int) -> bytes:
         # One request per TCP connection: a delayed reply cannot acknowledge a
@@ -127,16 +130,20 @@ class EvccAscii:
             currents_a=amps,
         )
 
-    def set_limit_raw(self, raw: int, *, expected_raw: int) -> EvccStatus:
+    def set_limit_raw(self, raw: int, *, expected_raw: int,
+                      scheduled: bool = False) -> EvccStatus:
         """One physical FC10 attempt, readback afterward; never auto-retry."""
-        gates = (
-            self.manual_test,
-            os.environ.get("EV_ENABLED") == "1",
-            os.environ.get("EVCC_CONTROL_ARMED") == "1",
-            os.environ.get("EVCC_MANUAL_TEST") == "1",
+        common = (os.environ.get("EV_ENABLED") == "1",
+                  os.environ.get("EVCC_CONTROL_ARMED") == "1")
+        permitted = (
+            self.scheduled_control and not self.manual_test
+            and os.environ.get("EVCC_PRICE_CONTROL_ARMED") == "1"
+            if scheduled else
+            self.manual_test and not self.scheduled_control
+            and os.environ.get("EVCC_MANUAL_TEST") == "1"
         )
-        if not all(gates):
-            raise PermissionError("EVCC writing disabled: manual test and three opt-ins required")
+        if not all(common) or not permitted:
+            raise PermissionError("EVCC writing disabled: explicit owner and action opt-ins required")
         if raw != RAW_PAUSE and not (100 <= raw <= MAX_TEST_RAW):
             raise ValueError("current outside 6-16 A or pause sentinel")
         if not (0 <= expected_raw <= 0x0FFF):

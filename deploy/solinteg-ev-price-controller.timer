@@ -1,0 +1,11 @@
+[Unit]
+Description=Evaluate verified EVCC price schedule every minute
+
+[Timer]
+OnCalendar=*:0/1
+AccuracySec=5s
+Persistent=false
+Unit=solinteg-ev-price-controller.service
+
+[Install]
+WantedBy=timers.target
