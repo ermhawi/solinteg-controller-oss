@@ -254,6 +254,38 @@ describe('optimizeDispatch', () => {
     expect(result[0].action).not.toBe('charge'); // skips the priciest hour (80)
   });
 
+  it('prices the grid-charge contingency separately from physical efficiency and leaves profitable shifts', () => {
+    const slots = [
+      makeSlot(1, 0, { buyPrice: 100, sellPrice: 0 }),
+      makeSlot(1, 1, { buyPrice: 140, sellPrice: 0, consumptionKwh: 1 }),
+    ];
+    const plain = optimizeDispatch(slots, MIN_SOC);
+    const unchanged = optimizeDispatch(slots, MIN_SOC, { gridChargeMarginOrePerKwh: 0 });
+    const cautious = optimizeDispatch(slots, MIN_SOC, { gridChargeMarginOrePerKwh: 40 });
+    expect(unchanged).toEqual(plain);
+    expect(plain[0].gridToBatteryKwh).toBeGreaterThan(0.5);
+    expect(cautious[0].gridToBatteryKwh).toBeLessThan(0.15);
+
+    // The ordinary 50-öre risk-sacrifice guard cannot reinstate an unprofitable grid buy.
+    const withRiskGuard = optimizeDispatch(slots, MIN_SOC, {
+      gridChargeMarginOrePerKwh: 40,
+      forecastRiskPremiumOre: 10,
+      maxRiskSacrificeOre: 0,
+    });
+    expect(withRiskGuard[0].gridToBatteryKwh).toBeLessThan(0.15);
+
+    const expensiveLater = [slots[0], { ...slots[1], buyPrice: 200 }];
+    const profitable = optimizeDispatch(expensiveLater, MIN_SOC, { gridChargeMarginOrePerKwh: 40 });
+    expect(profitable[0].gridToBatteryKwh).toBeGreaterThan(0.5);
+  });
+
+  it('does not charge an economic grid margin on automatically captured solar', () => {
+    const slots = [makeSlot(12, 0, { buyPrice: 200, sellPrice: 10, solarKwh: 1 })];
+    const result = optimizeDispatch(slots, MIN_SOC, { gridChargeMarginOrePerKwh: 200 });
+    expect(result[0].socAfter).toBeGreaterThan(MIN_SOC);
+    expect(result[0].gridToBatteryKwh).toBeLessThan(0.15);
+  });
+
   // ── Order & quantity awareness (the bug this replaced the greedy for) ──────
   it('reserves energy to cover a dearer future load rather than selling it cheaply now', () => {
     // ~2 kWh usable. Could sell at 130 now, but slot 1 needs 2 kWh at buy 300. Selling now then

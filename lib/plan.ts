@@ -30,6 +30,7 @@ import {
   FORECAST_RISK_PREMIUM_ORE,
   SOLAR_FORECAST_MODEL,
   BATTERY_SAVE_FORECAST_DRAIN_W,
+  GRID_CHARGE_MARGIN_ORE,
   BATTERY_MIN_SOC_KWH,
   BATTERY_PLANNER_RESERVE_KWH,
   TERMINAL_VALUE_FACTOR,
@@ -270,6 +271,7 @@ export async function producePlan(): Promise<PlanResult> {
           process.env.SOLINTEG_CONTROL_ARMED !== '1',
         forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
         batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+        gridChargeMarginOrePerKwh: GRID_CHARGE_MARGIN_ORE,
         batterySaveRecoveryEntryKwh: BATTERY_MIN_SOC_KWH +
           (Number.isFinite(recoveryHeadroom) && recoveryHeadroom >= 0 ? recoveryHeadroom : 0.5),
         minSocKwh: BATTERY_PLANNER_RESERVE_KWH,

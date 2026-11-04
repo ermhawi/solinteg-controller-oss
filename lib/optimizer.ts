@@ -410,6 +410,9 @@ export function optimizeDispatch(
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    /** Economic contingency in öre per GRID kWh charged into the battery, distinct from
+     *  modeled conversion efficiency and real cash/wear; defaults to zero. */
+    gridChargeMarginOrePerKwh?: number;
     /** Physical recovery entry for unavoidable EMS standby drain below the economic reserve. */
     batterySaveRecoveryEntryKwh?: number;
     /** Site-specific economic reserve. Never lowers the physical safety minimum. */
@@ -444,8 +447,16 @@ export function optimizeDispatch(
   };
   const score = (d: DispatchSlot[]) =>
     evaluateDispatch(slots, d, startSoc, pricing).valueOre +
-      refundEarnedOre(d, credit, Math.max(BATTERY_MIN_SOC_KWH, opts?.minSocKwh ?? BATTERY_MIN_SOC_KWH));
+      refundEarnedOre(d, credit, Math.max(BATTERY_MIN_SOC_KWH, opts?.minSocKwh ?? BATTERY_MIN_SOC_KWH)) -
+      gridChargeMarginOre(d, opts?.gridChargeMarginOrePerKwh);
   return score(credited) > score(plain) + 1e-6 ? credited : plain;
+}
+
+/** Planning-only contingency against unmodelled grid-charge losses. Do not include it in
+ *  evaluateDispatch cash/wear, which must continue to report real modelled economics. */
+function gridChargeMarginOre(dispatch: DispatchSlot[], rate: number | undefined): number {
+  if (rate === undefined || !Number.isFinite(rate) || rate <= 0) return 0;
+  return dispatch.reduce((sum, slot) => sum + Math.max(0, slot.gridToBatteryKwh) * rate, 0);
 }
 
 /** Conservative grid-origin tracking for *potential* energy-tax refunds.
@@ -508,7 +519,9 @@ function planWithRiskGuard(
     };
     const sacrifice =
       evaluateDispatch(slots, fearless, startSoc, pricing).valueOre -
-      evaluateDispatch(slots, cautious, startSoc, pricing).valueOre;
+      gridChargeMarginOre(fearless, opts?.gridChargeMarginOrePerKwh) -
+      evaluateDispatch(slots, cautious, startSoc, pricing).valueOre +
+      gridChargeMarginOre(cautious, opts?.gridChargeMarginOrePerKwh);
     return sacrifice <= cap ? cautious : fearless;
   }
   return dpCore(slots, startSoc, opts);
@@ -529,6 +542,7 @@ function dpCore(
     solarRiskLookaheadHours?: number;
     forecastRiskPremiumOre?: number;
     batterySaveDriftW?: number;
+    gridChargeMarginOrePerKwh?: number;
     batterySaveRecoveryEntryKwh?: number;
     minSocKwh?: number;
     terminalValueOrePerKwh?: number;
@@ -600,6 +614,8 @@ function dpCore(
   const deferralRate = opts?.deferralRateOrePerKwhHour ?? 0;
   const deferralHorizonH = opts?.deferralHorizonHours ?? DEFERRAL_HORIZON_HOURS;
   const solarRiskPremiumOre = opts?.solarRiskPremiumOre ?? 0;
+  const chargeMargin = Number.isFinite(opts?.gridChargeMarginOrePerKwh)
+    ? Math.max(0, opts?.gridChargeMarginOrePerKwh ?? 0) : 0;
   const deferOre = new Float64Array(n);
   // Forecast solar strictly AFTER slot i, but only within the lookahead window — not the whole
   // horizon. Over the entire (now up to 3-day) horizon the ratio below saturates its own min(1, …)
@@ -798,7 +814,7 @@ function dpCore(
                   hoursUntilNeeded(i, Math.max(0, soc - MIN_SOC_KWH)),
                 )
               : deferOre[i];
-          riskOre = gridToBattery * (buyDeferOre + forecastOre) + premiumKwh * solarRiskOre;
+          riskOre = gridToBattery * (buyDeferOre + forecastOre + chargeMargin) + premiumKwh * solarRiskOre;
         } else {
           const out = -dE * ONE_WAY_EFF;
           const toLoad = out < lr ? out : lr;

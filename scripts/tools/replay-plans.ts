@@ -30,6 +30,11 @@
 // Usage:
 //   TELEMETRY_DB_PATH=/path/to/telemetry.db npx tsx scripts/tools/replay-plans.ts [--days 30]
 //     [--per-day]
+//     [--economic] [--stress-grid-loss-ore 20]
+// --economic: site-faithful 24 h prefixes, comparing 0/10/20/30/40 öre extra grid-charge
+// contingency using settled prices. --stress-grid-loss-ore charges an INDEPENDENT,
+// explicitly hypothetical loss cost to each candidate's grid input when scoring; it does
+// not modify any planner's optimization input or report measured counterfactual savings.
 import { DatabaseSync } from 'node:sqlite';
 import { optimizeDispatch, evaluateDispatch, terminalEnergyValueOre } from '../../lib/optimizer';
 import type { OptimizerSlot } from '../../lib/optimizer';
@@ -43,19 +48,31 @@ import {
   SOLAR_RISK_PREMIUM_ORE_PER_KWH,
   FORECAST_RISK_PREMIUM_ORE,
   TERMINAL_VALUE_FACTOR,
+  SOLAR_RISK_SURVIVAL,
+  DEFERRAL_UNTIL_NEEDED,
+  BATTERY_SAVE_FORECAST_DRAIN_W,
+  BATTERY_MIN_SOC_KWH,
+  BATTERY_PLANNER_RESERVE_KWH,
+  SKATT_OVERFÖRING,
 } from '../../lib/constants';
 
 const DB_PATH = process.env.TELEMETRY_DB_PATH ?? '/opt/solinteg/telemetry.db';
 const args = process.argv.slice(2);
 const days = Number(args[args.indexOf('--days') + 1]) || 30;
 const perDay = args.includes('--per-day');
+const economic = args.includes('--economic');
+const stressAt = args.indexOf('--stress-grid-loss-ore');
+const stressGridLossOre = stressAt >= 0 ? Number(args[stressAt + 1]) : 0;
+if (!Number.isFinite(stressGridLossOre) || stressGridLossOre < 0) {
+  throw new Error('--stress-grid-loss-ore must be a nonnegative number');
+}
 
 type Candidate = { name: string; opts: Parameters<typeof optimizeDispatch>[2] };
 
 /** Production settings, then one-knob-at-a-time variants. Each row answers "what does THIS knob
  *  buy or cost?", which is the only comparison a reader can act on — a grid search over all of
  *  them at once produces a winner nobody can explain or defend. */
-const CANDIDATES: Candidate[] = [
+const NORMAL_CANDIDATES: Candidate[] = [
   { name: 'production', opts: {
     loadFactor: LOAD_FORECAST_MARGIN,
     deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
@@ -90,6 +107,26 @@ const CANDIDATES: Candidate[] = [
   } },
 ];
 
+const recoveryHeadroom = Number(process.env.DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH ?? '0.5');
+const siteOptions: Candidate['opts'] = {
+  loadFactor: LOAD_FORECAST_MARGIN,
+  deferralRateOrePerKwhHour: DEFERRAL_RATE_ORE_PER_KWH_HOUR,
+  deferralHorizonHours: DEFERRAL_HORIZON_HOURS,
+  solarRiskPremiumOre: SOLAR_RISK_PREMIUM_ORE_PER_KWH,
+  solarRiskSurvival: SOLAR_RISK_SURVIVAL,
+  deferralUntilNeeded: DEFERRAL_UNTIL_NEEDED,
+  forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
+  batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+  batterySaveRecoveryEntryKwh: BATTERY_MIN_SOC_KWH +
+    (Number.isFinite(recoveryHeadroom) && recoveryHeadroom >= 0 ? recoveryHeadroom : 0.5),
+  minSocKwh: BATTERY_PLANNER_RESERVE_KWH,
+};
+const CANDIDATES: Candidate[] = economic
+  ? [0, 10, 20, 30, 40].map((margin) => ({
+      name: `grid margin ${margin}`, opts: { ...siteOptions, gridChargeMarginOrePerKwh: margin },
+    }))
+  : NORMAL_CANDIDATES;
+
 let db: DatabaseSync;
 try {
   db = new DatabaseSync(DB_PATH, { readOnly: true });
@@ -116,6 +153,25 @@ if (runs.length === 0) {
   process.exit(1);
 }
 
+// Economic replay uses SETTLED price slots for scoring, not the forecast the
+// plan saw. Forecast-price uncertainty belongs only in the planner input.
+const settledPrices = new Map<string, { buyPrice: number; sellPrice: number }>();
+if (economic) {
+  const snapshots = db.prepare('SELECT prices_json FROM price_snapshots WHERE date >= ? ORDER BY logged_at')
+    .all(since.slice(0, 10)) as { prices_json: string }[];
+  for (const snapshot of snapshots) {
+    const prices = JSON.parse(snapshot.prices_json) as {
+      startTime: string; source: string; priceIncludingTaxAndSurcharge: number; price: number;
+    }[];
+    for (const slot of prices) if (slot.source === 'actual') {
+      settledPrices.set(slot.startTime, {
+        buyPrice: slot.priceIncludingTaxAndSurcharge + SKATT_OVERFÖRING,
+        sellPrice: slot.price,
+      });
+    }
+  }
+}
+
 // One plan per day: the LAST of the day, which had the most information and is the one whose
 // choices the evening actually followed. Scoring every replan would weight busy days more heavily
 // for no reason — they are re-solving the same day, not making independent decisions.
@@ -132,13 +188,14 @@ function readingsFor(startIso: string, endIso: string): OracleReadingRow[] {
     .all(startIso, endIso) as unknown as OracleReadingRow[];
 }
 
-type Totals = { valueOre: number; gridToBatteryKwh: number; endSocKwh: number; days: number };
+type Totals = { valueOre: number; gridToBatteryKwh: number; endSocKwh: number; days: number; minSocKwh: number };
 const totals = new Map<string, Totals>(
-  CANDIDATES.map((c) => [c.name, { valueOre: 0, gridToBatteryKwh: 0, endSocKwh: 0, days: 0 }]),
+  CANDIDATES.map((c) => [c.name, { valueOre: 0, gridToBatteryKwh: 0, endSocKwh: 0, days: 0, minSocKwh: Infinity }]),
 );
 
 let scoredDays = 0;
 let skippedThinCoverage = 0;
+let skippedMissingPrices = 0;
 
 for (const [date, run] of [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
   const inputs = JSON.parse(run.inputs_json) as OptimizerSlot[];
@@ -151,10 +208,15 @@ for (const [date, run] of [...byDate.entries()].sort((a, b) => a[0].localeCompar
   const midnight = stockholmMidnightUtc(y, m - 1, d).getTime();
   const minutes = Number(firstLocal.slice(11, 13)) * 60 + Number(firstLocal.slice(14, 16));
   const windowStartMs = midnight + minutes * 60_000;
-  const windowEndMs = windowStartMs + inputs.length * 900_000;
+  const scoreSlots = economic ? Math.min(96, inputs.length) : inputs.length;
+  const windowEndMs = windowStartMs + scoreSlots * 900_000;
+  if (economic && inputs.slice(0, scoreSlots).some((slot) => !settledPrices.has(slot.startTime))) {
+    skippedMissingPrices++;
+    continue;
+  }
 
   const readings = readingsFor(new Date(windowStartMs).toISOString(), new Date(windowEndMs).toISOString());
-  const actuals = bucketActuals(readings, windowStartMs, inputs.length);
+  const actuals = bucketActuals(readings, windowStartMs, scoreSlots);
   // A day the poller mostly missed cannot score anything: the "actual" it would be measured
   // against is interpolation. Better to drop it loudly than to average it in quietly.
   if (actuals.coverage < 0.9) {
@@ -164,8 +226,9 @@ for (const [date, run] of [...byDate.entries()].sort((a, b) => a[0].localeCompar
 
   // What really happened, priced with the DP's own arithmetic. The forecast in inputs_json is what
   // the plan SAW; this is what it should have been judged against.
-  const actualSlots: OptimizerSlot[] = inputs.map((slot, i) => ({
+  const actualSlots: OptimizerSlot[] = inputs.slice(0, scoreSlots).map((slot, i) => ({
     ...slot,
+    ...(economic ? settledPrices.get(slot.startTime) : {}),
     solarKwh: actuals.solarKwh[i],
     consumptionKwh: actuals.loadKwh[i],
     consumptionReserveKwh: undefined, // a reserve is a planning input, never part of the truth
@@ -178,15 +241,22 @@ for (const [date, run] of [...byDate.entries()].sort((a, b) => a[0].localeCompar
       ...candidate.opts,
       terminalValueOrePerKwh,
     });
-    // Scored WITHOUT the load margin and WITHOUT a terminal credit: against actuals there is no
-    // forecast to hedge and no future to value — only the cash the day really produced.
-    const econ = evaluateDispatch(actualSlots, dispatch, run.start_soc_kwh);
+    // Default replay retains its old full-horizon cash+wear score. Site-economic
+    // replay takes only the NEXT 24 h to avoid overlapping forecast-day costs.
+    // Give each end-of-day SoC the SAME continuation credit so that ending empty
+    // is not a free benefit; stress loss is scored independently of the chosen margin.
+    const scored = dispatch.slice(0, scoreSlots);
+    const econ = evaluateDispatch(actualSlots, scored, run.start_soc_kwh,
+      economic ? { terminalValueOrePerKwh, minSocKwh: BATTERY_PLANNER_RESERVE_KWH } : undefined);
+    const gridToBattery = scored.reduce((sum, s) => sum + s.gridToBatteryKwh, 0);
+    const valueOre = econ.valueOre - (economic ? stressGridLossOre * gridToBattery : 0);
     const t = totals.get(candidate.name)!;
-    t.valueOre += econ.valueOre;
-    t.gridToBatteryKwh += dispatch.reduce((sum, s) => sum + s.gridToBatteryKwh, 0);
-    t.endSocKwh += dispatch[dispatch.length - 1].socAfter;
+    t.valueOre += valueOre;
+    t.gridToBatteryKwh += gridToBattery;
+    t.endSocKwh += scored[scored.length - 1].socAfter;
+    t.minSocKwh = Math.min(t.minSocKwh, ...scored.map((slot) => slot.socAfter));
     t.days++;
-    row.push((econ.valueOre / 100).toFixed(2));
+    row.push((valueOre / 100).toFixed(2));
   }
   scoredDays++;
   if (perDay) console.log(row.join('\t'));
@@ -203,12 +273,19 @@ console.log(`\nReplayed ${scoredDays} day(s) of logged plans against measured so
 if (skippedThinCoverage > 0) {
   console.log(`${skippedThinCoverage} day(s) skipped for reading coverage below 90%.`);
 }
-console.log('Plans are built from the FORECAST the plan saw; scores are against what HAPPENED.\n');
+if (skippedMissingPrices > 0) {
+  console.log(`${skippedMissingPrices} day(s) skipped for incomplete settled price evidence.`);
+}
+console.log(economic
+  ? `Site-model next-24h counterfactuals (NOT executed), with settled prices, ` +
+    `same terminal credit, hypothetical extra loss ${stressGridLossOre} öre/kWh.\n`
+  : 'Plans are built from the FORECAST the plan saw; scores are against what HAPPENED.\n');
 
-const baseline = totals.get('production')!;
+const baselineName = CANDIDATES[0].name;
+const baseline = totals.get(baselineName)!;
 console.log(
-  `${'candidate'.padEnd(22)}${'value (kr)'.padStart(12)}${'vs production'.padStart(15)}` +
-    `${'kr/day'.padStart(10)}${'grid->batt'.padStart(12)}${'mean endSoC'.padStart(13)}`,
+  `${'candidate'.padEnd(22)}${'value (kr)'.padStart(12)}${('vs ' + baselineName).padStart(19)}` +
+    `${'kr/day'.padStart(10)}${'grid->batt'.padStart(12)}${'mean endSoC'.padStart(13)}${'min SoC'.padStart(11)}`,
 );
 console.log('─'.repeat(84));
 for (const candidate of CANDIDATES) {
@@ -217,15 +294,19 @@ for (const candidate of CANDIDATES) {
   console.log(
     candidate.name.padEnd(22) +
       (t.valueOre / 100).toFixed(2).padStart(12) +
-      (candidate.name === 'production' ? '—' : (delta >= 0 ? '+' : '') + delta.toFixed(2)).padStart(15) +
+      (candidate.name === baselineName ? '—' : (delta >= 0 ? '+' : '') + delta.toFixed(2)).padStart(19) +
       (t.valueOre / 100 / t.days).toFixed(2).padStart(10) +
       t.gridToBatteryKwh.toFixed(1).padStart(12) +
-      (t.endSocKwh / t.days).toFixed(2).padStart(13),
+      (t.endSocKwh / t.days).toFixed(2).padStart(13) +
+      t.minSocKwh.toFixed(2).padStart(11),
   );
 }
 
-console.log(
-  '\nA POSITIVE "vs production" means that variant would have earned more over these days — i.e.\n' +
+console.log(economic
+  ? '\nPositive deltas favor a margin under these *modelled* trajectories. Replay does NOT ' +
+    'reproduce physical inverter execution, standby, SoC errors or marginal PV generation. ' +
+    'Do not deploy from this score alone.'
+  : '\nA POSITIVE "vs production" means that variant would have earned more over these days — i.e.\n' +
     'the knob it removes cost money on the days we saw. Before acting on one: check the sign is\n' +
     'consistent across days (--per-day), that the window covers the season you care about, and\n' +
     'remember this scores PLANS, not execution — pair it with guard-rates.py.',

@@ -69,6 +69,20 @@ billig-timmesladdning och verifierat solöverskott behåller företräde.
 Effektbörvärde är inte garanti för exakt uppmätt batteri-W.
 Se [ADR](../docs/architecture/adr-2026-11-02-economic-reserve-recovery.md).
 
+**Ekonomiskt grid-charge-filter (2026-11-04, källkod/offline):**
+`SOLINTEG_GRID_CHARGE_MARGIN_ORE` lägger en separat, valbar marginal
+(öre per nät-kWh till batteriet) ovanpå pris, modellförlust och slitage.
+Standard **0** betyder oförändrad styrning. Den påverkar inte gratis
+solupptagning, hårdvaru-SoC, säkerhetsåterhämtning eller EVCC.
+`lib/plan.ts` läser värdet i webbprocessen; ändring kräver verifierat
+webbbygge med korrekt site-env, inte enbart dispatcheromstart.
+`jiti scripts/tools/replay-plans.ts --days 9 --economic --stress-grid-loss-ore 20`
+är en simulerad återspelning, **inte** driftbevis eller fakturaavstämning.
+Ingen marginal får aktiveras baserat enbart på detta utan kontrollerad
+release/rollback och uppföljning mot verklig nettoekonomi.
+Nya [Modbus-svarsförväxlingar 2026-11-04](../docs/solinteg-modbus-overnight-2026-11-04.md)
+är dessutom en driftblockerare för en ny fysisk release.
+
 This guide is written against the reference deployment's own hardware/network — any small
 dedicated Linux box with two NICs (or one NIC + a USB adapter) works the same way; substitute
 your own IPs/hostnames/device names throughout.

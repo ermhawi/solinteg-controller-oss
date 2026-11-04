@@ -137,6 +137,11 @@ export const BATTERY_SAVE_DRIFT_W = numEnv(
 /** Observed physical discharge during battery-save/auto operation; distinct from the inverter setpoint. */
 export const BATTERY_SAVE_FORECAST_DRAIN_W = numEnv('SOLINTEG_BATTERY_SAVE_FORECAST_DRAIN_W', 220);
 
+/** Additional economic reserve (öre per grid kWh charged into the battery), not an inverter loss
+ * or a physical efficiency correction. Default OFF until site replay and measured cost validate it.
+ * Applies only to grid-funded charging; never taxes free PV uptake or existing stored energy. */
+export const GRID_CHARGE_MARGIN_ORE = Math.max(0, numEnv('SOLINTEG_GRID_CHARGE_MARGIN_ORE', 0));
+
 const SOC_FLOOR_PCT = numEnv('SOLINTEG_SOC_FLOOR_PCT', 8);
 // Physical/BMS protection floor. Do not raise this to create a planning reserve.
 export const BATTERY_MIN_SOC_KWH = BATTERY_KWH * (SOC_FLOOR_PCT / 100);

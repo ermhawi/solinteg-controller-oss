@@ -78,7 +78,7 @@ and one refit, all of them gated on data that does not exist yet:
 |---|---|---|
 | ~~`DISPATCH_IMPORT_LIMIT_W` unset~~ | ✅ **closed 2026-09-11** — probed in both write orders, enforced, set to 10500 W and verified live | done |
 | ~~`DISPATCH_FREEZE_HOLDS=0`~~ | ✅ **closed 2026-09-11** — probed at night: the documented freeze is not implemented on this firmware (it imports and charges instead of holding). Stays off; the emulation remains the hold. | done |
-| `INVERTER_CONV_EFF = 0.97` is a datasheet class, not this unit | needs night-time cycling in telemetry | `scripts/tools/measure-battery-rt-eff.py` |
+| `INVERTER_CONV_EFF = 0.97` is a datasheet class, not this unit | 2026-11-04: historical cycling available, but DC/AC efficiency estimates contradict each other; calibration NOT approved | `scripts/tools/measure-battery-rt-eff.py` and physical energy-balance review |
 | The risk-knob magnitudes are placed estimates | needs weeks of logged plans and readings | `scripts/tools/replay-plans.ts` |
 | `DISPATCH_LIVE_LOAD_TRACKING_CHARGE=shadow` | deliberately observes before acting | review `detail_json.tracked_charge_w` vs `planned_power_w` |
 

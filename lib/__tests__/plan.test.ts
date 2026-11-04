@@ -82,6 +82,7 @@ import {
   DEFERRAL_UNTIL_NEEDED,
   FORECAST_RISK_PREMIUM_ORE,
   BATTERY_SAVE_FORECAST_DRAIN_W,
+  GRID_CHARGE_MARGIN_ORE,
   BATTERY_MIN_SOC_KWH,
   BATTERY_PLANNER_RESERVE_KWH,
   LIVE_LOAD_PROFILE_DAYS,
@@ -192,6 +193,7 @@ describe('producePlan — happy path wiring', () => {
       holdEnabled: false,
       forecastRiskPremiumOre: FORECAST_RISK_PREMIUM_ORE,
       batterySaveDriftW: BATTERY_SAVE_FORECAST_DRAIN_W,
+      gridChargeMarginOrePerKwh: GRID_CHARGE_MARGIN_ORE,
       batterySaveRecoveryEntryKwh: BATTERY_MIN_SOC_KWH + 0.5,
       minSocKwh: BATTERY_PLANNER_RESERVE_KWH,
       // Derived from the sliced horizon's own prices, then scaled by the kill-switch factor —

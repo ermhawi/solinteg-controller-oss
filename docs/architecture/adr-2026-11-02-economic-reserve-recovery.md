@@ -368,3 +368,66 @@ effektiva systemd-definitioner, hashmanifests och
 driftsättningskvitto. Återställ *både* kod och env
 och starta enbart om `solinteg-dispatch`. Äldre
 fristående rollback-punkter bevaras.
+
+## Tillägg 2026-11-04: separat ekonomisk marginal för nätladdning
+
+**Status: implementerat och unit-testat på `Sundsvall`, ej driftsatt.**
+`SOLINTEG_GRID_CHARGE_MARGIN_ORE` (standard **0**) är en valbar
+kostnadsreserv i planeringen per nät-kWh som aktivt laddas in i
+husbatteriet. Det är **inte** ett påstående om uppmätt verkningsgrad,
+inte en fakturapost och inte en ändring av fysisk `SoC` eller BMS.
+Gratis, automatiskt solupptag påverkas inte. Befintliga
+säkerhetsgränser och separat `prioritize_soc_recovery` ändras inte.
+
+Den platta marginalen läggs på `gridToBatteryKwh` i optimerarens
+bakåtpass. Både riskfri och riskjusterad lösning i
+`planWithRiskGuard` jämförs med **samma** ekonomiska marginal;
+annars kunde riskens normala 50-öre-uppoffringstak återställa
+nätladdning som den nya regeln försöker undvika.
+Samma konsekvens krävs för den valbara, ej aktiverade
+energiskatterefund-jämförelsen. Ekonomisk marginal räknas inte
+in i `evaluateDispatch.cashOre` eller batterislitage: där ska
+modellens verkliga pris- och slitagekostnader förbli oförändrade.
+
+**Read-only-avstämning:** En jämförelse mellan nätmätning med
+batteri och hypotetisk drift med samma uppmätta solproduktion och
+huslast men utan batteri indikerade negativa marginalutfall under
+flera dagar. Det är inte bevis för uppmätt faktisk drift utan
+batteri. `measure-battery-rt-eff.py` gav mycket stora avvikelser från
+antagen effektivitet, men DC- och AC-fönstrens uppskattningar är
+inbördes inkonsistenta; **inga** verkningsgradsvärden ändras på det
+underlaget. Den separata ekonomiska marginalen gör att den fysiska
+SoC-modellen kan bevaras medan risk för ytterligare cykelförlust
+utvärderas.
+
+**Återspelning:** `scripts/tools/replay-plans.ts --economic` kör
+senaste loggade dagplaner med uppmätt last/sol och verifierade
+historiska köp-/säljpriser; jämför marginal 0, 10, 20, 30 och 40
+öre per nät-kWh. Planer poängsätts på nästa 24 timmar med samma
+terminalvärde, tillval `--stress-grid-loss-ore` anger *samma*
+extra hypotetiska realförlust för samtliga kandidater vid
+utvärderingen. Varianten är inte en simulering av verklig
+EMS-verkställighet, fel i SoC-mätning, effekttak eller solkurvans
+förändring om batteriet vore frånkopplat. Kör med korrekt
+site-konfiguration, annars är modellens standardvärden inte
+representativa. Håll faktisk privat ekonomi utanför publik Git.
+
+**Release-grind:** Innan site-aktivering krävs körda regressions-
+och integrationstester, testad driftkopia med samma base path och
+installerad platskod, oförändrade hårdvaru-/nät-/L3-vakter,
+färsk telemetri, verifierad SoC-prognos ovan återhämtningsgränsen,
+rollback av webbbygge och private env samt uppföljning av
+verkliga `control_actions` och mätvärden. En numerisk modellvinst
+räcker inte. Vid avvikelse återställ marginalen till **0** i
+korrekt ombyggd webb eller återställ tidigare verifierade webbbygge;
+dispatcher, poller, broker och BMS ska inte ändras som del av detta
+experiment.
+
+**Aktuell driftblockerare 2026-11-04:** Nattinventeringen i
+[Modbus-rapporten](../solinteg-modbus-overnight-2026-11-04.md)
+visar att den aktiva pollern ibland får dispatcherns FC06-skrivsvar
+i stället för sin egen FC03-läsning. Det är en stark korrelation,
+inte ännu paketbevisad rotorsak. Nya fysiskt verkställda
+planeringsändringar får därför inte aktiveras automatiskt på
+basis av denna ekonomiska replay. Separat kontroll av
+TCP-ägarskap/serialisering och fungerande fallback återstår.
