@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
 
 from ev_grid_priority_guard import PRODUCTION_POLICY_ID, suggest  # noqa: E402
+from ev_l3_metered_policy import assess as assess_metered  # noqa: E402
 from l3_battery_policy import observe_l3  # noqa: E402
 
 LIVE = Path("/opt/solinteg/live.json")
@@ -45,12 +46,15 @@ def audit(live: dict, evcc: dict, *, now: datetime,
     }
     candidate = suggest("discharge", preview_discharge_w, live, evcc,
                         now=now, gate=gate)
+    metered = assess_metered("discharge", preview_discharge_w, live, evcc,
+                            now=now)
     available = candidate.state == "shadow"
     return {
         "mode": "read_only_evidence_check",
         "checked_at_utc": now.isoformat(),
         "source": "in_memory_shadow_preview",
         "preview_discharge_w": preview_discharge_w,
+        "metered_policy": metered.as_dict(),
         "evcc_read_ok": evcc.get("read_ok") is True,
         "evcc_state": evcc.get("state"),
         "evcc_charging_detected": evcc.get("charging_detected"),

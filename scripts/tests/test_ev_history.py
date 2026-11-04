@@ -122,6 +122,44 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(row["suggested_current_a"], 0)
         self.assertEqual(row["physical_writes"], 0)
 
+    def test_new_ict2_and_phase_evidence_is_recorded_per_channel(self):
+        live = {**inverter(), "inverter_ac_w": 1630,
+                "battery_temp_c": 16.0, "grid_unbalanced_output_raw": 0}
+        self.change("inverter_path", live)
+        ev = {**evcc(raw=267), "state": "C2",
+              "channel_currents_a": [.1, 16.0, .1],
+              "measured_current_a": 16.2, "charging_detected": True}
+        self.change("evcc_path", ev)
+        row = self.capture()
+        self.assertEqual(row["evcc_6a_limit_verified"], 0)
+        self.assertEqual(row["evcc_ict1_a"], .1)
+        self.assertEqual(row["evcc_ict2_a"], 16.0)
+        self.assertEqual(row["evcc_ict3_a"], .1)
+        self.assertEqual(row["inverter_ac_w"], 1630)
+        self.assertEqual(row["battery_temp_c"], 16)
+        self.assertEqual(row["grid_unbalanced_output_raw"], 0)
+        history.append(str(self.db), row)
+        with sqlite3.connect(self.db) as con:
+            stored = con.execute(
+                "SELECT evcc_ict2_a, inverter_ac_w, battery_temp_c, "
+                "grid_unbalanced_output_raw FROM ev_samples").fetchone()
+        self.assertEqual(stored, (16.0, 1630.0, 16.0, 0))
+
+    def test_unverified_channel_sum_or_missing_ct_stays_null(self):
+        ev = {**evcc(raw=100), "state": "C2",
+              "channel_currents_a": [.1, 6., .1],
+              "measured_current_a": 20., "charging_detected": True}
+        self.change("evcc_path", ev)
+        row = self.capture()
+        self.assertIsNone(row["evcc_ict2_a"])
+        self.assertEqual(row["evcc_measured_a"], 20.)
+        ev["channel_currents_a"] = [None, None, None]
+        ev["measured_current_a"] = None
+        self.change("evcc_path", ev)
+        row = self.capture()
+        self.assertIsNone(row["evcc_ict2_a"])
+        self.assertIsNone(row["evcc_measured_a"])
+
     def test_failed_evcc_read_is_unknown_not_zero_current(self):
         ev = evcc()
         ev.update({"read_ok": False, "reason": "EvccReadError",
@@ -205,6 +243,35 @@ class HistoryTests(unittest.TestCase):
             rows = con.execute(
                 "SELECT captured_at_utc FROM ev_samples").fetchall()
             self.assertEqual(rows, [(third["captured_at_utc"],)])
+
+    def test_old_historian_schema_migrates_without_filling_past_ict2(self):
+        old_schema = history.SCHEMA
+        for name, kind in history.ADDED_METER_COLUMNS.items():
+            old_schema = old_schema.replace(f"    {name} {kind},\n", "")
+        with sqlite3.connect(self.db) as con:
+            con.executescript(old_schema)
+            old = self.capture()
+            legacy_fields = [k for k in old if k not in history.ADDED_METER_COLUMNS]
+            con.execute("INSERT INTO ev_samples (" + ",".join(legacy_fields)
+                        + ") VALUES (" + ",".join("?" for _ in legacy_fields)
+                        + ")", tuple(old[k] for k in legacy_fields))
+            con.commit()
+
+        new_ev = {**evcc(raw=100), "state": "C2",
+                  "channel_currents_a": [.1, 6., .1],
+                  "measured_current_a": 6.2, "charging_detected": True}
+        self.change("evcc_path", new_ev)
+        new_live = {**inverter(), "inverter_ac_w": 1400,
+                    "battery_temp_c": 15., "grid_unbalanced_output_raw": 0}
+        self.change("inverter_path", new_live)
+        history.append(str(self.db), self.capture(), prune=False)
+        with sqlite3.connect(self.db) as con:
+            rows = con.execute(
+                "SELECT evcc_ict2_a, grid_unbalanced_output_raw, inverter_ac_w "
+                "FROM ev_samples ORDER BY id").fetchall()
+            columns = {r[1] for r in con.execute("PRAGMA table_info(ev_samples)")}
+        self.assertEqual(rows, [(None, None, None), (6.0, 0, 1400.)])
+        self.assertTrue(set(history.ADDED_METER_COLUMNS).issubset(columns))
 
     def test_invalid_retention_is_rejected(self):
         for days in (-1, 0, 91, 1000):

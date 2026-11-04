@@ -26,6 +26,7 @@
 - [ADR: krypterat USB-arkiv och bortstädning efter prover](architecture/adr-2026-11-01-solinteg-usb-archive.md)
 - [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
 - [Aktuell EV/L3-status: dokumentation mot kod och drift, test och GO/NO-GO](ev-l3-code-drift-review-2026-11-04.md)
+- [ADR: EVCC Ict2 som primär uppmätt EV-last; ny ren shadowmodell och historik](architecture/adr-2026-11-04-evcc-ict2-metered-priority.md)
 - [Tillfälligt husbatteriprov 20–25 %](temporary-soc25-pilot-2026-10-31.md)
 - [Adaptivt 1,5 kW-prov till 25 %](temporary-soc25-adaptive-pilot-2026-10-31.md)
 - [Separat EV-pauserat 25 %-prov med watchdog](temporary-soc25-evpaused-pilot-2026-11-01.md)

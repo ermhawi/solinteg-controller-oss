@@ -86,7 +86,9 @@ bevarar hela fysiska styrtuple oförändrad. Loggning är av som standard
 (`DISPATCH_EV_L3_SHADOW_LOG=0`). Kandidaten verifierades mot verklig
 produktionsbaseline **i minnet** (SHA-256
 `14d97403fbf4e0af473ce3fb9277ee388df1ce1bde0b0ba8d3816e844ebd8d57`)
-och i isolerade unit-tester. **Ingen fil kopierades till
+och i isolerade unit-tester. **Denna kandidat-SHA är historisk** och har
+ersatts av den senare mätbaserade Ict2-kandidaten i avsnitt 5.
+**Ingen fil kopierades till
 `/opt/solinteg/app`; ingen dispatcheromstart, drop-in, rootgate eller
 kodaktivering gjordes.** Den gamla watchdoggen och brokertransaktionerna
 lämnades orörda.
@@ -104,3 +106,51 @@ innan även logg-hooken installeras i ARMED-dispatchern (omstart kan påverka
 växelriktaren kortvarigt), och ytterligare separat GO krävs innan något
 fysiskt EV-prioritetsbörvärde tillåts. Pågående 24–72 h brokeruppföljning
 ersätts inte av dessa tester.
+
+## 5. EVCC Ict2 som primär lastsignal – 4 november, separat uppföljning
+
+**[ADR för den nya mätbaserade policyn](architecture/adr-2026-11-04-evcc-ict2-metered-priority.md)** är källan för beslut, ekvationer, gränser,
+driftsättning och rollback. Den äldre L3-huströskeln på 2 500 W ersätts
+**bara i en ny read-only/shadow-kandidat**, inte i den aktiva dispatchern.
+
+- `ev_l3_metered_policy.py` använder **verkligt uppmätt Ict2** under
+  färsk `C2` och samstämmigt PWM-readback för 6–18 A. `230 V × Ict2`
+  är en uppskattning av EV-effekt (PF=1 antas); ingen verklig
+  effekt- eller energimätare, och ingen säkringsgaranti. Den
+  budgeterar **enbart minskning av planerad batteriurladdning** efter
+  verifierad `50006=0` och konsistenta L1/L2/L3, AC, PV, SoC,
+  batteritemperatur och importprognos.
+- Vid `idle/Auto`, sol över 100 W, SoC utanför 25–95 %, okända
+  mätvärden eller förutsedd fasimport över mjuk gräns returneras
+  **inget verkställbart eller hypotetiskt batteribörvärde**. Testade
+  exempel: 6 A ≈ 1 380 W, 10 A ≈ 2 300 W; 16–18 A effekt
+  identifieras men de testade fasgränsscenarierna **blockeras**.
+- `ev_l3_readonly_audit.py` visar nu den nya kandidatens
+  `metered_policy` parallellt med tidigare nattliga 6 A-scenario.
+  `prepare_ev_l3_shadow_dispatch.py` är fortsatt endast en
+  **SHA-låst, ej installerad** logg-hook (ny kandidat-SHA-256
+  `20bf7f5cad47157b81ab5b93b892892c83fd6033db3c299aeb73cbd3ab0328a4`).
+- **Endast isolerad skrivskyddad historiktjänst** uppdaterades på Dell:
+  `solinteg-ev-history.service` kör ny
+  `ev_history.py` med SHA-256
+  `b56b43b7c3c003743abaf7232a50c81ebac901142d291b32e7222eb42afa577d`.
+  Sex additiva nullable SQLite-kolumner för Ict1/Ict2/Ict3,
+  inverter-AC, batteritemperatur och 50006 migrerades utan att
+  ändra gamla prover. `quick_check=ok`, nya rader skrivs och
+  `physical_writes=0`; avgränsad rootägd återställningskopia finns
+  enligt ADR. **Ingen produktionsdispatcher, Modbus-broker,
+  EVCC-styrning eller watchdog ändrades.**
+- Nytt replay `ev_l3_metered_replay.py` läser endast **verifierad**
+  separat historisk Ict2 och 50006. Direkt efter migrationen
+  fanns **2 877** lästa prover under senaste dygnet men ännu inget
+  nytt `C2`-prov med komplett bevisning; det kan därför inte ge ett
+  fysiskt GO. EVCC rapporterade fortsatt `A1`, paus/mismatch
+  `1000/267`, ingen faktisk bilström.
+- **Slutregression:** 1 404 Python-tester OK, 705 frontendtester OK
+  (ett överhoppat), ESLint och TypeScript typecheck godkända.
+
+**Status:** enbart Ict2-observation och säker offline-reglerkandidat.
+Fysisk nätprioritet och integrerad dispatcher-shadow är **inte
+driftsatta**. Nästa krav är en stabil laddsession med verifierad Ict2
+på L3 och samstämmig pilot samt separat sol-/Auto-prov med
+återställningsbar releaseplan; inga automatiska PWM-ändringar.

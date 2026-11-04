@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS ev_samples (
     house_load_w REAL,
     pv_w REAL,
     house_soc_pct REAL,
+    inverter_ac_w REAL,
+    battery_temp_c REAL,
+    grid_unbalanced_output_raw INTEGER,
     evcc_at_utc TEXT,
     evcc_age_s REAL,
     evcc_record_fresh INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +52,9 @@ CREATE TABLE IF NOT EXISTS ev_samples (
     evcc_configured_raw INTEGER,
     evcc_pilot_raw INTEGER,
     evcc_measured_a REAL,
+    evcc_ict1_a REAL,
+    evcc_ict2_a REAL,
+    evcc_ict3_a REAL,
     evcc_charging_detected INTEGER,
     evcc_6a_limit_verified INTEGER,
     ha_checked_at_utc TEXT,
@@ -76,6 +82,17 @@ CREATE TABLE IF NOT EXISTS ev_samples (
 CREATE INDEX IF NOT EXISTS ev_samples_captured_epoch_ms_idx
   ON ev_samples(captured_epoch_ms);
 """
+
+# Added observations are nullable. Older private SQLite histories must migrate
+# in place without inferring missing Ict2, phase balance, or battery temperature.
+ADDED_METER_COLUMNS = {
+    "inverter_ac_w": "REAL",
+    "battery_temp_c": "REAL",
+    "grid_unbalanced_output_raw": "INTEGER",
+    "evcc_ict1_a": "REAL",
+    "evcc_ict2_a": "REAL",
+    "evcc_ict3_a": "REAL",
+}
 
 
 def _number(value):
@@ -154,6 +171,16 @@ def capture(*, now: datetime | None = None,
     pilot = _number(evcc.get("pilot_pwm_raw")) if read_ok else None
     current = _number(evcc.get("measured_current_a")) if read_ok else None
     valid_current = current is not None and 0 <= current <= 32
+    # Preserve Ict2 separately for future analysis. The old history stores only
+    # the channel sum, which cannot prove which phase carried the EV current.
+    raw_channels = evcc.get("channel_currents_a") if read_ok and valid_current else None
+    channels = None
+    if type(raw_channels) is list and len(raw_channels) == 3:
+        parsed = [_number(a) if type(a) in (int, float) else None
+                  for a in raw_channels]
+        if (all(a is not None and 0 <= a <= 32 for a in parsed)
+                and abs(sum(parsed) - current) <= .21):
+            channels = parsed
     # The pilot cap persists only while the hardware actually reports it.
     # When readback fails, NULL rather than false (not a known mismatch).
     cap6 = int(config == 100 and pilot == 100) if config is not None and pilot is not None else None
@@ -188,6 +215,12 @@ def capture(*, now: datetime | None = None,
         "house_load_w": _number(inverter.get("house_load_w")) if ifresh else None,
         "pv_w": _number(inverter.get("pv_w")) if ifresh else None,
         "house_soc_pct": _number(inverter.get("soc_pct")) if ifresh else None,
+        "inverter_ac_w": _number(inverter.get("inverter_ac_w")) if ifresh else None,
+        "battery_temp_c": _number(inverter.get("battery_temp_c")) if ifresh else None,
+        "grid_unbalanced_output_raw": (
+            inverter.get("grid_unbalanced_output_raw")
+            if ifresh and type(inverter.get("grid_unbalanced_output_raw")) is int
+            and 0 <= inverter["grid_unbalanced_output_raw"] <= 65535 else None),
         "evcc_at_utc": et,
         "evcc_age_s": ea,
         "evcc_record_fresh": int(efresh),
@@ -197,6 +230,9 @@ def capture(*, now: datetime | None = None,
         "evcc_configured_raw": int(config) if config is not None else None,
         "evcc_pilot_raw": int(pilot) if pilot is not None else None,
         "evcc_measured_a": current if valid_current else None,
+        "evcc_ict1_a": channels[0] if channels is not None else None,
+        "evcc_ict2_a": channels[1] if channels is not None else None,
+        "evcc_ict3_a": channels[2] if channels is not None else None,
         "evcc_charging_detected": (
             _flag(evcc.get("charging_detected")) if read_ok and valid_current else None),
         "evcc_6a_limit_verified": cap6,
@@ -239,6 +275,10 @@ def append(path: str, record: dict, *, retention_days: int = DEFAULT_RETENTION_D
         con.execute("PRAGMA busy_timeout=3000")
         con.execute("PRAGMA journal_mode=WAL")
         con.executescript(SCHEMA)
+        columns = {row[1] for row in con.execute("PRAGMA table_info(ev_samples)")}
+        for name, kind in ADDED_METER_COLUMNS.items():
+            if name not in columns:
+                con.execute(f"ALTER TABLE ev_samples ADD COLUMN {name} {kind}")
         fields = tuple(record)
         con.execute(
             "INSERT INTO ev_samples (" + ",".join(fields) + ") VALUES ("

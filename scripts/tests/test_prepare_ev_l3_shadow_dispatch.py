@@ -38,7 +38,8 @@ class EvL3ShadowCandidateTests(unittest.TestCase):
         self.assertLess(patched.index(HOOK.encode()), patched.index(CALL_ANCHOR.encode()))
         self.assertNotIn("guard_dispatch(", HOOK)
         self.assertNotIn("write_register", HOOK)
-        self.assertIn('"mode": "shadow"', HOOK)
+        self.assertIn('from ev_l3_metered_policy import assess', HOOK)
+        self.assertNotIn('gate=', HOOK)
         self.assertIn('DISPATCH_EV_L3_SHADOW_LOG', HOOK)
 
     def test_unknown_sha_is_rejected(self):

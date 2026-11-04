@@ -6,6 +6,18 @@ Granskningsunderlag: revision 2:s käll- och driftgranskning vid `eedd4fef791ff4
 
 **Aktuellt driftkomplement 2026-11-04:** Den äldre EV-prioritetens shadow-hook är återkallad och den installerade dispatchern saknar även Git-kodens `coordinate_l3_battery()`. Env-värdet `DISPATCH_L3_BATTERY_MODE=shadow` aktiverar därför ingen L3-batterisamordning. Read-only EV-observation finns kvar; automatisk EVCC-/Volvostyrning och fysisk EV-prioritet är inte driftsatta. Läs [verifierad kod–drift-jämförelse, 6 A-återspelning och aktiveringsgrindar](../../ev-l3-code-drift-review-2026-11-04.md). Följande 31 oktober-stycken är historiska.
 
+**Nytt beslutat spår 2026-11-04 (enbart read-only/shadow):**
+[EVCC Ict2 och Solintegs tre faser](../../architecture/adr-2026-11-04-evcc-ict2-metered-priority.md)
+är nu primär **mätbaserad** kandidat för ekonomisk batterisamordning.
+Avsnitt 0 nedan beskriver det **äldre, historiska** försöket att känna igen
+EV-laddning utan Waveshare via en fast L3-huströskel. Den nya modellen
+identifierar bilström från verifierad EVCC Ict2 och beräknar L3-bidrag
+från balanserad inverter/CT utan att utfärda fysiska börvärden. På Dell
+har **endast den fristående read-only-historiktjänsten** uppdaterats med
+Ict2/fas-/inverterfält; aktiv dispatcher, broker, EVCC-styrning och
+watchdog är oförändrade. 6–18 A-scenarier är unit-testade, inte
+fysiskt bekräftade. Ingen fysisk EV-prioritet är godkänd.
+
 **Driftkomplettering 2026-10-31:** Den checksummebundna EV-prioriteringen
 är nu aktiverad **endast i shadow-läge** på Dell. Historiska
 `idle → Auto`-perioder har återspelats; en oberoende, read-only

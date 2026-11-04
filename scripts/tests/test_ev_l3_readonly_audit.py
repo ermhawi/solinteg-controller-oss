@@ -25,6 +25,8 @@ class EvL3ReadOnlyAuditTests(unittest.TestCase):
         self.assertEqual(result["preview_state"], "shadow")
         self.assertEqual(result["hypothetical_discharge_w"], 50)
         self.assertEqual(result["estimated_ev_w"], 1380)
+        self.assertEqual(result["metered_policy"]["state"], "shadow_hypothesis")
+        self.assertEqual(result["metered_policy"]["measurements"]["ev_ict2_a"], 6)
         self.assertTrue(result["phase_telemetry_valid"])
         self.assertTrue(result["balanced_output_confirmed"])
         self.assertFalse(result["physical_control_authorized"])
@@ -44,6 +46,8 @@ class EvL3ReadOnlyAuditTests(unittest.TestCase):
         self.assertFalse(result["evcc_pwm_matches"])
         self.assertEqual(result["preview_state"], "unavailable")
         self.assertIsNone(result["hypothetical_discharge_w"])
+        self.assertEqual(result["metered_policy"]["state"], "no_verified_charging")
+        self.assertNotIn("ev_power_w_est", result["metered_policy"]["measurements"])
         self.assertEqual(result["device_writes"], 0)
 
     def test_stale_evcc_never_means_zero_amps(self):
