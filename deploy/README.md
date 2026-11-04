@@ -75,6 +75,19 @@ och EVCC-prisstyrning spärras automatiskt. Återställning:
 kWh-session, manuell stoppdetektion och fysiska EVCC-prov är godkända.
 Inga fordons-/EVCC-/inverterskrivningar gjordes i Volvo-integrationen.
 
+**Ny EVCC-prisaktiverings-preflight (2026-11-04, enbart kod):**
+`scripts/tools/ev_price_activation_preflight.py` kontrollerar i
+**read-only** läge Volvos färska `off`, strikt kalibrerad
+`strict-session.json`, förlustfri manuell-intent-källa, färska
+EVCC C2/6 A eller B2/paus, giltiga L3-/nätvärden och prisplan.
+Utdata är enbart JSON med `state=not_ready` och `device_writes=0`;
+fysiska FC10-testgrinden är avsiktligt **hårt blockerad** tills
+separat kvalificering görs. Den aktuella Dell-avläsningen klarade
+Volvo/EVCC/L3 men saknar kalibrerad session, manuell-intent-källa
+och fysiska prov. Kodfilen är **inte installerad i produktion**,
+och ingen EVCC-prisservice har installerats. Se
+[verklig preflight, risker och kvalificeringskrav](../docs/architecture/adr-2026-11-04-ev-price-plan-and-chart.md).
+
 **Senaste EV/L3-nätprioritet på Dell, 2026-11-04:**
 En första livekorrigering från 12:27 UTC ersatte 50 W
 EMS-urladdning med 1 100–1 300 W PV-laddning och uppmätt L3-import

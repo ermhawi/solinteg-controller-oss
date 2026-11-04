@@ -512,3 +512,73 @@ händelsekälla, och fysiska EVCC-/fasbudgetstester. Före godkänt GO
 OAuth-/DPoP- och Chronos-tester, `systemd-analyze verify`,
 och två live lyckade schemaläsningar efter tokenförnyelse.
 Ingen fysisk EVCC-, bil- eller inverterstyrning utfördes.
+
+### Fortsatt EVCC-priskvalificering – verklig drift, 2026-11-04
+
+Efter explicit mål att starta automatisk EVCC-prisstyrning utfördes en ny
+**uteslutande läsande** förkontroll på Dell. Den nya
+`scripts/tools/ev_price_activation_preflight.py` har ingen hårdvaruskrivare,
+ingen ARM-kod och tar inte emot någon flagga som kan slå på regleringen.
+Den bedömer aktuell verklig Volvo-/EVCC-/L3-telemetri med samma strikta
+session-/manual-/pris-/Smart Charging-validerare som verkställaren.
+Det sista kvalificeringssteget, fysiska paus-/återstart-/feltester, är
+**avsiktligt hårt blockerat** i rapporten tills det har genomförts och
+verifierats separat. Detta skript får **aldrig** användas som en
+produktionsaktiveringsgenväg.
+
+**Kontrollerad Dell-avläsning:** `solinteg-volvo-smart-status.timer` är
+fortsatt `enabled/active`; `GetChargeLocations` ger explicit `off`
+inom 10 min. EVCC-FC03 visar färsk `C2`,
+`configured_pwm_raw=pilot_pwm_raw=100` och Ict2 omkring 6 A; färska
+L3-/nät-CT-uppgifter accepteras i preflighten. Den privata, i APK
+7.5.0 dekompilerade `BatteryService/GetLatestBattery` lästes **en
+gång skrivskyddat** med redan auktoriserad DPoP-refresh. Det
+VIN-matchade svaret gav 62 % SoC, 229 V, 6 A, 1 374 W,
+`ChargingStatusV2=CHARGING`, `ChargerPowerStatus=PROVIDING_POWER`
+och noll fordonskommandon. Jämförelsen med schablonen
+`230 V × 6 A = 1 380 W` stöder den nominella effektmodellen
+vid **ett ögonblick**, inte en oberoende mätning av ackumulerad
+energi, verifierad batterikapacitet eller en källa till manuella stopp.
+
+**Energikvalitet:** Befintlig, oförändrad `ev_ac_quality_audit.audit()`
+gav under senaste 24/72 h `12.391522` kWh *uppskattad partiell*
+AC-täckning i `32 409,9` sekunder; 15 rapporterade Volvo-SoC-nivåer
+motsvarar +14 procentenheter. Den är korrekt märkt
+`diagnostic_not_calibration`: EVCC:s Ict2 beräknas med
+**antagna** 230 V och PF=1, intervall saknas och SoC är
+avrundat/molnrapporterat. `verified_net_battery_dc_kwh`,
+`calibrated_ac_dc_efficiency` och
+`calibrated_usable_capacity_kwh` förblir NULL.
+`strict-session.json` är aktivt **spärrad** med
+`physical_control_eligible=false` och
+`OEM last-change timestamp is not a verified BMS sample`;
+`/run/solinteg/ev-manual-intent.json` saknas helt.
+Ingenting av detta har förfalskats/promoverats till fysisk
+styrsignal.
+
+**Laddmålets genomförbarhet:** 62→80 % enligt HA:s okalibrerade
+scenariodata kräver ca 16,322 kWh AC, vilket vid 6 A/230 V motsvarar
+~11,83 timmars kontinuerlig laddning. Vid provernas tid återstod
+~10,89 h till avresa 07:00; `deadline` kan därför **inte lova 80 %**
+med denna ström, och en ytterligare prispaus försämrar marginalen.
+Bilen lämnades kvar laddande på befintliga 6 A.
+
+**Förlustfri manuell stoppsignal saknas fortfarande.** APK:s
+`Battery.ChargingStatus[V2]` visar `CHARGING`, `IDLE`,
+`SMART_CHARGING_PAUSED` m.fl. men ingen verifierad avsändare
+eller beständig händelse för att användaren tryckt *Stoppa* i
+Volvo-appen **medan EVCC:s PWM redan är `1000`**. Den
+periodiska laddstatusen kan vara identisk före/efter ett sådant
+stopp. Att sätta `lossless=true` utifrån FC03 eller periodisk Volvo
+status vore fel och riskerar otillåten automatisk återstart.
+
+**Besked:** `NO-GO` för automatisk prispaus/**återstart**.
+Nästa kvalificeringssteg är (1) oberoende kWh-referens och en
+sammanhängande laddsession med verifierade mättider/SoC,
+(2) faktisk förlustfri auditering av manuellt app-stopp även
+under redan prispausad EVCC eller en bevisat säker alternativ
+ägarskapsmodell som inte återstartar app-stopp,
+(3) kontrollerad fysisk `1000`-paus och `100`-återstart
+vid 6 A plus nätfel/omstart/fasvakt/rollback, med separat
+verifiering av hela kedjan. Ingen EVCC-priscontroller har
+installerats eller armerats och inga FC10-skrivningar utfördes.
