@@ -42,4 +42,65 @@ Vid kontrollen: `soc_pct=20`, `50006=0` i senaste poller-snapshot, aktiv broker/
 4. **Fysisk aktivering kräver nytt, uttryckligt GO:** verifiera SoC (legacy-grind minst 25 %), batteritemperatur, 50006, tre CT-faser, Ict2/PWM/readback, nät-/L3-säkringsmarginal, SOC-recovery och solöverskott. Värdera även planerat hög-PV Auto/idle-fall där befintlig 50 W EMS-discharge kan hindra solelsladdning. Ingen fysisk `mode=active` eller `DISPATCH_L3_BATTERY_MODE=1` på nuvarande bevisnivå.
 5. **Rollback/uppföljning:** rotägd verifierad kopia av exakta installerade filer, kontroll av systemd-processer och ensamt broker-TCP-ägarskap, isolerat rollbackprov, sedan övervakad livekontroll av verkligt nät-/batteriflöde och 24–72 h driftsuppföljning. Vid fel lämnas befintlig Solinteg-watchdog/failure-policy oförändrad enligt användarbeslut; de kända riskerna kvarstår.
 
-**Resultat för denna granskning:** Dokumentations- och testarbete, ingen produktionsändring. Ingen ny service, timer, städning, arbetskopia eller provsättning har skapats; gammal root-rollback och bevarade backup-/USB-arkiv lämnas orörda. Nästa fysiska steg är uttryckligen **blockerat** av otillräcklig aktuell EVCC-evidens, gammal patchbaseline och otillräcklig validering av 6 A-detektion.
+**Resultat för den första granskningen:** Dokumentations- och testarbete, ingen produktionsändring. Ingen ny service, timer, städning, arbetskopia eller provsättning skapades; gammal root-rollback och bevarade backup-/USB-arkiv lämnades orörda. Den senare 10:02-kontrollen nedan är ett separat uppföljningssteg.
+
+## 4. Waveshare åter ansluten – kontroll 2026-11-04 ca 10:02 CET
+
+**Endast observation och offline-releaseförberedelse; ingen fysisk driftsättning.**
+Den befintliga `solinteg-ev-observer` läser EVCC igen. Historikens senaste fem
+minuter gav **10/10** färska lyckade read-only EVCC-prover (`read_ok=1`).
+Aktuell status var `A1`, alltså **ingen verifierad bil-laddning**;
+`configured_pwm_raw=1000` är EVCC-observatörens **paussentinel** medan
+`pilot_pwm_raw=267` skiljer sig. Strömvärden saknas och inga EVCC-skrivningar
+har utförts. Ändra **inte** 6 A-/PWM-inställning automatiskt på denna evidens.
+
+Historisk tröskelanalys (validerade, färska EVCC- och fas-CT-prover):
+
+| L3-tröskel | Verifierad laddning 6 A | Verifierad ej laddande |
+| --- | --- | --- |
+| 1 200 W | 542/543 | 31/162 |
+| 1 500 W | 414/543 | 29/162 |
+| 2 500 W (befintlig) | 15/543 | 13/162 |
+
+En statisk 1 200 W-tröskel ger god känslighet men **falska positiva** från
+övriga L3-laster. Därför ändras inte källkodens produktionspolicy eller
+tröskel. Om senare EV-batterireglering införs måste färsk, verifierad EVCC
+Ict2, konsekventa fas-CT och modellens säkerhetsgrindar stödja varje beslut.
+
+Nytt **skrivskyddat** verktyg:
+`sudo -n python3 -B scripts/tools/ev_l3_readonly_audit.py`. Det återanvänder
+den befintliga EV-grid-priority-policyfunktionen med ett **syntetiskt
+`mode=shadow`-manifest i minnet**. Det skapar inte rootgate,
+aktiverings-ID på disk eller styrbefogenhet. Livekörning gav
+`evcc_read_ok=true`, `evcc_state=A1`, `evcc_paused_by_pwm=true`,
+`evcc_pwm_matches=false`, giltiga fasdata och `50006=0`, men
+`preview_state=unavailable`, `hypothetical_discharge_w=null` och
+`device_writes=0`.
+
+Ny **offline och SHA-låst** kandidatgenerator:
+`sudo -n python3 -B scripts/tools/prepare_ev_l3_shadow_dispatch.py`.
+Den accepterar endast nuvarande installerad dispatcher-SHA-256
+`34d0a927d970a1de343a16dd22d2c13fb6d1eb43d665dc5ec4bce8d740b84e57`,
+injicerar endast **opt-in-loggning** före befintlig L3-laddningsvakt och
+bevarar hela fysiska styrtuple oförändrad. Loggning är av som standard
+(`DISPATCH_EV_L3_SHADOW_LOG=0`). Kandidaten verifierades mot verklig
+produktionsbaseline **i minnet** (SHA-256
+`14d97403fbf4e0af473ce3fb9277ee388df1ce1bde0b0ba8d3816e844ebd8d57`)
+och i isolerade unit-tester. **Ingen fil kopierades till
+`/opt/solinteg/app`; ingen dispatcheromstart, drop-in, rootgate eller
+kodaktivering gjordes.** Den gamla watchdoggen och brokertransaktionerna
+lämnades orörda.
+
+**Verifiering:** Totalt **1 376 Python-tester OK** (inklusive 10 nya tester),
+**705 frontendtester OK** och ett överhoppat, ESLint och TypeScript typecheck
+OK. Zensical-dokumentationsbygge och `git diff --check` godkända.
+Detta är offline-/källkodsverifiering, inte ett fysiskt EV- eller
+återställningsprov.
+
+**Kvarstående GO-grind:** faktisk, stabil EVCC-`C2`/Ict2-laddning och
+samstämmig pilot/readback, samt SoC, temperatur, PV, fas-/säkringsmarginal
+och en särskilt verifierad återställningsväg. Ett nytt releasebeslut krävs
+innan även logg-hooken installeras i ARMED-dispatchern (omstart kan påverka
+växelriktaren kortvarigt), och ytterligare separat GO krävs innan något
+fysiskt EV-prioritetsbörvärde tillåts. Pågående 24–72 h brokeruppföljning
+ersätts inte av dessa tester.
