@@ -14,6 +14,7 @@ import json
 import math
 import os
 import stat
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from uuid import uuid4
 import ev_price_pause_owner as ownership
 import ev_price_empirical_session as empirical
 import evcc_cable_tracker as cable_tracker
+from ha_ev_session import load_settings
 import ev_volvo_smart_charging as smart
 from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan, PriceDecision
 from evcc_ascii import (EvccAscii, RAW_PAUSE, EvccError, EvccUncertainWrite,
@@ -131,13 +133,14 @@ def run_once(*, now: datetime | None = None) -> dict:
             or os.environ.get("EVCC_PRICE_CONTROL_ARMED") != "1"):
         return {"state": "disabled", "writes": 0, "reason": "price controller not armed"}
 
+    settings_path = Path(os.environ.get("EV_SETTINGS_PATH",
+        "/opt/solinteg/ev-shadow-runtime/var/settings.json"))
     session = read_ev_session(os.environ.get("EV_SESSION_PATH"), now=now)
     if session is None and os.environ.get("EV_PRICE_ACCEPT_EMPIRICAL_ENERGY") == "1":
         session = empirical.read_session(
             status_path=Path(os.environ.get("EV_STATUS_PATH",
                 "/opt/solinteg/ev-shadow-runtime/var/status.json")),
-            settings_path=Path(os.environ.get("EV_SETTINGS_PATH",
-                "/opt/solinteg/ev-shadow-runtime/var/settings.json")),
+            settings_path=settings_path,
             cable_path=Path(os.environ.get("EVCC_CABLE_TRACK_PATH",
                 "/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json")),
             ledger_path=Path(os.environ.get("EV_PRICE_EMPIRICAL_LEDGER_PATH",
@@ -263,6 +266,21 @@ def run_once(*, now: datetime | None = None) -> dict:
                         revoke("EVCC cable observation changed before FC10")
                         return {"state": "inhibited", "writes": 0,
                                 "reason": "cable state changed during FC10 preflight"}
+                    # A web edit is an atomic intent replacement. A decision
+                    # made against the old settings must not send FC10 after
+                    # the settings revision changes during this invocation.
+                    if session.get("energy_quality") == empirical.QUALITY:
+                        try:
+                            current_settings = load_settings(str(settings_path))
+                        except (OSError, ValueError):
+                            return {"state": "inhibited", "writes": 0,
+                                    "reason": "EV settings became unreadable before FC10"}
+                        if (current_settings.get("revision") != session.get("settings_revision")
+                                or current_settings["charge_mode"] != session["charge_mode"]
+                                or current_settings["departure_local_time"] != session["departure_local_time"]
+                                or current_settings["max_buy_ore_per_kwh"] != session["max_buy_ore_per_kwh"]):
+                            return {"state": "inhibited", "writes": 0,
+                                    "reason": "EV charging preference changed before FC10"}
                     if command.action == "pause":
                         next_owner = ownership.new_owner(
                             session=session, cable=latest, now=now, owner_id=str(uuid4()))
@@ -295,6 +313,69 @@ def run_once(*, now: datetime | None = None) -> dict:
             fcntl.flock(owner_lock.fileno(), fcntl.LOCK_UN)
 
 
+def publish_controller_status(result: dict, *, now: datetime | None = None) -> None:
+    """Publish sanitized control/ownership status to the web UI, no commands.
+
+    The EVCC pause-owner record remains private (0600, owner-only). The web
+    user sees only a fail-closed summary, never owner/session identifiers.
+    """
+    now = now or datetime.now(timezone.utc)
+    path = Path(os.environ.get("EV_PRICE_STATUS_PATH",
+        "/opt/solinteg/ev-shadow-runtime/var/ev-price-controller-status.json"))
+    if not path.parent.is_dir() or path.is_symlink():
+        raise OSError("invalid price status destination")
+    try:
+        record = ownership.read_owner(Path(os.environ.get(
+            "EV_PRICE_PAUSE_OWNER_PATH", str(OWNER))))
+        owner_state = record["state"] if record else "none"
+    except ownership.OwnershipError:
+        owner_state = "unknown"
+    mode = None
+    departure = None
+    revision = None
+    try:
+        ledger_path = Path(os.environ.get("EV_PRICE_EMPIRICAL_LEDGER_PATH",
+            "/opt/solinteg/ev-shadow-runtime/var/ev-price-empirical-session.json"))
+        ledger = empirical._ledger_read(ledger_path)
+        if ledger is not None:
+            mode = ledger["charge_mode"]
+            departure = ledger["departure_at_utc"]
+            revision = ledger.get("settings_revision")
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    output = {
+        "schema_version": 1,
+        "source": "evcc_price_controller_status",
+        "timestamp": now.isoformat(),
+        "control_enabled": (os.environ.get("EV_PRICE_CONTROL_ENABLED") == "1"
+                            and os.environ.get("EVCC_PRICE_CONTROL_ARMED") == "1"),
+        "state": result.get("state"),
+        "reason": str(result.get("reason") or "")[:180],
+        "writes": result.get("writes") if result.get("writes") in (0, 1) else None,
+        "owner_state": owner_state,
+        "effective_charge_mode": mode,
+        "effective_departure_at_utc": departure,
+        "effective_settings_revision": revision,
+    }
+    fd, name = tempfile.mkstemp(prefix=".ev-price-controller-status-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            os.fchmod(out.fileno(), 0o640)
+            json.dump(output, out, sort_keys=True)
+            out.write("\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(name, path)
+        dirfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", required=True)
@@ -304,6 +385,11 @@ def main() -> None:
     except (EvccError, EvccUncertainWrite, OSError, ValueError, PermissionError) as exc:
         # No blind retry and no claims about whether the write took effect.
         result = {"state": "error", "writes": None, "reason": type(exc).__name__}
+    try:
+        publish_controller_status(result)
+    except OSError:
+        # Telemetry failure never changes a physical FC10 outcome.
+        pass
     print(json.dumps(result, ensure_ascii=False))
 
 

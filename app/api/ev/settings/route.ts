@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { evSettingsWriteEnabled, readEvOverview, saveEvSettings } from '@/lib/ev-state';
+import { EvSettingsConflict, EvSettingsUnsafe, evSettingsLiveConfigured,
+  evSettingsWriteEnabled, readEvOverview, saveEvSettings } from '@/lib/ev-state';
 import { parseEvSettings } from '@/lib/ev-settings';
 
 function authorized(request: Request): boolean {
@@ -16,13 +17,13 @@ function authorized(request: Request): boolean {
 export async function PUT(request: Request) {
   if (!evSettingsWriteEnabled()) {
     return Response.json(
-      { error: 'Skrivning av skugginställningar är inte aktiverad' },
+      { error: 'Skrivning av laddinställningar är inte aktiverad' },
       { status: 403, headers: { 'Cache-Control': 'no-store' } },
     );
   }
   if (!authorized(request)) {
     return Response.json(
-      { error: 'Behörighet saknas för att spara skugginställningar' },
+      { error: 'Behörighet saknas för att spara laddinställningar' },
       { status: 403, headers: { 'Cache-Control': 'no-store' } },
     );
   }
@@ -48,18 +49,22 @@ export async function PUT(request: Request) {
     return Response.json({ error: 'Ogiltigt laddläge, klockslag eller prisgräns' },
       { status: 400 });
   }
+  let saved;
   try {
-    await saveEvSettings(settings);
-  } catch {
+    saved = await saveEvSettings(settings);
+  } catch (error) {
+    if (error instanceof EvSettingsConflict || error instanceof EvSettingsUnsafe) {
+      return Response.json({ error: error.message },
+        { status: 409, headers: { 'Cache-Control': 'no-store' } });
+    }
     return Response.json(
       { error: 'Det gick inte att spara inställningar på servern' },
       { status: 503, headers: { 'Cache-Control': 'no-store' } },
     );
   }
-  const overview = await readEvOverview();
   return Response.json({
-    settings: overview.settings,
-    mode: 'shadow',
+    settings: saved,
+    mode: evSettingsLiveConfigured() ? 'live' : 'shadow',
     deviceWrites: 0,
   }, { headers: { 'Cache-Control': 'no-store' } });
 }

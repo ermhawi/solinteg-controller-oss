@@ -1,5 +1,24 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+**EVCC:s två laddlägen på webbsidan, driftsatt på Dell 2026-11-05:**
+`/solinteg/ev` låter behörig användare välja `deadline`
+(mål 80 % vid svensk avresetid, prisoptimering om möjligt)
+eller `economy` (billigaste tillåtna perioder utan sluttid).
+`EV_SETTINGS_PATH` pekar för webben, HA-läsaren och den aktiva
+priscontrollern till samma, särskilt begränsade katalog
+`/opt/solinteg/ev-charge-settings/settings.json`; ingen webbläsare
+kan skriva EVCC-pausägarfiler eller utfärda en direkt FC10.
+Autentiserade, versionsskyddade PUT sparar endast nytt val;
+controllerstatus och färsk 6 A-/kabelstatus måste vara säker.
+En redan prispausad bil får inte automatiskt återstartas efter
+modebyte. Ursprungligt `deadline/07:00` bevarades i drift.
+Privat autentiseringsnyckel finns endast i
+`/etc/solinteg/ev-web-settings.env`, aldrig i Git.
+[Livedesign, begränsningar och rollback](../docs/architecture/adr-2026-11-05-ev-web-live-mode-selection.md).
+
+**Historiska drift- och kodnoteringar nedan** kan avse läget före
+EVCC:s aktiva prisstyrning och det nu driftsatta webbvalet.
+
 **Husets lastprognos (2026-11-04):** `readTrailingLoadProfile` skiljer
 nu vardagar och helger och räknar bort endast fullständiga UTC-timmar
 med uppmätt EVCC-Ict2 från den **härledda** huslastprofilen. Befintliga

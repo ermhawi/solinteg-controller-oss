@@ -104,18 +104,25 @@ def _ledger_write_once(path: Path, record: dict) -> None:
 
 
 def _can_replace_ledger(*, old: dict, cable: dict, now: datetime,
-                        evcc_path: Path, owner_path: Path) -> bool:
+                        evcc_path: Path, owner_path: Path,
+                        settings_revision: str | None = None) -> bool:
     """Only witnessed replug + already-running 6 A can open a new mission."""
     try:
         if (old.get("source") != QUALITY
                 or old.get("cable_tracker_id") != cable["tracking_id"]
                 or type(old.get("connection_epoch")) is not int
-                or cable["connection_epoch"] <= old["connection_epoch"]
-                or cable.get("confirmed_replug") is not True
                 or cable["observed_state"] != "C2"):
             return False
-        replugged = _instant(cable["last_reconnected_at_utc"])
-        if not 0 <= (now - replugged).total_seconds() <= 3600:
+        replug = (cable["connection_epoch"] > old["connection_epoch"]
+                  and cable.get("confirmed_replug") is True)
+        if replug:
+            replugged = _instant(cable["last_reconnected_at_utc"])
+            if not 0 <= (now - replugged).total_seconds() <= 3600:
+                return False
+        settings_change = (settings_revision is not None
+                           and settings_revision != old.get("settings_revision")
+                           and cable["connection_epoch"] == old["connection_epoch"])
+        if not (replug or settings_change):
             return False
         prior_owner = ownership.read_owner(owner_path)
         if prior_owner is not None and prior_owner.get("state") != "released":
@@ -204,8 +211,11 @@ def read_session(*, status_path: Path, settings_path: Path,
                 or data.get("departure_local_time") != settings["departure_local_time"]):
             return None
         mode = settings["charge_mode"]
+        revision = settings.get("revision")
         key = (expected_vin_sha256 + ":" + cable["tracking_id"] + ":"
                + str(cable["connection_epoch"]) + ":" + mode)
+        if revision is not None:
+            key += ":ui:" + revision
         session_id = str(uuid5(NAMESPACE_URL, "solinteg-ev-price:" + key))
         stored = _ledger_read(ledger_path)
         if stored is not None and (stored.get("session_id") != session_id):
@@ -215,7 +225,8 @@ def read_session(*, status_path: Path, settings_path: Path,
             if not _can_replace_ledger(
                     old=stored, cable=cable, now=now,
                     evcc_path=evcc_path or status_path.parent / "evcc-readonly.json",
-                    owner_path=owner_path or status_path.parent / "ev-price-pause-owner.json"):
+                    owner_path=owner_path or status_path.parent / "ev-price-pause-owner.json",
+                    settings_revision=revision):
                 return None
             stored = None
             rotate = True
@@ -223,7 +234,8 @@ def read_session(*, status_path: Path, settings_path: Path,
             rotate = False
         if stored is None:
             anchor = now
-            if cable.get("confirmed_replug") is True and cable.get("last_reconnected_at_utc"):
+            if (not rotate and cable.get("confirmed_replug") is True
+                    and cable.get("last_reconnected_at_utc")):
                 anchor = _instant(cable["last_reconnected_at_utc"])
                 if (now - anchor).total_seconds() < 0 or (now - anchor).total_seconds() > 3600:
                     return None
@@ -236,6 +248,7 @@ def read_session(*, status_path: Path, settings_path: Path,
                 "cable_tracker_id": cable["tracking_id"],
                 "connection_epoch": cable["connection_epoch"],
                 "charge_mode": mode,
+                "settings_revision": revision,
                 "departure_at_utc": deadline.isoformat() if deadline else None,
                 "created_at_utc": now.isoformat(),
                 "factor_kwh_per_soc_pct": KWH_PER_SOC_PCT,
@@ -251,6 +264,7 @@ def read_session(*, status_path: Path, settings_path: Path,
                 or stored.get("cable_tracker_id") != cable["tracking_id"]
                 or stored.get("connection_epoch") != cable["connection_epoch"]
                 or stored.get("charge_mode") != mode
+                or stored.get("settings_revision") != revision
                 or stored.get("factor_kwh_per_soc_pct") != KWH_PER_SOC_PCT
                 or stored.get("independent_ac_meter_verified") is not False
                 or stored.get("observation_time_semantics") != "cloud_last_changed_not_bms_sample"):
@@ -268,6 +282,8 @@ def read_session(*, status_path: Path, settings_path: Path,
             "session_id": session_id,
             "connection_epoch": cable["connection_epoch"],
             "charge_mode": mode,
+            "departure_local_time": settings["departure_local_time"],
+            "settings_revision": revision,
             "departure_at_utc": departure,
             "remaining_ac_kwh": round(max(0, 80 - soc) * KWH_PER_SOC_PCT, 3),
             "target_soc_pct": 80,

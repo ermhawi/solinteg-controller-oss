@@ -59,7 +59,8 @@ describe('EV shadow settings API authorization and fail-closed gates', () => {
       const returned = await response.json();
       expect(returned).toMatchObject({ mode: 'shadow', deviceWrites: 0 });
       const saved = JSON.parse(await readFile(process.env.EV_SETTINGS_PATH, 'utf8'));
-      expect(saved).toEqual(VALID);
+      expect(saved).toMatchObject(VALID);
+      expect(saved.revision).toMatch(/^[a-f0-9-]{36}$/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

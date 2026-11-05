@@ -71,11 +71,11 @@ export default function EvChargingPlanner({ initialOverview }: {
     setError(null);
     setNotice(null);
     if (!overview.settingsWriteEnabled) {
-      setError('Servern tillåter ännu inte ändring av skugginställningar.');
+      setError('Servern tillåter ännu inte ändring av laddinställningar.');
       return;
     }
     if (!secret) {
-      setError('Ange nyckeln för skugginställningarna för att spara.');
+      setError('Ange nyckeln för laddinställningarna för att spara.');
       return;
     }
     const candidate: EvSettings = {
@@ -111,7 +111,9 @@ export default function EvChargingPlanner({ initialOverview }: {
       }
       setDraft(payload.settings ?? candidate);
       setPriceText(candidate.max_buy_ore_per_kwh?.toString() ?? '');
-      setNotice('Sparat för skuggläge. Ingen fysisk laddstyrning har aktiverats.');
+      setNotice(overview.liveControlConfigured
+        ? 'Sparat. Laddcontrollern tar över valet vid nästa säkra beslut; ingen omedelbar laddstart sker.'
+        : 'Sparat för förhandsvisning. Ingen fysisk laddstyrning aktiverades.');
       setSecret('');
       await refresh();
     } catch {
@@ -124,6 +126,9 @@ export default function EvChargingPlanner({ initialOverview }: {
   const actual = overview.statusFresh ? overview.status : null;
   const shadow = overview.shadowFresh ? overview.shadow : null;
   const candidateMode = draft.charge_mode;
+  const live = overview.liveControlConfigured;
+  const liveHealthy = live && overview.controlFresh &&
+    overview.control?.controlEnabled === true;
   const unsaved = JSON.stringify(draft) !== JSON.stringify(overview.settings) ||
     priceText !== (overview.settings.max_buy_ore_per_kwh?.toString() ?? '');
 
@@ -138,8 +143,9 @@ export default function EvChargingPlanner({ initialOverview }: {
             Smart laddplanering
           </h1>
           <p className="mt-2 max-w-2xl text-[14px]" style={muted}>
-            Gemensamma elpriser för bilen och husbatteriet. Två olika laddmål,
-            men fortfarande utan fysisk styrning.
+            Två laddlägen med samma 80 %-mål och prisoptimering.
+            {live ? ' Sparade val styr EVCC när säkerhetsvillkoren är uppfyllda.'
+              : ' Detta är fortfarande en förhandsvisning.'}
           </p>
         </div>
         <Link href="/" className="rounded-xl border px-4 py-2 text-sm font-semibold"
@@ -153,26 +159,53 @@ export default function EvChargingPlanner({ initialOverview }: {
           <h2 className="text-lg font-bold">Laddläge</h2>
           <span className="rounded-full px-3 py-1 text-xs font-bold"
             style={{ background: 'var(--badge-bg)', color: 'var(--badge-color)' }}>
-            SKUGGLÄGE · 0 skrivningar
+            {live ? (liveHealthy ? 'EVCC · AUTOMATISK PRISSTYRNING' : 'EVCC · STATUS OKÄND')
+              : 'FÖRHANDSVISNING · 0 SKRIVNINGAR'}
           </span>
         </div>
         <p className="mt-2 text-sm" style={muted}>
           Sparat val: {overview.settings.charge_mode === 'deadline'
             ? 'Klar till avresa' : 'Ladda ekonomiskt'}
-          {unsaved ? ' · Du förhandsvisar osparade ändringar' : ''}
+          {unsaved ? ' · Ändringarna är inte sparade' : ''}
         </p>
+        {live && (
+          <div className="mt-3 rounded-xl border p-3 text-sm"
+            style={{ borderColor: 'var(--card-border)', background: 'var(--node-bg)' }}>
+            <strong>Priscontroller: {liveHealthy ? 'aktiv' : 'status kan inte verifieras'}</strong>
+            {overview.controlFresh && overview.control && (
+              <>
+                <p className="mt-1" style={muted}>
+                  Senaste beslut: {overview.control.state}
+                  {overview.control.reason ? ' · ' + overview.control.reason : ''}
+                  {' · '}{timeInSweden(overview.control.timestamp)}
+                </p>
+                <p className="mt-1" style={muted}>
+                  Pågående laddsession: {overview.control.effectiveChargeMode === 'deadline'
+                    ? 'Klar till avresa' : overview.control.effectiveChargeMode === 'economy'
+                      ? 'Ladda ekonomiskt' : 'ingen verifierad'}
+                  {overview.control.effectiveChargeMode === 'deadline'
+                    ? ' · ' + timeInSweden(overview.control.effectiveDepartureAtUtc) : ''}
+                </p>
+                {(overview.settings.revision ?? null) !== overview.control.effectiveSettingsRevision &&
+                  <p className="mt-1 font-semibold">
+                    Ett sparat laddval väntar på att bli tillämpat säkert.
+                  </p>}
+              </>
+            )}
+          </div>
+        )}
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
           <ModeChoice
             value="deadline" selected={candidateMode === 'deadline'}
             onChange={(charge_mode) => setDraft((current) => ({ ...current, charge_mode }))}
             title="Klar till avresa"
-            description="Försök nå 80 % vid avresetiden. Ladda så billigt som möjligt, men använd även dyr el om det behövs för att hinna."
+            description="Försök nå 80 % senast vid avresa. Prisoptimera när det finns marginal, annars ladda direkt med högst 6 A."
           />
           <ModeChoice
             value="economy" selected={candidateMode === 'economy'}
             onChange={(charge_mode) => setDraft((current) => ({ ...current, charge_mode }))}
             title="Ladda ekonomiskt"
-            description="Ingen avresetid. Använd bara billiga timmar och lämpligt solöverskott; det får ta den tid det tar. Stanna vid 80 %."
+            description="Ingen sluttid. Välj billigaste prisperioderna och stanna vid 80 %. Laddningen kan ta längre tid."
           />
         </div>
 
@@ -196,6 +229,7 @@ export default function EvChargingPlanner({ initialOverview }: {
                 style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }} />
               <p className="mt-1 text-xs" style={muted}>
                 Nästa tillfälle vid detta klockslag, med svensk sommar-/vintertid.
+                80 % är ett mål, inte en garanti.
               </p>
             </div>
           ) : (
@@ -220,7 +254,7 @@ export default function EvChargingPlanner({ initialOverview }: {
           <div className="mt-5 flex flex-wrap items-end gap-3">
             <div className="min-w-[180px] flex-1 sm:max-w-[330px]">
               <label htmlFor="ev-admin-key" className="block text-sm font-semibold">
-                Nyckel för skugginställningar
+                Nyckel för laddinställningar
               </label>
               <input id="ev-admin-key" type="password" value={secret} autoComplete="off"
                 onChange={(event) => setSecret(event.target.value)}
@@ -232,15 +266,14 @@ export default function EvChargingPlanner({ initialOverview }: {
               disabled={saving || !secret}
               className="rounded-xl px-5 py-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
               style={{ background: 'var(--logo-color)', color: '#fff' }}>
-              {saving ? 'Sparar…' : 'Spara skugginställningar'}
+              {saving ? 'Sparar…' : (live ? 'Spara laddläge' : 'Spara förhandsvisning')}
             </button>
           </div>
         ) : (
           <p className="mt-5 rounded-xl border p-3 text-[13px]"
             style={{ borderColor: 'var(--card-border)', background: 'var(--node-bg)' }}>
-            Inställningarna är låsta på servern. Du kan förhandsvisa båda
-            laddlägena här, men valet sparas inte förrän separat åtkomst för
-            skugginställningar har konfigurerats.
+            Inställningarna är låsta på servern. Du kan se båda laddlägena,
+            men ändringarna kan inte sparas förrän åtkomst är konfigurerad.
           </p>
         )}
         {notice && <p className="mt-3 text-sm font-semibold" role="status"
@@ -317,7 +350,7 @@ export default function EvChargingPlanner({ initialOverview }: {
           )}
           <p className="mt-3 text-xs" style={muted}>
             Volvos senast ändrat-tid är inte samma sak som tidpunkten för en
-            ny batterimätning. Fysisk laddstyrning är alltid spärrad här.
+            ny batterimätning. Bilens planeringsenergi är empiriskt uppskattad.
           </p>
         </section>
 
@@ -373,7 +406,8 @@ export default function EvChargingPlanner({ initialOverview }: {
             </p>
           )}
           <p className="mt-3 text-xs font-semibold" style={{ color: 'var(--logo-color)' }}>
-            Fysisk laddstyrning avstängd
+            {live ? 'Detta är en historisk förhandsvisning, inte EVCC:s aktuella styrbeslut.'
+              : 'Fysisk laddstyrning avstängd'}
           </p>
         </section>
       </div>

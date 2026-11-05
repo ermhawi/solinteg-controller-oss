@@ -1,6 +1,12 @@
 # ADR 2026-11-04: Driftsätt EVCC-prisstyrning med uttryckligt accepterad empirisk energimodell
 
 **Status:** **Driftsatt på Dell**, 2026-11-04, på grenen `Sundsvall`.
+**Senare komplettering 2026-11-05:** Laddlägena och svensk
+avresetid är nu valbara och skrivbara via
+[Smart laddplanering på webben](adr-2026-11-05-ev-web-live-mode-selection.md).
+Laddavtalet versionsmärks; ändrade val kan inte ärva ett tidigare
+FC10-pausägarskap. Äldre avsnitt om fast låst klockslag avser
+läget före webbuppdateringen.
 Automatisk EVCC 6 A/prispaus via existerande Waveshare-länk och
 `solinteg-ev-price-controller.timer` (**enabled/active**, varje minut).
 `solinteg-dispatch`, `solinteg-poller`, Volvo-statusinsamling och

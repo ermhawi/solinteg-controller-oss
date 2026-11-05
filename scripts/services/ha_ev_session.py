@@ -24,6 +24,7 @@ import urllib.request
 from datetime import datetime, time as dt_time, timedelta, timezone
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
+from uuid import UUID
 
 import common
 
@@ -264,7 +265,7 @@ def load_settings(path: str) -> dict:
             parsed = json.load(source)
         if not isinstance(parsed, dict):
             raise UnsafeSession("EV settings must be an object")
-        if set(parsed) - set(DEFAULT_SETTINGS):
+        if set(parsed) - (set(DEFAULT_SETTINGS) | {"revision"}):
             raise UnsafeSession("unknown EV settings keys")
         raw.update(parsed)
     except FileNotFoundError:
@@ -284,9 +285,18 @@ def load_settings(path: str) -> dict:
         limit = _number(limit)
         if not -200 <= limit <= 3000:
             raise UnsafeSession("invalid maximum price")
-    return {"charge_mode": raw["charge_mode"],
-            "departure_local_time": raw["departure_local_time"],
-            "max_buy_ore_per_kwh": limit}
+    result = {"charge_mode": raw["charge_mode"],
+              "departure_local_time": raw["departure_local_time"],
+              "max_buy_ore_per_kwh": limit}
+    if "revision" in raw:
+        version = raw["revision"]
+        try:
+            if not isinstance(version, str) or str(UUID(version)) != version:
+                raise UnsafeSession("invalid EV settings revision")
+        except ValueError as exc:
+            raise UnsafeSession("invalid EV settings revision") from exc
+        result["revision"] = version
+    return result
 
 
 def next_departure(local_time: str, *, now: datetime) -> datetime:

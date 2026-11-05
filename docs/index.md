@@ -29,6 +29,7 @@
 - [Driftsatt: EV/L3 nätprioritet i live-dispatch, separat bil i Systemstatus och avvecklade shadow-tjänster](architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md)
 - [Bilens billiga prisfönster i Elpriser och förberedelserna för EVCC-prisstyrning](architecture/adr-2026-11-04-ev-price-plan-and-chart.md)
 - [Driftsatt: EVCC:s automatiska prisstyrning med användargodkänd empirisk energimodell och dokumenterade brister](architecture/adr-2026-11-04-ev-price-empirical-live.md)
+- [Driftsatt: välj EVCC-laddläge och svensk avresetid i webben, med revisionsfäktning och spärr vid prispaus](architecture/adr-2026-11-05-ev-web-live-mode-selection.md)
 - [EVCC kabel urkopplad/återansluten: persistent epoch och pausägarskap](evcc-cable-tracking-2026-11-04.md)
 - [EVCC/Volvo AC-kWh per SoC-punkt: genomförd empirisk provkalibrering, ej oberoende mätning](ev-ac-soc-empirical-2026-11-04.md)
 - [Vardag/helg-separerad huslast och avräkning av verifierad EVCC-last i prognosen](architecture/adr-2026-11-04-weekday-ev-load-profile.md)

@@ -5,6 +5,7 @@ export interface EvSettings {
   charge_mode: EvChargeMode;
   departure_local_time: string;
   max_buy_ore_per_kwh: number | null;
+  revision?: string; // server-generated optimistic concurrency / mission generation
 }
 
 export const DEFAULT_EV_SETTINGS: EvSettings = {
@@ -19,15 +20,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 export function parseEvSettings(value: unknown): EvSettings | null {
   if (!isObject(value)) return null;
-  const allowed = new Set(Object.keys(DEFAULT_EV_SETTINGS));
+  const allowed = new Set([...Object.keys(DEFAULT_EV_SETTINGS), 'revision']);
   if (Object.keys(value).some((key) => !allowed.has(key))) return null;
 
   const charge_mode = value.charge_mode ?? DEFAULT_EV_SETTINGS.charge_mode;
   const departure_local_time =
     value.departure_local_time ?? DEFAULT_EV_SETTINGS.departure_local_time;
   const max_buy_ore_per_kwh = value.max_buy_ore_per_kwh ?? null;
+  const revision = value.revision;
 
   if (charge_mode !== 'deadline' && charge_mode !== 'economy') return null;
+  if (revision !== undefined && (typeof revision !== 'string' ||
+    !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(revision))) return null;
   if (
     typeof departure_local_time !== 'string' ||
     !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(departure_local_time)
@@ -40,7 +44,8 @@ export function parseEvSettings(value: unknown): EvSettings | null {
       max_buy_ore_per_kwh > 3000)
   ) return null;
 
-  return { charge_mode, departure_local_time, max_buy_ore_per_kwh };
+  return { charge_mode, departure_local_time, max_buy_ore_per_kwh,
+    ...(revision === undefined ? {} : { revision }) };
 }
 
 export interface EvStatus {
@@ -79,10 +84,24 @@ export interface EvShadow {
   writes: number;
 }
 
+export interface EvControlStatus {
+  timestamp: string;
+  controlEnabled: boolean;
+  state: string;
+  reason: string;
+  ownerState: string;
+  effectiveChargeMode: EvChargeMode | null;
+  effectiveDepartureAtUtc: string | null;
+  effectiveSettingsRevision: string | null;
+}
+
 export interface EvOverview {
   settings: EvSettings;
   settingsError: string | null;
   settingsWriteEnabled: boolean;
+  liveControlConfigured: boolean;
+  control: EvControlStatus | null;
+  controlFresh: boolean;
   status: EvStatus | null;
   statusError: string | null;
   shadow: EvShadow | null;

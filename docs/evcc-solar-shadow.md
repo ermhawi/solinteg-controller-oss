@@ -1,5 +1,12 @@
 # EVCC: två laddlägen, pris och solöverskott (skuggläge, 2026-10-28)
 
+**Aktuell driftsstatus 2026-11-05:** Dokumentet beskriver den äldre
+läsande förstudien. Den automatiska EVCC-prisstyrningen är numera
+aktiv på Dell och lägesval samt avresetid kan sparas i webben.
+Se [live-ADR om inställningar och fäktning](architecture/adr-2026-11-05-ev-web-live-mode-selection.md)
+och [ursprunglig liveprisstyrning](architecture/adr-2026-11-04-ev-price-empirical-live.md).
+Historiska NO-GO-texter nedan är inte aktuell driftsstatus.
+
 **Status 2026-10-28:** isolerade HA-, Waveshare- och prisobservatörer samt en historiktjänst kör nu på Dell. Next.js-sidan och **automatisk** bil-/inverterstyrning är inte driftsatta. På användarens uttryckliga godkännande har **ett manuellt Modbus FC10-kommando** sänkt EVCC:s fysiska PWM-strömtak från cirka 16 A till **6 A**; skrivningen kvitterades och dubbelverifierades med FC03. Alla automatiska tjänster är fortsatt skrivskyddade.
 Följ etappgränserna i `docs/superpowers/specs/2026-10-19-smart-ev-charging-design.md`.
 

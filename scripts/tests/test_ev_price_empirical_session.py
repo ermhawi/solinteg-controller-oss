@@ -121,6 +121,64 @@ class EmpiricalSessionTests(unittest.TestCase):
         self.save_status()
         self.assertFalse(self.ledger.exists())
 
+    def test_web_change_of_departure_replaces_same_cable_mission_only_while_charging(self):
+        initial = self.session()
+        self.assertEqual(initial["departure_at_utc"].hour, 6)
+        value = {
+            "charge_mode": "deadline", "departure_local_time": "10:00",
+            "max_buy_ore_per_kwh": None,
+            "revision": "dfe2a2a2-6a68-4d68-bd43-d451de5e801b",
+        }
+        self.settings.write_text(json.dumps(value))
+        # Until the HA observer has reread settings, the status is stale
+        # relative to new intent and no FC10 may be authorized.
+        self.assertIsNone(self.session())
+        self.data["departure_local_time"] = "10:00"
+        self.save_status()
+        updated = self.session()
+        self.assertIsNotNone(updated)
+        self.assertNotEqual(updated["session_id"], initial["session_id"])
+        self.assertEqual(updated["departure_at_utc"].isoformat(),
+                         "2026-11-05T09:00:00+00:00")
+        self.assertEqual(updated["settings_revision"], value["revision"])
+        self.assertEqual(self.session()["session_id"], updated["session_id"])
+
+    def test_web_switch_to_economy_removes_departure(self):
+        before = self.session()
+        self.settings.write_text(json.dumps({
+            "charge_mode": "economy", "departure_local_time": "07:00",
+            "max_buy_ore_per_kwh": 90,
+            "revision": "75bb2981-40b4-4c05-a048-7e141fb8c73e",
+        }))
+        self.data["charge_mode"] = "economy"
+        self.save_status()
+        after = self.session()
+        self.assertIsNotNone(after)
+        self.assertNotEqual(after["session_id"], before["session_id"])
+        self.assertEqual(after["charge_mode"], "economy")
+        self.assertIsNone(after["departure_at_utc"])
+        self.assertEqual(after["max_buy_ore_per_kwh"], 90)
+
+    def test_web_change_cannot_inherit_an_owned_pause(self):
+        import ev_price_pause_owner as ownership
+        original = self.session()
+        record = ownership.new_owner(
+            session=original, cable=cable.read(self.cable), now=NOW,
+            owner_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        ownership.write_owner(self.status.parent / "ev-price-pause-owner.json",
+                              {**record, "verified_fc10_pause": True,
+                               "state": "owned"})
+        self.settings.write_text(json.dumps({
+            "charge_mode": "economy", "departure_local_time": "07:00",
+            "max_buy_ore_per_kwh": None,
+            "revision": "3b532005-eaf2-4d41-b231-67b1b5dbca39",
+        }))
+        self.data["charge_mode"] = "economy"
+        self.save_status()
+        self.assertIsNone(self.session())
+        self.assertEqual(ownership.read_owner(
+            self.status.parent / "ev-price-pause-owner.json")["state"], "owned")
+
     def test_epoch_or_tracker_file_replacement_cannot_reuse_old_session(self):
         first = self.session()
         self.assertIsNotNone(first)

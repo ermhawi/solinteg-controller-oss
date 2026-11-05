@@ -99,11 +99,74 @@ describe('shared EV mode configuration', () => {
       const value = { charge_mode: 'economy' as const,
         departure_local_time: '07:00', max_buy_ore_per_kwh: 89 };
       await saveEvSettings(value);
-      expect(JSON.parse(await readFile(process.env.EV_SETTINGS_PATH, 'utf8')))
-        .toEqual(value);
-      await saveEvSettings({ ...value, charge_mode: 'deadline' });
+      const original = JSON.parse(await readFile(process.env.EV_SETTINGS_PATH, 'utf8'));
+      expect(original).toMatchObject(value);
+      expect(original.revision).toMatch(/^[0-9a-f-]{36}$/);
+      await saveEvSettings({ ...value, charge_mode: 'deadline', revision: original.revision });
       const mode = JSON.parse(await readFile(process.env.EV_SETTINGS_PATH, 'utf8'));
       expect(mode.charge_mode).toBe('deadline');
+      expect(mode.revision).not.toBe(original.revision);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses stale browser revisions and preserves the newer settings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ev-ui-version-'));
+    try {
+      process.env.EV_SETTINGS_PATH = join(dir, 'settings.json');
+      const first = await saveEvSettings({
+        charge_mode: 'economy', departure_local_time: '07:00',
+        max_buy_ore_per_kwh: null,
+      });
+      await expect(saveEvSettings({
+        charge_mode: 'deadline', departure_local_time: '08:00',
+        max_buy_ore_per_kwh: null,
+      })).rejects.toThrow(/annan flik/);
+      expect((await readEvOverview()).settings.revision).toBe(first.revision);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects live mode changes while a verified price pause exists', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ev-ui-pause-'));
+    try {
+      const now = new Date().toISOString();
+      process.env.EV_LIVE_SETTINGS_ENABLED = '1';
+      process.env.EV_SETTINGS_PATH = join(dir, 'settings.json');
+      process.env.EV_PRICE_STATUS_PATH = join(dir, 'control.json');
+      process.env.EVCC_READONLY_PATH = join(dir, 'evcc.json');
+      await writeFile(process.env.EV_PRICE_STATUS_PATH, JSON.stringify({
+        schema_version: 1, source: 'evcc_price_controller_status',
+        timestamp: now, control_enabled: true, state: 'no_change',
+        reason: '', writes: 0, owner_state: 'owned',
+      }));
+      await writeFile(process.env.EVCC_READONLY_PATH, JSON.stringify({
+        source: 'waveshare_evcc_fc03_readonly', timestamp: now,
+        read_ok: true, writes: 0, physical_control_eligible: false,
+        state: 'B2', configured_pwm_raw: 1000, pilot_pwm_raw: 267,
+        channel_currents_a: [0, 0.1, 0],
+      }));
+      const candidate = { charge_mode: 'economy' as const,
+        departure_local_time: '07:00', max_buy_ore_per_kwh: null };
+      await expect(saveEvSettings(candidate)).rejects.toThrow(/pausstatus/);
+      expect((await readEvOverview()).settings).toEqual(DEFAULT_EV_SETTINGS);
+      await writeFile(process.env.EV_PRICE_STATUS_PATH, JSON.stringify({
+        schema_version: 1, source: 'evcc_price_controller_status',
+        timestamp: now, control_enabled: true, state: 'no_change',
+        reason: '', writes: 0, owner_state: 'released',
+      }));
+      await expect(saveEvSettings(candidate)).rejects.toThrow(/pausad/);
+      await writeFile(process.env.EVCC_READONLY_PATH, JSON.stringify({
+        source: 'waveshare_evcc_fc03_readonly', timestamp: now,
+        read_ok: true, writes: 0, physical_control_eligible: false,
+        state: 'C2', configured_pwm_raw: 100, pilot_pwm_raw: 100,
+        channel_currents_a: [0, 6, 0],
+      }));
+      const saved = await saveEvSettings(candidate);
+      expect(saved.charge_mode).toBe('economy');
+      expect(saved.revision).toMatch(/^[a-f0-9-]{36}$/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
