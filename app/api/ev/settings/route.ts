@@ -1,17 +1,23 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { EvSettingsConflict, EvSettingsUnsafe, evSettingsLiveConfigured,
   evSettingsWriteEnabled, readEvOverview, saveEvSettings } from '@/lib/ev-state';
 import { parseEvSettings } from '@/lib/ev-settings';
 
-function authorized(request: Request): boolean {
-  if (!evSettingsWriteEnabled()) return false;
-  const expected = process.env.EV_SHADOW_SETTINGS_WRITE_TOKEN ?? '';
-  const authorization = request.headers.get('authorization');
-  if (!authorization?.startsWith('Bearer ')) return false;
-  const provided = authorization.slice('Bearer '.length);
-  // Hash before comparison so timingSafeEqual receives equal-size buffers.
-  const hash = (text: string) => createHash('sha256').update(text).digest();
-  return timingSafeEqual(hash(expected), hash(provided));
+// The public /solinteg route and its APIs require GitHub OAuth2 at Traefik.
+// Direct access is trusted only from the internal network. Reject browser
+// cross-origin mutations; never trust a forwarded identity header as auth.
+function sameOrigin(request: Request): boolean {
+  if (request.headers.get('sec-fetch-site') === 'cross-site') return false;
+  const origin = request.headers.get('origin');
+  if (!origin) return true; // Internal scripts/curl without browser Origin.
+  try {
+    const source = new URL(origin);
+    const host = request.headers.get('x-forwarded-host') ||
+      request.headers.get('host') || new URL(request.url).host;
+    return (source.protocol === 'http:' || source.protocol === 'https:') &&
+      source.host === host;
+  } catch {
+    return false;
+  }
 }
 
 export async function PUT(request: Request) {
@@ -21,9 +27,9 @@ export async function PUT(request: Request) {
       { status: 403, headers: { 'Cache-Control': 'no-store' } },
     );
   }
-  if (!authorized(request)) {
+  if (!sameOrigin(request)) {
     return Response.json(
-      { error: 'Behörighet saknas för att spara laddinställningar' },
+      { error: 'Laddinställningar kan bara ändras från Solintegs egen webbplats' },
       { status: 403, headers: { 'Cache-Control': 'no-store' } },
     );
   }

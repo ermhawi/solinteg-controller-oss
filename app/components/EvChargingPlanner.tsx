@@ -44,7 +44,6 @@ export default function EvChargingPlanner({ initialOverview }: {
   const [priceText, setPriceText] = useState(
     initialOverview.settings.max_buy_ore_per_kwh?.toString() ?? '',
   );
-  const [secret, setSecret] = useState('');
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,10 +73,6 @@ export default function EvChargingPlanner({ initialOverview }: {
       setError('Servern tillåter ännu inte ändring av laddinställningar.');
       return;
     }
-    if (!secret) {
-      setError('Ange nyckeln för laddinställningarna för att spara.');
-      return;
-    }
     const candidate: EvSettings = {
       ...draft,
       max_buy_ore_per_kwh: priceText.trim() === '' ? null : Number(priceText),
@@ -94,10 +89,7 @@ export default function EvChargingPlanner({ initialOverview }: {
         method: 'PUT',
         credentials: 'same-origin',
         cache: 'no-store',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer ' + secret,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(candidate),
       });
       const payload = await response.json() as {
@@ -114,7 +106,6 @@ export default function EvChargingPlanner({ initialOverview }: {
       setNotice(overview.liveControlConfigured
         ? 'Sparat. Laddcontrollern tar över valet vid nästa säkra beslut; ingen omedelbar laddstart sker.'
         : 'Sparat för förhandsvisning. Ingen fysisk laddstyrning aktiverades.');
-      setSecret('');
       await refresh();
     } catch {
       setError('Kunde inte nå Solintegs inställnings-API.');
@@ -252,18 +243,8 @@ export default function EvChargingPlanner({ initialOverview }: {
 
         {overview.settingsWriteEnabled ? (
           <div className="mt-5 flex flex-wrap items-end gap-3">
-            <div className="min-w-[180px] flex-1 sm:max-w-[330px]">
-              <label htmlFor="ev-admin-key" className="block text-sm font-semibold">
-                Nyckel för laddinställningar
-              </label>
-              <input id="ev-admin-key" type="password" value={secret} autoComplete="off"
-                onChange={(event) => setSecret(event.target.value)}
-                placeholder="Ange lokal administratörsnyckel"
-                className="mt-2 w-full rounded-xl border px-4 py-3 text-sm"
-                style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }} />
-            </div>
             <button type="button" onClick={() => { void save(); }}
-              disabled={saving || !secret}
+              disabled={saving}
               className="rounded-xl px-5 py-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50"
               style={{ background: 'var(--logo-color)', color: '#fff' }}>
               {saving ? 'Sparar…' : (live ? 'Spara laddläge' : 'Spara förhandsvisning')}

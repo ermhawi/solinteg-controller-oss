@@ -41,10 +41,9 @@ export function evSettingsLiveConfigured(): boolean {
 }
 
 export function evSettingsWriteEnabled(): boolean {
-  return (
-    process.env.EV_SHADOW_SETTINGS_WRITES_ENABLED === '1' &&
-    (process.env.EV_SHADOW_SETTINGS_WRITE_TOKEN?.length ?? 0) >= 32
-  );
+  // Mutability gate, NOT authentication: external OAuth2 is enforced by Traefik
+  // and the direct Next.js port is restricted to trusted internal networks.
+  return process.env.EV_SETTINGS_WRITES_ENABLED === '1';
 }
 
 export async function readEvOverview(): Promise<EvOverview> {

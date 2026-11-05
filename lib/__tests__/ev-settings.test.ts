@@ -44,15 +44,13 @@ describe('shared EV mode configuration', () => {
     }
   });
 
-  it('never enables writes with a missing or short secret', () => {
-    process.env.EV_SHADOW_SETTINGS_WRITES_ENABLED = '1';
+  it('gates writes on explicit local opt-in, not an extra admin secret', () => {
+    delete process.env.EV_SETTINGS_WRITES_ENABLED;
     delete process.env.EV_SHADOW_SETTINGS_WRITE_TOKEN;
     expect(evSettingsWriteEnabled()).toBe(false);
-    process.env.EV_SHADOW_SETTINGS_WRITE_TOKEN = 'short';
-    expect(evSettingsWriteEnabled()).toBe(false);
-    process.env.EV_SHADOW_SETTINGS_WRITE_TOKEN = 'x'.repeat(32);
+    process.env.EV_SETTINGS_WRITES_ENABLED = '1';
     expect(evSettingsWriteEnabled()).toBe(true);
-    process.env.EV_SHADOW_SETTINGS_WRITES_ENABLED = '0';
+    process.env.EV_SETTINGS_WRITES_ENABLED = '0';
     expect(evSettingsWriteEnabled()).toBe(false);
   });
 

@@ -8,12 +8,20 @@ eller `economy` (billigaste tillåtna perioder utan sluttid).
 priscontrollern till samma, särskilt begränsade katalog
 `/opt/solinteg/ev-charge-settings/settings.json`; ingen webbläsare
 kan skriva EVCC-pausägarfiler eller utfärda en direkt FC10.
-Autentiserade, versionsskyddade PUT sparar endast nytt val;
+Via GitHub OAuth2 (publikt) eller betrott LAN kan användaren
+spara versionsskyddade PUT-anrop som endast ändrar nytt val;
 controllerstatus och färsk 6 A-/kabelstatus måste vara säker.
 En redan prispausad bil får inte automatiskt återstartas efter
 modebyte. Ursprungligt `deadline/07:00` bevarades i drift.
-Privat autentiseringsnyckel finns endast i
-`/etc/solinteg/ev-web-settings.env`, aldrig i Git.
+Det krävs **ingen separat administratörsnyckel**.
+Publik väg är skyddad med Traefiks `oauth2-chain` och
+GitHub-provider; direkt Next-port 3007 begränsas med
+`solinteg-web-internal-only.service` (nftables) till LAN,
+Kubernetes, loopback och Tailscale. Webbens privata
+`/etc/solinteg/ev-web-settings.env` innehåller endast
+`EV_SETTINGS_WRITES_ENABLED=1` för skrivfunktionen,
+inte autentiseringsuppgifter.
+[Åtkomstgränsens ADR och verifiering](../docs/architecture/adr-2026-11-05-solinteg-github-oauth-internal-access.md).
 [Livedesign, begränsningar och rollback](../docs/architecture/adr-2026-11-05-ev-web-live-mode-selection.md).
 
 **Historiska drift- och kodnoteringar nedan** kan avse läget före

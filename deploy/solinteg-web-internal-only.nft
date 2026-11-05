@@ -1,0 +1,8 @@
+# Solinteg Next.js port 3007: internal networks only.
+# Public traffic must enter through Traefik's GitHub OAuth2 forwardAuth.
+# Dedicated nft table; never flush K3s/Docker/other firewall tables.
+add table inet solinteg_web_internal
+flush table inet solinteg_web_internal
+add chain inet solinteg_web_internal input { type filter hook input priority -50; policy accept; }
+add rule inet solinteg_web_internal input meta nfproto ipv4 tcp dport 3007 ip saddr != {127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10} counter drop
+add rule inet solinteg_web_internal input meta nfproto ipv6 tcp dport 3007 ip6 saddr != {::1/128,fc00::/7,fe80::/10} counter drop

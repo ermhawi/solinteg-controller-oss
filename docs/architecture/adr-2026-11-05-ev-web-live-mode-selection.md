@@ -8,6 +8,13 @@ Ingen ändring av husbatteriets dispatcher, Modbus-broker, fysisk
 6 A-gräns, Volvo-appens schema, växelriktarens EMS eller
 laddboxens hårdvarukonfiguration.
 
+**Uppdaterad säkerhetsgräns 2026-11-05:** Den separata
+administratörsnyckeln har tagits bort. Utifrån kräver hela
+applikationen och API:erna GitHub OAuth2 vid Traefik; direkt
+port 3007 tillåts endast från betrodda interna nät via en
+beständig nftables-regel. LAN behöver ingen ytterligare
+inloggning. Se [aktuell åtkomst-ADR](adr-2026-11-05-solinteg-github-oauth-internal-access.md).
+
 ## Operatörens beslut och avsedd funktion
 
 Via den befintliga sidan **`/solinteg/ev` / Smart laddplanering**
@@ -55,13 +62,18 @@ Webbens systemd-miljö får via en privat
 `/etc/solinteg/ev-web-settings.env` (root **0600**)
 exakt `EV_SETTINGS_PATH`, HA-statusens och EVCC-
 observatörens skrivskyddade sökvägar samt två
-uttryckliga opt-in-flaggor.
+uttryckliga opt-in-flaggor. Den ursprungliga
+administratörstoken är **borttagen** efter införandet
+av den [LAN-begränsade GitHub OAuth-gränsen](adr-2026-11-05-solinteg-github-oauth-internal-access.md).
 
 HTTP **PUT `/solinteg/api/ev/settings`** är förvalt
-stängt och kräver ett långt, separat, lokalt
-administratörs-Bearer-värde som kontrolleras med
-konstanttidsjämförelse. Inget lösenord, VIN,
-fysisk laddboxadress eller privat env-värde
+stängt och aktiveras med `EV_SETTINGS_WRITES_ENABLED=1`.
+Detta är en **funktionsflagga, inte en autentiseringsnyckel**.
+Publik åtkomst och samtliga API:er skyddas av GitHub OAuth2 i
+Traefik; LAN och Kubernetes är betrodda nät. Port 3007 har
+separat inkommande nftables-filter för övriga nätkällor.
+Webbläsarens skrivande anrop måste vara same-origin, annars
+svarar API:t 403. Inget lösenord, VIN eller privat env-värde
 finns i Git, HTML eller läsbart GET-svar.
 Skriv-API:t avvisar okända JSON-fält, invalid
 tid/pristak, en gammal `revision` från en annan
@@ -178,10 +190,12 @@ har verifierats med tidigare föreskriven
 krypterad USB-backup och återställningsprov.
 
 För att spärra **nya** webbändringar utan
-att påverka befintlig EVCC-pristimer: ta bort
-eller stäng av webbens privata
-`EV_SHADOW_SETTINGS_WRITES_ENABLED=1` och
-starta om **enbart** `solinteg-web`.
+att påverka befintlig EVCC-pristimer: sätt
+`EV_SETTINGS_WRITES_ENABLED=0` i webbens privata
+miljö och starta om **enbart** `solinteg-web`.
+Det behövs ingen extra administratörsnyckel;
+publik GitHub OAuth2 och LAN-begränsningen gäller
+även när inställningsskrivning är aktiverad.
 För full rollback: säkra de aktuella
 fysiska EVCC-registren först, bevara alla
 prispausägartombstones, återställ tidigare
