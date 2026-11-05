@@ -24,6 +24,14 @@ inte autentiseringsuppgifter.
 [Åtkomstgränsens ADR och verifiering](../docs/architecture/adr-2026-11-05-solinteg-github-oauth-internal-access.md).
 [Livedesign, begränsningar och rollback](../docs/architecture/adr-2026-11-05-ev-web-live-mode-selection.md).
 
+**Avslutade EV-laddsessioner (2026-11-05):** Den befintliga EV-historikern
+lagrar bekräftade kabelurkopplingar och senaste giltiga Volvo API-SoC
+före urkoppling i en separat beständig SQLite-tabell. Webben visar
+`Senaste avslutade laddsession` från en sanerad, grupp-läsbar 0640-JSON;
+privata mät- och ägardata blir inte webbtillgängliga. Priscontrollern
+skiljer verifierad frånkoppling från passerad avresetid utan att ändra
+fysisk FC10-styrning. Se [ADR och rollback](../docs/architecture/adr-2026-11-05-ev-unplug-end-and-price-status.md).
+
 **Historiska drift- och kodnoteringar nedan** kan avse läget före
 EVCC:s aktiva prisstyrning och det nu driftsatta webbvalet.
 

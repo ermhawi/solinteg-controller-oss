@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile, rename, unlink, lstat } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { EvOverview, EvControlStatus, EvSettings, EvShadow, EvStatus } from './ev-settings';
+import type { EvOverview, EvControlStatus, EvEndedSession, EvSettings, EvShadow, EvStatus } from './ev-settings';
 import { DEFAULT_EV_SETTINGS, parseEvSettings } from './ev-settings';
 
 function settingsPath() {
@@ -76,6 +76,40 @@ export async function readEvOverview(): Promise<EvOverview> {
       effectiveSettingsRevision: stringValue(c.effective_settings_revision),
     };
   }
+  const rawEnd = await jsonFile(
+    process.env.EV_LAST_CHARGE_SESSION_PATH ||
+      '/opt/solinteg/ev-shadow-runtime/var/ev-last-charge-session.json',
+  );
+  const end = record(rawEnd.data);
+  const endAt = stringValue(end?.confirmedAtUtc);
+  const chargingAt = stringValue(end?.lastChargingAtUtc);
+  const endSoc = end?.socPct;
+  const apiAt = end?.socApiReceivedAtUtc;
+  const socChangedAt = end?.socOemLastChangedAtUtc;
+  const timeValid = (t: string): boolean => Number.isFinite(Date.parse(t));
+  const endValid = end?.source === 'evcc_confirmed_disconnect_volvo_api_soc' &&
+    end.quality === 'polled_cable_and_api_reported_soc_not_bms' &&
+    endAt !== null && chargingAt !== null &&
+    timeValid(endAt) && timeValid(chargingAt) &&
+    Date.parse(chargingAt) <= Date.parse(endAt) &&
+    (endSoc === null ||
+      (typeof endSoc === 'number' && Number.isFinite(endSoc) &&
+        endSoc >= 0 && endSoc <= 100)) &&
+    (endSoc === null
+      ? apiAt === null && socChangedAt === null
+      : typeof apiAt === 'string' && typeof socChangedAt === 'string' &&
+        timeValid(apiAt) && timeValid(socChangedAt) &&
+        Date.parse(socChangedAt) <= Date.parse(apiAt) &&
+        Date.parse(apiAt) <= Date.parse(endAt));
+  const lastEndedSession: EvEndedSession | null = endValid && endAt && chargingAt
+    ? {
+        confirmedAtUtc: endAt, lastChargingAtUtc: chargingAt,
+        socPct: endSoc as number | null,
+        socApiReceivedAtUtc: apiAt as string | null,
+        socOemLastChangedAtUtc: socChangedAt as string | null,
+        quality: 'polled_cable_and_api_reported_soc_not_bms',
+      }
+    : null;
   const rawStatus = await jsonFile(
     process.env.EV_STATUS_PATH || '/opt/solinteg/ev-session-status.json',
   );
@@ -142,6 +176,7 @@ export async function readEvOverview(): Promise<EvOverview> {
     liveControlConfigured: evSettingsLiveConfigured(),
     control,
     controlFresh: fresh(control?.timestamp ?? null, 125_000),
+    lastEndedSession,
     status,
     statusError: rawStatus.error,
     shadow,

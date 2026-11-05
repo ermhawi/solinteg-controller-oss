@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import common
+import ev_charge_end
 
 UTC = timezone.utc
 INVERTER_MAX_AGE_S = 120
@@ -464,6 +465,17 @@ def main() -> None:
     while True:
         record = capture()
         append(path, record, retention_days=days, prune=iteration % 120 == 0)
+        try:
+            ev_charge_end.record_and_publish(
+                path,
+                os.environ.get("EVCC_CABLE_TRACK_PATH",
+                    "/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json"),
+                os.environ.get("EV_LAST_CHARGE_SESSION_PATH",
+                    "/opt/solinteg/ev-shadow-runtime/var/ev-last-charge-session.json"),
+                now=datetime.now(UTC))
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            # Optional UI/history event; never interrupt the existing sampler.
+            print(f"EV charge-end export unavailable: {type(exc).__name__}", flush=True)
         if iteration % 4 == 0:
             try:
                 publish_soc_timeline(path, os.environ.get(

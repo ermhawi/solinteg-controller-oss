@@ -15,6 +15,12 @@ port 3007 tillåts endast från betrodda interna nät via en
 beständig nftables-regel. LAN behöver ingen ytterligare
 inloggning. Se [aktuell åtkomst-ADR](adr-2026-11-05-solinteg-github-oauth-internal-access.md).
 
+**Senare komplettering 2026-11-05:** Sidan får en separat beständig
+historikpost om senast bekräftade urkoppling och Volvo-SoC vid detta
+tillfälle; den visas aldrig som aktuell SoC. Priscontrollern visar
+orsakerna frånkopplad respektive passerad avresetid.
+Se [händelse-ADR](adr-2026-11-05-ev-unplug-end-and-price-status.md).
+
 ## Operatörens beslut och avsedd funktion
 
 Via den befintliga sidan **`/solinteg/ev` / Smart laddplanering**

@@ -126,6 +126,34 @@ def choose_action(*, session: dict | None, price: PriceDecision,
         return no("invalid EVCC or grid snapshot")
 
 
+def missing_session_reason(*, now: datetime, settings_path: Path,
+                           cable_path: Path, ledger_path: Path) -> str:
+    """Explain a verified missing mission, without treating the ledger as control authority."""
+    try:
+        cable = cable_tracker.read(cable_path)
+        if (cable is not None and cable.get("status") == "disconnected"
+                and cable.get("observed_state") in ("A1", "A2")
+                and cable.get("candidate_status") is None):
+            sampled = datetime.fromisoformat(cable["last_sample_at_utc"].replace("Z", "+00:00"))
+            if sampled.tzinfo is not None and 0 <= (now - sampled).total_seconds() <= 90:
+                return "Bilen är frånkopplad; inga laddkommandon skickas"
+    except (OSError, ValueError, TypeError, KeyError, cable_tracker.CableObservationError):
+        pass
+
+    try:
+        settings = load_settings(str(settings_path))
+        ledger = empirical._ledger_read(ledger_path)
+        if (ledger is not None and settings["charge_mode"] == "deadline"
+                and ledger.get("charge_mode") == "deadline"
+                and ledger.get("settings_revision") == settings.get("revision")):
+            deadline = datetime.fromisoformat(ledger["departure_at_utc"].replace("Z", "+00:00"))
+            if deadline.tzinfo is not None and 0 <= (now - deadline).total_seconds() <= 72 * 3600:
+                return "Avresetiden har passerat; den tidigare laddsessionen har löpt ut"
+    except (OSError, ValueError, TypeError, KeyError, empirical.EmpiricalSessionError):
+        pass
+    return "no calibrated fresh EV session"
+
+
 def run_once(*, now: datetime | None = None) -> dict:
     """One decision, one FC10 at most; durable owner changes precede writes."""
     now = now or datetime.now(timezone.utc)
@@ -183,7 +211,13 @@ def run_once(*, now: datetime | None = None) -> dict:
 
             if session is None:
                 revoke("verified vehicle session lost")
-                return {"state": "inhibited", "writes": 0, "reason": "no calibrated fresh EV session"}
+                return {"state": "inhibited", "writes": 0,
+                        "reason": missing_session_reason(
+                            now=now, settings_path=settings_path,
+                            cable_path=Path(os.environ.get("EVCC_CABLE_TRACK_PATH",
+                                "/opt/solinteg/ev-shadow-runtime/var/evcc-cable-state.json")),
+                            ledger_path=Path(os.environ.get("EV_PRICE_EMPIRICAL_LEDGER_PATH",
+                                "/opt/solinteg/ev-shadow-runtime/var/ev-price-empirical-session.json")))}
             smart_state, smart_reason = smart.read_smart_charging(
                 os.environ.get("EV_VOLVO_SMART_CHARGING_SNAPSHOT_PATH", str(SMART_CHARGING)),
                 now=now, expected_vin_sha256=os.environ.get("EV_VOLVO_TARGET_VIN_SHA256"))

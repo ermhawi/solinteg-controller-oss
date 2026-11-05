@@ -72,6 +72,44 @@ class PriceControllerTests(unittest.TestCase):
                 self.assertEqual(
                     self.choose(evcc=row, price_pause_owned=True).action, "inhibited")
 
+    def test_missing_session_reason_prefers_confirmed_unplug(self):
+        now = datetime(2026, 11, 5, 7, 30, tzinfo=timezone.utc)
+        cable = {"status": "disconnected", "observed_state": "A1",
+                 "candidate_status": None, "last_sample_at_utc": now.isoformat()}
+        from unittest.mock import patch
+        with patch.object(ctl.cable_tracker, "read", return_value=cable):
+            reason = ctl.missing_session_reason(
+                now=now, settings_path=Path("/unused"),
+                cable_path=Path("/unused"), ledger_path=Path("/unused"))
+        self.assertIn("frånkopplad", reason)
+
+    def test_missing_session_reason_explains_expired_departure(self):
+        now = datetime(2026, 11, 5, 7, 30, tzinfo=timezone.utc)
+        settings = {"charge_mode": "deadline", "departure_local_time": "07:00",
+                    "max_buy_ore_per_kwh": None, "revision": None}
+        ledger = {"charge_mode": "deadline", "settings_revision": None,
+                  "departure_at_utc": "2026-11-05T06:00:00+00:00"}
+        from unittest.mock import patch
+        with patch.object(ctl.cable_tracker, "read", return_value=None), \
+             patch.object(ctl, "load_settings", return_value=settings), \
+             patch.object(ctl.empirical, "_ledger_read", return_value=ledger):
+            reason = ctl.missing_session_reason(
+                now=now, settings_path=Path("/unused"),
+                cable_path=Path("/unused"), ledger_path=Path("/unused"))
+            self.assertIn("Avresetiden", reason)
+            self.assertEqual(ctl.missing_session_reason(
+                now=datetime(2026, 11, 5, 5, 30, tzinfo=timezone.utc),
+                settings_path=Path("/unused"),
+                cable_path=Path("/unused"),
+                ledger_path=Path("/unused")),
+                "no calibrated fresh EV session")
+            ledger["settings_revision"] = "old"
+            self.assertEqual(ctl.missing_session_reason(
+                now=now, settings_path=Path("/unused"),
+                cable_path=Path("/unused"),
+                ledger_path=Path("/unused")),
+                "no calibrated fresh EV session")
+
     def test_no_verified_session_never_writes(self):
         self.assertEqual(self.choose(session=None).action, "inhibited")
         self.assertEqual(self.choose(price=PriceDecision(0, None, None, "missing", charge_mode="economy")).action,

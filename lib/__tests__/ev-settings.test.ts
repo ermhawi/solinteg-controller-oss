@@ -170,6 +170,45 @@ describe('shared EV mode configuration', () => {
     }
   });
 
+  it('keeps the last confirmed unplug SoC separate from the newer Volvo SoC', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ev-ui-ended-'));
+    try {
+      process.env.EV_SETTINGS_PATH = join(dir, 'settings.json');
+      process.env.EV_LAST_CHARGE_SESSION_PATH = join(dir, 'ended.json');
+      process.env.EV_STATUS_PATH = join(dir, 'status.json');
+      const confirmed = '2026-11-05T06:10:41+00:00';
+      const ended = {
+        source: 'evcc_confirmed_disconnect_volvo_api_soc',
+        quality: 'polled_cable_and_api_reported_soc_not_bms',
+        confirmedAtUtc: confirmed,
+        lastChargingAtUtc: '2026-11-05T06:09:08+00:00',
+        socPct: 77,
+        socApiReceivedAtUtc: '2026-11-05T06:08:34+00:00',
+        socOemLastChangedAtUtc: '2026-11-05T06:07:56+00:00',
+      };
+      await writeFile(process.env.EV_LAST_CHARGE_SESSION_PATH, JSON.stringify(ended));
+      await writeFile(process.env.EV_STATUS_PATH, JSON.stringify({
+        source: 'home_assistant', checked_at_utc: new Date().toISOString(),
+        battery_soc_pct: 74, connected: false,
+      }));
+      const value = await readEvOverview();
+      expect(value.status?.battery_soc_pct).toBe(74);
+      expect(value.lastEndedSession?.socPct).toBe(77);
+      expect(value.lastEndedSession?.confirmedAtUtc).toBe(confirmed);
+
+      await writeFile(process.env.EV_LAST_CHARGE_SESSION_PATH, JSON.stringify({
+        ...ended, socApiReceivedAtUtc: '2026-11-05T07:12:00+00:00',
+      }));
+      expect((await readEvOverview()).lastEndedSession).toBeNull();
+      await writeFile(process.env.EV_LAST_CHARGE_SESSION_PATH, JSON.stringify({
+        ...ended, socPct: 117,
+      }));
+      expect((await readEvOverview()).lastEndedSession).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('prefers HA price shadow while keeping independently observed API and last-change times', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ev-ui-scenario-'));
     try {

@@ -16,6 +16,18 @@ function timeInSweden(iso: string | null | undefined): string {
 
 const muted: React.CSSProperties = { color: 'var(--text-muted)' };
 
+function controllerStateLabel(state: string): string {
+  switch (state) {
+    case 'inhibited': return 'Styrning spärrad';
+    case 'no_change': return 'Ingen ändring';
+    case 'pause': return 'Prispaus';
+    case 'resume': return 'Laddning återupptagen';
+    case 'disabled': return 'Avstängd';
+    case 'error': return 'Fel';
+    default: return state;
+  }
+}
+
 function ModeChoice({ value, selected, title, description, onChange }: {
   value: EvChargeMode; selected: boolean; title: string; description: string;
   onChange: (next: EvChargeMode) => void;
@@ -166,7 +178,7 @@ export default function EvChargingPlanner({ initialOverview }: {
             {overview.controlFresh && overview.control && (
               <>
                 <p className="mt-1" style={muted}>
-                  Senaste beslut: {overview.control.state}
+                  Senaste beslut: {controllerStateLabel(overview.control.state)}
                   {overview.control.reason ? ' · ' + overview.control.reason : ''}
                   {' · '}{timeInSweden(overview.control.timestamp)}
                 </p>
@@ -183,6 +195,22 @@ export default function EvChargingPlanner({ initialOverview }: {
                   </p>}
               </>
             )}
+          </div>
+        )}
+        {overview.lastEndedSession && (
+          <div className="mt-3 rounded-xl border p-3 text-sm"
+            style={{ borderColor: 'var(--card-border)', background: 'var(--node-bg)' }}>
+            <strong>Senaste avslutade laddsession</strong>
+            <p className="mt-1">
+              Frånkopplad {timeInSweden(overview.lastEndedSession.confirmedAtUtc)}
+              {overview.lastEndedSession.socPct !== null
+                ? ' · ' + overview.lastEndedSession.socPct + ' %' : ' · SoC okänd'}
+            </p>
+            <p className="mt-1 text-xs" style={muted}>
+              EVCC bekräftade urkopplingen vid denna observation, inte exakt när
+              kabeln drogs ur. SoC kommer från Volvos senaste giltiga API-svar
+              före frånkopplingen, inte från en verifierad BMS-mätning.
+            </p>
           </div>
         )}
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">

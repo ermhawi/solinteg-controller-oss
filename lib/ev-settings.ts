@@ -95,6 +95,15 @@ export interface EvControlStatus {
   effectiveSettingsRevision: string | null;
 }
 
+export interface EvEndedSession {
+  confirmedAtUtc: string;
+  lastChargingAtUtc: string;
+  socPct: number | null;
+  socApiReceivedAtUtc: string | null;
+  socOemLastChangedAtUtc: string | null;
+  quality: 'polled_cable_and_api_reported_soc_not_bms';
+}
+
 export interface EvOverview {
   settings: EvSettings;
   settingsError: string | null;
@@ -102,6 +111,7 @@ export interface EvOverview {
   liveControlConfigured: boolean;
   control: EvControlStatus | null;
   controlFresh: boolean;
+  lastEndedSession: EvEndedSession | null;
   status: EvStatus | null;
   statusError: string | null;
   shadow: EvShadow | null;
