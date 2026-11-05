@@ -40,6 +40,28 @@ nät-/sol-/batteriflöde.
 **Hus exklusive bil** och en separat EV-effekt från Ict2.
 Elnät och total energimätning ändras inte.
 
+**Layoutjustering 2026-11-05 (Systemstatus):** Bilen är flyttad till
+samma lodräta linje som Nät och i höjdled mitt emellan Sol och Hus:
+i `PowerFlowCard.tsx` är bilens övre vänstra hörn `(248, 70)` i
+ett `360 × 294`-koordinatsystem. Bil och Nät delar x-centrum `288`,
+och bilens y-centrum `103` ligger mitt emellan Sol (`57`) och Hus (`149`).
+Både Hus→Bil (diagonal) och Nät→Bil (lodrät) har ändrade SVG-ankare.
+Det kortare diagrammet skalas proportionerligt som tidigare; den
+separata mobilöversikten är oförändrad. Detta är **endast layout**:
+beräkningar, indikatorernas riktning och fysisk styrning ändras inte.
+
+**Verifierat och driftsatt på Dell 2026-11-05:** Ett isolerat Next.js 16.2.10-
+produktionsbygge med endast `PowerFlowCard.tsx` som källändring är
+installerat och tidigare webb-bunt bevarad för rollback. Playwright
+bekräftade desktop-centrumen Bil `(288,103)`, Nät `(288,241)`, Sol
+`(180,57)` och Hus `(180,149)` samt båda förnyade pilankarna.
+På mobil (390 px viewport, diagram 356 px) ligger elementen kvar i
+samma relativa geometri och sidan saknar horisontellt överflöde.
+Inga systemd-enheter utöver den befintliga webbservern startades om,
+och inga fysiska EVCC-/inverterkommandon gjordes. Rotägd privat
+rollback finns under
+`/var/lib/solinteg-evshadow-rollback/ui-car-layout-20261105/`.
+
 Pilarna till bilen är **ömsesidigt uteslutande statusindikatorer**:
 - `Nät → Bil` endast om L3-nätimport kan täcka beräknad EV-effekt
   inom 125 W tolerans för nominell spänning/mätfel;

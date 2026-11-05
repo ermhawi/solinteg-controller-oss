@@ -14,7 +14,7 @@ import type { Pt } from './FlowConnector';
 // so the whole diagram scales down uniformly with the SVG's own viewBox scaling instead of
 // overflowing the card on narrow viewports (this card can render well under 360px wide).
 const DESIGN_W = 360;
-const DESIGN_H = 396;
+const DESIGN_H = 294;
 const NODE_W = 80;
 const NODE_H = 66;
 
@@ -219,10 +219,10 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
   const batPt: Pt = [108, 209];
   const husGrid: Pt = [210, 183];
   const gridPt: Pt = [252, 209];
-  const houseCar: Pt = [180, 184];
-  const carFromHouse: Pt = [180, 308];
-  const gridCar: Pt = [285, 277];
-  const carFromGrid: Pt = [221, 339];
+  const houseCar: Pt = [220, 149];
+  const carFromHouse: Pt = [248, 112];
+  const gridCar: Pt = [288, 208];
+  const carFromGrid: Pt = [288, 136];
   const [bFrom, bTo] = batteryDischarging ? [batPt, husBat] : [husBat, batPt];
   const [gFrom, gTo] = importing ? [gridPt, husGrid] : [husGrid, gridPt];
 
@@ -232,7 +232,7 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
         {expanded ? 'Dölj flöde och batterihälsa' : 'Visa flöde och batterihälsa'}
       </button>
       <div className={expanded ? 'block' : 'hidden min-[700px]:block'}>
-      {/* Fixed 360x396 design, scaled down uniformly (via aspect-ratio + %-based FlowNode
+      {/* Fixed 360x294 design, scaled down uniformly (via aspect-ratio + %-based FlowNode
           positions, both keyed off DESIGN_W/DESIGN_H) below that width instead of overflowing —
           this card can be well under 360px wide on a phone once the page's own padding is
           subtracted. Above 360px (desktop) it renders at the exact original pixel design,
@@ -292,8 +292,8 @@ export default function PowerFlowCard({ data, status = data ? 'live' : 'inverter
           color={gridColor}
         />
         <FlowNode
-          left={140}
-          top={310}
+          left={248}
+          top={70}
           icon={CarIcon}
           label="Bil"
           value={carValue}
