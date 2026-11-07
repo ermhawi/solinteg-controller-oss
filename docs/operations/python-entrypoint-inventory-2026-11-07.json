@@ -1,0 +1,3527 @@
+{
+  "candidate_count": 41,
+  "category_counts": {
+    "historical": 6,
+    "live": 42,
+    "manual": 6,
+    "recovery-reserve": 19,
+    "unknown": 10
+  },
+  "deletion_candidates": [],
+  "loaded_systemd_service_count": 22,
+  "modules": [
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "notify"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-backup.service"
+        ],
+        "tests": [
+          "test_backup.py",
+          "test_critical_state_backup.py",
+          "test_ev_grid_trial_watchdog.py",
+          "test_healthcheck_checks.py"
+        ],
+        "tools": [
+          "compress-backup-backlog.sh",
+          "critical_state_backup.py",
+          "detect-heating-runs.py",
+          "probe_hold_freeze.py",
+          "python_reachability.py",
+          "rollback_snapshot.py",
+          "schema_compatibility.py"
+        ]
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/backup.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Nightly local backup of telemetry.db and solinteg.env, with rotation. Snapshots are gzipped.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "26bc35a62a0548e9e55880eaaf8752e310c87cf8d3ddbb4f80a7bf3107bb4f0a",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-backup.service"
+        }
+      ]
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "notify"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-backup-offsite.service"
+        ],
+        "tests": [
+          "test_backup.py"
+        ],
+        "tools": [
+          "compress-backup-backlog.sh"
+        ]
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/backup_offsite.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Offsite mirror of the local nightly backup, via rclone to a cloud remote (e.g. Backblaze B2).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "sha256": "1d6cea82c7c28e03b1d207ebfbcdcd07481d55112444d54d9d1b856f1260e1d8",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "historical",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_grid_priority_shadow_observer"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_battery_save_solar_shadow.py"
+        ],
+        "tools": [
+          "replay_battery_save_solar.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/battery_save_solar_shadow.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only solar capture assessment during a verified battery-save dispatch.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "historical",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "notify"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-boot-notify.service"
+        ],
+        "tests": [],
+        "tools": []
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/boot_notify.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Sends one ntfy push notification per boot, so a NUC that lost power and came back on its",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "sha256": "140f20ca628d56a0db9f803a11dc8b2c56c246544af320ef5894cec7d2fe447d",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop",
+        "ev_history",
+        "ev_shadow_planner",
+        "evcc_observer",
+        "evcc_service",
+        "ha_ev_session",
+        "healthcheck",
+        "modbus_poller",
+        "watchdog",
+        "weather_poller"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "to-nuc.sh"
+        ],
+        "tests": [
+          "test_backup.py",
+          "test_dispatch_loop.py",
+          "test_energy_priority_policy.py",
+          "test_ev_shadow_planner.py",
+          "test_evcc_service.py",
+          "test_inverter_control.py",
+          "test_l3_battery_policy.py",
+          "test_l3_charge_guard.py",
+          "test_prepare_ev_l3_shadow_dispatch.py",
+          "test_python_reachability.py",
+          "test_soc25_recovery_retry.py",
+          "test_soc25_recovery_third.py",
+          "test_soc25_reserve.py",
+          "test_telemetry_contract_inventory.py",
+          "test_temporary_soc25_adaptive_pilot.py",
+          "test_temporary_soc25_evpaused_pilot.py"
+        ],
+        "tools": [
+          "check-flow-consistency.py",
+          "common.py",
+          "compare-forecast-actual.py",
+          "compare-solar-bias-by-sky.py",
+          "detect-heating-runs.py",
+          "guard-rates.py",
+          "measure-battery-rt-eff.py",
+          "oracle-diagnose.py",
+          "prepare_ev_l3_live_dispatch.py",
+          "prepare_ev_l3_shadow_dispatch.py",
+          "probe_freeze.py",
+          "probe_import_limit.py",
+          "python_reachability.py",
+          "reconcile-ellevio-meter.py",
+          "release_inventory.py",
+          "solar-forecast-error.py",
+          "start_soc25_evpaused_pilot.py",
+          "start_soc25_recovery_retry.py",
+          "start_soc25_recovery_third.py",
+          "start_soc25_reserve.py"
+        ]
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/common.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Shared helpers for the runtime services in this directory (scripts/services/).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "93f804c9706134baa2802c98529d4be9c75c7f157020014bdeb660d4343c84b0",
+          "status": "ok"
+        },
+        "ev": {
+          "sha256": "93f804c9706134baa2802c98529d4be9c75c7f157020014bdeb660d4343c84b0",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_control_health_contract.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/control_health_contract.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Offline-only control-health signal contract (S03).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "energy_priority_policy",
+        "ev_grid_priority_guard",
+        "ev_l3_live_dispatch",
+        "inverter_control",
+        "l3_battery_policy",
+        "l3_charge_guard",
+        "modbus_broker_stale_policy"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "soc25_reserve_dispatch",
+        "temporary_soc25_adaptive_dispatch",
+        "temporary_soc25_evpaused_dispatch"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-dispatch.service",
+          "to-local.sh",
+          "to-nuc.sh"
+        ],
+        "tests": [
+          "test_dispatch_loop.py",
+          "test_energy_priority_policy.py",
+          "test_ev_grid_priority_watchdog.py",
+          "test_ev_grid_trial_watchdog.py",
+          "test_healthcheck.py",
+          "test_hold_isolation_contract.py",
+          "test_inverter_control.py",
+          "test_l3_battery_policy.py",
+          "test_l3_charge_guard.py",
+          "test_modbus_broker_transactions.py",
+          "test_release_inventory.py",
+          "test_safety_gap_contracts.py",
+          "test_soc25_reserve.py",
+          "test_telemetry_contract_inventory.py",
+          "test_temporary_soc25_plan_bypass.py",
+          "test_watchdog.py"
+        ],
+        "tools": [
+          "guard-rates.py",
+          "preflight_soc25_evpaused.py",
+          "preflight_soc25_reserve.py",
+          "prepare_ev_grid_priority_dispatch.py",
+          "prepare_ev_l3_grid_first_dispatch.py",
+          "prepare_ev_l3_live_dispatch.py",
+          "prepare_ev_l3_shadow_dispatch.py",
+          "probe_import_limit.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/dispatch_loop.py",
+      "possible_physical_effect": "possible",
+      "purpose": "dispatch loop",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "274d93f6bdeb7dfdcc2a8f63e82312128e11035e3a0ba1b1a75183888b045cf7",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "active",
+          "name": "solinteg-dispatch.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_energy_priority_conflicts.py",
+          "test_energy_priority_policy.py",
+          "test_energy_priority_pure.py"
+        ],
+        "tools": [
+          "release_inventory.py",
+          "replay_energy_priority.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/energy_priority_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Final arbitration for the economic reserve versus physical solar capture.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "4689830e4eac75e4605e24b072787f118cf8333f849cfb1f5ddbe2f53a0372a2",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_ac_sessions"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-ac-capture.service"
+        ],
+        "tests": [
+          "test_ev_ac_capture.py",
+          "test_ev_ac_cost_preview.py",
+          "test_ev_ac_quality_audit.py",
+          "test_ev_ac_sessions.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_ac_capture.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only, gap-aware EV charging AC energy ESTIMATE from ABL EVCC FC03 JSON.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "487309a98eb41152e0bb3628f2e75c7072709e554b074dfb1ef9073b73b1bde7",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-ev-ac-capture.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_ac_sessions",
+        "ev_invoice_tariff"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_cost_rate_publish"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_ac_cost_preview.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_ac_cost_preview.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only hypothetical XC40 charging cost for VERIFIED EVCC coverage only.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "211f3c45ed21cba0383295c7d10daf1faa92320b86f971ebdbb4facc068c8c85",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "manual",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_ac_sessions"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_ac_quality_audit.py"
+        ],
+        "tools": [
+          "ev_ac_soc_empirical.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_ac_quality_audit.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev ac quality audit",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "bfdd75b2463cc282bd12679fe8857b2bed3c204ceddc7a408b5d25683734aa29",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_ac_capture"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_ac_cost_preview",
+        "ev_ac_quality_audit"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_ac_cost_preview.py",
+          "test_ev_ac_sessions.py"
+        ],
+        "tools": [
+          "ev_ac_soc_empirical.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_ac_sessions.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev ac sessions",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "13cf7ca53fa908b245eaadcb34392eef6922997d8b4a09b6493d609655e88482",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "evcc_cable_tracker"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_history"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_charge_end.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_charge_end.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Persist confirmed EVCC charge-session endings from the existing historian.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "8e7200f4c54a28846673eeaea9c366105e569fac21e19f121ac54ff882b68abb",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-cost-capture.service"
+        ],
+        "tests": [
+          "test_ev_cost_capture.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_cost_capture.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only capture of Volvo journal distance/energy evidence from Home Assistant.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "8220e7f24bc6e0cfa85f14700ad19167fa969db07b58ba11e9f96b57dc430b3e",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "failed",
+          "name": "solinteg-ev-cost-capture.service"
+        }
+      ]
+    },
+    {
+      "category": "manual",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_cost_ledger.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_cost_ledger.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev cost ledger",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-cost-price-capture.service"
+        ],
+        "tests": [
+          "test_ev_ac_cost_preview.py",
+          "test_ev_ac_sessions.py",
+          "test_ev_cost_price_capture.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_cost_price_capture.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev cost price capture",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "5f6eecbb0e40d3ac5b08769fade848b6c425a87493a617eeeabac1d06500d84c",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-ev-cost-price-capture.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_ac_cost_preview"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-cost-rate-publish.service"
+        ],
+        "tests": [
+          "test_ev_cost_rate_publish.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_cost_rate_publish.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Publish only a sanitized, estimated XC40 electricity cost rate for HA charts.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "6ca161e114d4d19218be448fb46e75e53aaedff4a2a266b76569d37637328b53",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-ev-cost-rate-publish.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop",
+        "ev_grid_priority_watchdog",
+        "ev_grid_trial_watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_grid_priority_guard.py",
+          "test_ev_grid_priority_watchdog.py",
+          "test_ev_grid_trial_watchdog.py"
+        ],
+        "tools": [
+          "ev_grid_priority_preflight.py",
+          "ev_l3_readonly_audit.py",
+          "prepare_ev_grid_priority_dispatch.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_grid_priority_guard.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Time-limited economic guard: keep the EV load on L3 supplied by the grid.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "709f260b41163bcd18c45a66816ad7f500dedda2235266cb74e8eb2fab9dab79",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_grid_priority_shadow_observer"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_grid_priority_idle_strategy.py",
+          "test_prepare_ev_l3_metered_shadow.py"
+        ],
+        "tools": [
+          "prepare_ev_l3_metered_shadow.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_grid_priority_idle_strategy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Non-actuating idle/Auto arbitration: preserve solar charging while examining EV battery use.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "historical",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "battery_save_solar_shadow",
+        "ev_grid_priority_idle_strategy",
+        "ev_grid_priority_solar_shadow",
+        "ev_l3_metered_shadow_observer"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-grid-solar-shadow.service"
+        ],
+        "tests": [
+          "test_ev_grid_priority_shadow_observer.py"
+        ],
+        "tools": [
+          "prepare_ev_l3_metered_shadow.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_grid_priority_shadow_observer.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Independent read-only EV battery priority shadow observer.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "historical",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_grid_priority_shadow_observer"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_grid_priority_idle_strategy.py",
+          "test_ev_grid_priority_solar_shadow.py"
+        ],
+        "tools": [
+          "ev_grid_priority_replay.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_grid_priority_solar_shadow.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev grid priority solar shadow",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_grid_priority_guard"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-grid-priority-watchdog.service"
+        ],
+        "tests": [
+          "test_ev_grid_priority_watchdog.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_grid_priority_watchdog.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Independent watchdog and rollback for the opt-in permanent EV L3 grid priority.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_grid_priority_guard"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-grid-trial-watchdog.service"
+        ],
+        "tests": [
+          "test_ev_grid_trial_watchdog.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_grid_trial_watchdog.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Independent 15-s watchdog for one temporary Solinteg L3 EV-grid trial.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "sha256": "d1234776134c68a275d5d3f8009302523947d79e5b22e275dd38784724537381",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "ev_charge_end"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-history.service"
+        ],
+        "tests": [
+          "test_ev_ac_quality_audit.py",
+          "test_ev_charge_end.py",
+          "test_ev_history.py",
+          "test_ev_l3_metered_replay.py",
+          "test_release_inventory.py",
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": [
+          "release_inventory.py",
+          "replay_energy_priority.py",
+          "replay_soc25_handoff.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_history.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev history",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "c096f1f3b90a752e131098eb95b3067e3fce6a75e028d537f68bc51021e67ba9",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "active",
+          "name": "solinteg-ev-history.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_ac_cost_preview"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_ac_cost_preview.py",
+          "test_ev_invoice_tariff.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_invoice_tariff.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Validate anonymized, period-scoped Tibber and Sundsvall Elnat invoice rates.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "10e32c4f09b0796b59e7237d096ef839f09ad35550f0f1a210006b403a864c70",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_l3_live_policy"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_l3_live_policy.py"
+        ],
+        "tools": [
+          "prepare_ev_l3_live_dispatch.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_l3_live_dispatch.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Single-owner dispatcher adapter for bounded live EV solar capture.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "0f209e43f3155f1308b504ac0c9ad3dd05d9167131e977c8c2dda8669e322d0f",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_l3_live_dispatch"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_l3_live_policy.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_l3_live_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev l3 live policy",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "910e312a9499f17c73834cb2d9d6a1f86a9c7247825bf59f1458174fad9330bc",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_l3_metered_shadow_observer"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_l3_metered_policy.py",
+          "test_prepare_ev_l3_shadow_dispatch.py"
+        ],
+        "tools": [
+          "ev_l3_metered_replay.py",
+          "ev_l3_readonly_audit.py",
+          "prepare_ev_l3_shadow_dispatch.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_l3_metered_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "EVCC-Ict2 based L3 battery coordination: pure, non-actuating shadow policy.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "historical",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_l3_metered_policy"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_grid_priority_shadow_observer"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [],
+        "tools": [
+          "prepare_ev_l3_metered_shadow.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_l3_metered_shadow_observer.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Local-only EVCC Ict2 shadow collection, independent of the retired EV gate.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_price_empirical_session",
+        "ev_price_pause_owner",
+        "ev_price_policy",
+        "ev_volvo_smart_charging",
+        "evcc_ascii",
+        "evcc_cable_tracker",
+        "ha_ev_session"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-price-controller.service"
+        ],
+        "tests": [
+          "test_ev_price_controller.py",
+          "test_ev_price_pause_owner.py",
+          "test_ev_writer_lock_contract.py",
+          "test_evcc_manual_lock.py",
+          "test_release_inventory.py",
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_price_controller.py",
+      "possible_physical_effect": "possible",
+      "purpose": "ev price controller",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "1f66570e430dff7838e38a39654527e00c1974f3e1529482c52104288f26ccb5",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-ev-price-controller.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_price_pause_owner",
+        "evcc_ascii",
+        "evcc_cable_tracker",
+        "ha_ev_session"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_price_controller"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_price_empirical_session.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_price_empirical_session.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Operator-accepted empirical EV charging need, never independently calibrated.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "12cfd9463af697d1828c262a779400d77de47e7f84555c52c82764f6c0c9dade",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "manual",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_price_forecast_publish.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_price_forecast_publish.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Validate a ChatGPT SE2 outlook, keep local history and publish read-only XC40 JSON.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "f65df7f0b122eaad6dccecea2d65ca1b1128dd1f362bf32ea41497afe1ad55a8",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_price_controller",
+        "ev_price_empirical_session",
+        "evcc_manual_lock"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_critical_state_backup.py",
+          "test_ev_price_empirical_session.py",
+          "test_ev_price_pause_owner.py",
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": [
+          "critical_state_backup.py",
+          "ev_price_activation_preflight.py",
+          "evcc_physical_qualification.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_price_pause_owner.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Durable ownership of EVCC price pauses issued and verified by this controller.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "46021b75e2c77add57250d56b3749f697fa389d453b0ae93677a2c4f3e4c22fd",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_price_controller",
+        "ev_shadow_planner",
+        "evcc_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_price_activation_preflight.py",
+          "test_ev_price_controller.py",
+          "test_ev_price_pause_owner.py",
+          "test_ev_price_policy.py",
+          "test_ha_ev_session.py"
+        ],
+        "tools": [
+          "ev_price_activation_preflight.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_price_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev price policy",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "0cc5ce71eac6ed883b3f299f157d3f542dcf0e26ab574921984b7b6ee713080a",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "historical",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "ev_price_policy",
+        "ev_solar_policy"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-shadow.service"
+        ],
+        "tests": [
+          "test_ev_shadow_planner.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_shadow_planner.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "ev shadow planner",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_shadow_planner",
+        "evcc_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_solar_policy.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_solar_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Pure solar-surplus and price-aware EV recommendations, never hardware commands.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "cd9d3c692878489561e383b4d32199e77d653165db5d20d45849d6ad73fde0bf",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_price_controller"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-volvo-smart-status.service"
+        ],
+        "tests": [
+          "test_ev_volvo_smart_charging.py"
+        ],
+        "tools": [
+          "ev_price_activation_preflight.py",
+          "evcc_physical_qualification.py",
+          "publish_ev_volvo_smart_charging.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ev_volvo_smart_charging.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Fail-closed Volvo Smart Charging interlock from a read-only Chronos snapshot.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "c2cda815881de038141823c067dd6f3d4552972b63f237704aa81c9c0daeb6a0",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_price_controller",
+        "ev_price_empirical_session",
+        "evcc_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_cost_capture.py",
+          "test_ev_cost_ledger.py",
+          "test_ev_cost_price_capture.py",
+          "test_ev_grid_priority_guard.py",
+          "test_ev_grid_priority_watchdog.py",
+          "test_ev_history.py",
+          "test_ev_l3_metered_policy.py",
+          "test_ev_price_controller.py",
+          "test_ev_price_pause_owner.py",
+          "test_ev_shadow_planner.py",
+          "test_evcc_ascii.py",
+          "test_evcc_observer.py",
+          "test_evcc_physical_qualification.py",
+          "test_python_reachability.py",
+          "test_soc25_recovery_retry.py",
+          "test_soc25_recovery_third.py",
+          "test_soc25_reserve.py",
+          "test_temporary_soc25_evpaused_pilot.py"
+        ],
+        "tools": [
+          "ev_price_activation_preflight.py",
+          "evcc_physical_qualification.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/evcc_ascii.py",
+      "possible_physical_effect": "possible",
+      "purpose": "ABL eMH1 EVCC2 over Waveshare transparent Modbus ASCII (38400/8E1).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "3c151c517c4be70abb57edd741d62b7cf13a717396b7a7dac0a8f19da958934b",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_charge_end",
+        "ev_price_controller",
+        "ev_price_empirical_session",
+        "evcc_observer"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_charge_end.py",
+          "test_ev_price_empirical_session.py",
+          "test_ev_price_pause_owner.py",
+          "test_evcc_cable_tracker.py",
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": [
+          "ev_price_activation_preflight.py",
+          "evcc_physical_qualification.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/evcc_cable_tracker.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Debounced, durable EVCC cable presence from the EXISTING FC03 observer.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "761782941d607c59fb3f922aebf58f3093d34d50b9ecc15fe1656d73b9111e09",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "manual",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "ev_price_pause_owner"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "evcc_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_evcc_manual_lock.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/evcc_manual_lock.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Offline-safe exclusive lock for supervised manual EVCC FC10 commands.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "evcc_cable_tracker"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-observer.service"
+        ],
+        "tests": [
+          "test_ev_ac_capture.py",
+          "test_ev_ac_cost_preview.py",
+          "test_ev_ac_quality_audit.py",
+          "test_ev_ac_sessions.py",
+          "test_ev_cost_rate_publish.py",
+          "test_ev_invoice_tariff.py",
+          "test_evcc_observer.py",
+          "test_release_inventory.py",
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/evcc_observer.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only ABL/DEFA EVCC2 diagnostics through a Waveshare TCP/RS485 bridge.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "7c4e7916667fd03873be3de7d866aef2e308330edf6109e60663371e8f2beeb6",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "active",
+          "name": "solinteg-ev-observer.service"
+        }
+      ]
+    },
+    {
+      "category": "manual",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "ev_price_policy",
+        "ev_solar_policy",
+        "evcc_ascii",
+        "evcc_manual_lock"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-evcc.service"
+        ],
+        "tests": [
+          "test_ev_writer_lock_contract.py",
+          "test_evcc_manual_lock.py",
+          "test_evcc_service.py",
+          "test_python_reachability.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/evcc_service.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only EVCC solar monitor and explicitly gated single-action field probe.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "ev_price_controller",
+        "ev_price_empirical_session"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-ha.service"
+        ],
+        "tests": [
+          "test_ha_ev_session.py",
+          "test_release_inventory.py"
+        ],
+        "tools": [
+          "ev_price_activation_preflight.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "EVCC/vehicle",
+      "path": "scripts/services/ha_ev_session.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Read-only HA/Volvo to Solinteg EV-session bridge.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "sha256": "610a4284102500c541b4adcdc6ca9954c413d528c342a1da2405943f9b1b2b02",
+          "status": "ok"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "active",
+          "name": "solinteg-ev-ha.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "notify"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-healthcheck.service"
+        ],
+        "tests": [
+          "test_healthcheck.py",
+          "test_healthcheck_checks.py",
+          "test_notify.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/healthcheck.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Solinteg system healthcheck: periodic sweep of telemetry.db for signs the pipeline has",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "61a1398a06d14e5373a73c0347a350b2a973a36f7a20e4e5cada61b8a3dbd520",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-healthcheck.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker_control_client"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop",
+        "modbus_broker_transactions",
+        "watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_battery_save_solar_shadow.py",
+          "test_dispatch_loop.py",
+          "test_ev_ac_capture.py",
+          "test_ev_ac_cost_preview.py",
+          "test_ev_ac_quality_audit.py",
+          "test_ev_ac_sessions.py",
+          "test_ev_cost_capture.py",
+          "test_ev_cost_ledger.py",
+          "test_ev_cost_price_capture.py",
+          "test_ev_cost_rate_publish.py",
+          "test_ev_grid_priority_guard.py",
+          "test_ev_grid_priority_idle_strategy.py",
+          "test_ev_grid_priority_solar_shadow.py",
+          "test_ev_history.py",
+          "test_ev_invoice_tariff.py",
+          "test_ev_l3_live_policy.py",
+          "test_ev_l3_metered_policy.py",
+          "test_inverter_control.py",
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_transactions.py",
+          "test_probe_hold_freeze.py",
+          "test_replay_battery_save_solar.py",
+          "test_rollback_snapshot.py",
+          "test_watchdog.py"
+        ],
+        "tools": [
+          "probe_50207_sign.py",
+          "probe_50209_pv_only.py",
+          "probe_freeze.py",
+          "probe_hold_freeze.py",
+          "probe_import_limit.py",
+          "probe_setpoint_persistence.py",
+          "read_model_register.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/inverter_control.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Solinteg inverter control library (standalone, no Home Assistant).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "0f6fb498ef1e3a19d6e4abd31a537a3e99c7a4d48f374bf7bb7ab7810769ecdb",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_l3_battery_policy.py"
+        ],
+        "tools": [
+          "ev_l3_readonly_audit.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/l3_battery_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Economic coordination of the house battery with EV-like demand on house phase L3.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_ev_grid_priority_preflight.py",
+          "test_l3_charge_guard.py",
+          "test_prepare_ev_grid_priority_dispatch.py",
+          "test_prepare_ev_l3_live_dispatch.py",
+          "test_temporary_soc25_adaptive_pilot.py",
+          "test_temporary_soc25_evpaused_pilot.py"
+        ],
+        "tools": [
+          "prepare_ev_grid_priority_dispatch.py",
+          "prepare_ev_l3_live_dispatch.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/l3_charge_guard.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "l3 charge guard",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "4644c3d7520629b3c88fcc3eed0ead817d6d48dcc17d370bb8a6b88720dfb174",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker_readonly_transport",
+        "modbus_broker_transactions"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_control_service",
+        "modbus_broker_control_transport",
+        "modbus_broker_ipc",
+        "modbus_broker_readonly_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker.py",
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_readonly.py",
+          "test_modbus_broker_transactions.py",
+          "test_safety_gap_contracts.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Solinteg single-owner Modbus broker core, with injected transport.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "824f44d92a38c2cb8b8e99e8947861413f4e1e7acd9cbe33c3933e8ad4fcd4c7",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker_ipc"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "inverter_control",
+        "modbus_poller"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_transactions.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_control_client.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Optional ModbusTcpClient-compatible shim backed by the single-owner IPC broker.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "63a6b9c82c548b44a9955dbb506eb113d68e498c15dcd20c05f085fc3004a49a",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker",
+        "modbus_broker_control_transport",
+        "modbus_broker_ipc",
+        "modbus_broker_lease"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-broker-control.service"
+        ],
+        "tests": [
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_transactions.py",
+          "test_safety_gap_contracts.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_control_service.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Opt-in single TCP owner for poller FC03 and legacy dispatcher FC03/FC06.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "a815850882ac446a6ad96ee265308c90798f980d214900633d5761adea2ef3be",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "active",
+          "name": "solinteg-broker-control.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker",
+        "modbus_broker_readonly_transport"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_control_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_control.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_control_transport.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Allowlisted FC03/FC06 transport owned exclusively by a broker worker.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "c32084a50870e197091a8c13ca7253d18c70687c0769eab3494b633f7e2d8312",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_supervisor"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_emergency_policy.py",
+          "test_modbus_broker_host_integration.py",
+          "test_modbus_broker_root_adapter.py",
+          "test_modbus_broker_supervisor.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_emergency_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Offline-only review of independently measured emergency General fallback.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_host_observer",
+        "modbus_broker_supervisor"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_fencing.py",
+          "test_modbus_broker_root_adapter.py",
+          "test_modbus_broker_supervisor.py"
+        ],
+        "tools": [
+          "python_reachability.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_fencing.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Pure fail-closed broker fencing protocol for a future emergency fallback.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker_fencing"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_root_adapter"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_host_integration.py",
+          "test_modbus_broker_host_observer.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_host_observer.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Read-only Linux host observation for future Modbus-broker fencing.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_control_client",
+        "modbus_broker_control_service",
+        "modbus_broker_readonly_service",
+        "modbus_poller"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker.py",
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_readonly.py",
+          "test_modbus_broker_transactions.py"
+        ],
+        "tools": [
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_ipc.py",
+      "possible_physical_effect": "possible",
+      "purpose": "modbus broker ipc",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "c1bb77bdb73187b8d6b43268069ed6cccef37847ccc5a58f149b2419130d4e3a",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker_control_service",
+        "modbus_broker_readonly_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_host_integration.py",
+          "test_modbus_broker_lease.py",
+          "test_modbus_broker_root_adapter.py",
+          "test_modbus_broker_supervisor.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_lease.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Host-local, kernel-enforced broker ownership lease (not a deployment).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "275f8391a6da9b16ceecc29ed3db2ea98c4f6446014578261969420d7b569f24",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "manual",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker",
+        "modbus_broker_ipc",
+        "modbus_broker_lease",
+        "modbus_broker_readonly_transport"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-broker-readonly.service"
+        ],
+        "tests": [
+          "test_modbus_broker_lease.py",
+          "test_modbus_broker_readonly.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_readonly_service.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Opt-in, strictly read-only broker service for a future poller cutover.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker",
+        "modbus_broker_control_transport",
+        "modbus_broker_readonly_service"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_readonly.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_readonly_transport.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Read-only pymodbus transport for a separately approved broker poller cutover.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "e8b313b48b04753aac09eaa2e0df97e840c2525c3ef84972ab8cdde99373b55a",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker_host_observer"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_host_integration.py",
+          "test_modbus_broker_root_adapter.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_root_adapter.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Privileged stop/approval callbacks for a FUTURE Modbus emergency supervisor.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "dispatch_loop"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_stale_policy.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_stale_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Offline-only stale-telemetry gate for the opt-in broker dispatcher prototype.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "modbus_broker_emergency_policy",
+        "modbus_broker_fencing"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_modbus_broker_host_integration.py",
+          "test_modbus_broker_root_adapter.py",
+          "test_modbus_broker_supervisor.py"
+        ],
+        "tools": [
+          "python_reachability.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_supervisor.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Offline-only orchestration of a future privileged Modbus emergency fallback.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "inverter_control"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "modbus_broker"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_transactions.py",
+      "possible_physical_effect": "possible",
+      "purpose": "modbus broker transactions",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "ff8c97ad0da603d86886d1d879fabe0d23268b812574212748102cb52a0ae1c3",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-broker-observer.service"
+        ],
+        "tests": [
+          "test_modbus_broker_watchdog_observer.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_broker_watchdog_observer.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Portable, observe-only Modbus-broker watchdog for a separate systemd timer.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-broker-observer.service"
+        }
+      ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "modbus_broker_control_client",
+        "modbus_broker_ipc"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-poller.service",
+          "to-nuc.sh"
+        ],
+        "tests": [
+          "test_ev_cost_capture.py",
+          "test_ev_cost_price_capture.py",
+          "test_ev_history.py",
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_readonly.py",
+          "test_modbus_poller.py",
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": [
+          "check-flow-consistency.py",
+          "probe_50209_pv_only.py",
+          "probe_hold_freeze.py",
+          "probe_import_limit.py",
+          "release_inventory.py"
+        ]
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/modbus_poller.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Solinteg inverter Modbus TCP poller.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "0d5838cc412d623a722771413e712b88d2165834e1c9f7b7edf8a7b240a88059",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "active",
+          "name": "solinteg-poller.service"
+        }
+      ]
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_native_soc_safety_evidence.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/native_soc_safety_evidence.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "native soc safety evidence",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "backup",
+        "backup_offsite",
+        "boot_notify",
+        "healthcheck",
+        "watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-boot-notify.service"
+        ],
+        "tests": [
+          "test_backup.py",
+          "test_healthcheck.py",
+          "test_healthcheck_checks.py",
+          "test_notify.py",
+          "test_safety_gap_contracts.py",
+          "test_watchdog.py"
+        ],
+        "tools": [
+          "python_reachability.py"
+        ]
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/notify.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Shared ntfy.sh push-notification helper for watchdog.py / healthcheck.py.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "365b136fbe0c8f267b087497fd30c39434ce3e1f8f7254c9f56a9851648fc9d2",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_safety_alert_contract.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/safety_alert_contract.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Read-only alert taxonomy and dedup identity for safety telemetry (T03).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_soc25_handoff_shadow.py"
+        ],
+        "tools": [
+          "replay_soc25_handoff.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_handoff_shadow.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 handoff shadow",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "soc25_reserve_dispatch"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [],
+        "tools": [
+          "start_soc25_recovery_retry.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_recovery_retry_dispatch.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 recovery retry dispatch",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "soc25_reserve_policy",
+        "soc25_reserve_watchdog"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-soc25-recovery-retry-deadline.service",
+          "solinteg-soc25-recovery-retry-watchdog.service"
+        ],
+        "tests": [
+          "test_soc25_recovery_retry.py"
+        ],
+        "tools": [
+          "start_soc25_recovery_retry.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_recovery_retry_watchdog.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 recovery retry watchdog",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "soc25_reserve_dispatch"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [],
+        "tools": [
+          "start_soc25_recovery_third.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_recovery_third_dispatch.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 recovery third dispatch",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "soc25_reserve_policy",
+        "soc25_reserve_watchdog"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-soc25-recovery-third-deadline.service",
+          "solinteg-soc25-recovery-third-watchdog.service"
+        ],
+        "tests": [
+          "test_soc25_recovery_third.py"
+        ],
+        "tools": [
+          "start_soc25_recovery_third.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_recovery_third_watchdog.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 recovery third watchdog",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "dispatch_loop",
+        "soc25_reserve_policy"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "soc25_recovery_retry_dispatch",
+        "soc25_recovery_third_dispatch",
+        "soc25_reserve_watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_soc25_recovery_retry.py",
+          "test_soc25_recovery_third.py",
+          "test_soc25_reserve.py"
+        ],
+        "tools": [
+          "start_soc25_recovery_retry.py",
+          "start_soc25_recovery_third.py",
+          "start_soc25_reserve.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_reserve_dispatch.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 reserve dispatch",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "soc25_recovery_retry_watchdog",
+        "soc25_recovery_third_watchdog",
+        "soc25_reserve_dispatch",
+        "soc25_reserve_watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_soc25_reserve.py"
+        ],
+        "tools": [
+          "preflight_soc25_reserve.py",
+          "start_soc25_recovery_retry.py",
+          "start_soc25_recovery_third.py",
+          "start_soc25_reserve.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_reserve_policy.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "soc25 reserve policy",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "soc25_reserve_dispatch",
+        "soc25_reserve_policy",
+        "temporary_soc25_watchdog"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "soc25_recovery_retry_watchdog",
+        "soc25_recovery_third_watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-soc25-reserve-deadline.service",
+          "solinteg-soc25-reserve-watchdog.service"
+        ],
+        "tests": [
+          "test_soc25_recovery_retry.py",
+          "test_soc25_recovery_third.py",
+          "test_soc25_reserve.py"
+        ],
+        "tools": [
+          "start_soc25_recovery_retry.py",
+          "start_soc25_recovery_third.py",
+          "start_soc25_reserve.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/soc25_reserve_watchdog.py",
+      "possible_physical_effect": "possible",
+      "purpose": "soc25 reserve watchdog",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "dispatch_loop"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_temporary_soc25_adaptive_pilot.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/temporary_soc25_adaptive_dispatch.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "temporary soc25 adaptive dispatch",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "temporary_soc25_watchdog"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-temp-soc25-adaptive-watchdog.service"
+        ],
+        "tests": [
+          "test_temporary_soc25_adaptive_pilot.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/temporary_soc25_adaptive_watchdog.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "One-off 1.5 kW recovery safety monitor and verified rollback (no Modbus).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "dispatch_loop"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "temporary_soc25_evpaused_watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_temporary_soc25_evpaused_pilot.py"
+        ],
+        "tools": [
+          "start_soc25_evpaused_pilot.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/temporary_soc25_evpaused_dispatch.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "temporary soc25 evpaused dispatch",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "temporary_soc25_evpaused_dispatch",
+        "temporary_soc25_watchdog"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-temp-soc25-evpaused-watchdog.service"
+        ],
+        "tests": [
+          "test_temporary_soc25_evpaused_pilot.py"
+        ],
+        "tools": [
+          "start_soc25_evpaused_pilot.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/temporary_soc25_evpaused_watchdog.py",
+      "possible_physical_effect": "possible",
+      "purpose": "temporary soc25 evpaused watchdog",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-soc25-plan-bypass-deadline.service",
+          "solinteg-soc25-plan-bypass.service"
+        ],
+        "tests": [
+          "test_temporary_soc25_plan_bypass.py"
+        ],
+        "tools": [
+          "start_temporary_soc25_plan_bypass.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/temporary_soc25_plan_bypass.py",
+      "possible_physical_effect": "possible",
+      "purpose": "temporary soc25 plan bypass",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "recovery-reserve",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "soc25_reserve_watchdog",
+        "temporary_soc25_adaptive_watchdog",
+        "temporary_soc25_evpaused_watchdog"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-temp-soc25-watchdog.service"
+        ],
+        "tests": [
+          "test_soc25_recovery_retry.py",
+          "test_soc25_recovery_third.py",
+          "test_soc25_reserve.py",
+          "test_temporary_soc25_adaptive_pilot.py",
+          "test_temporary_soc25_evpaused_pilot.py",
+          "test_temporary_soc25_watchdog.py"
+        ],
+        "tools": [
+          "start_soc25_evpaused_pilot.py",
+          "start_soc25_recovery_retry.py",
+          "start_soc25_recovery_third.py",
+          "start_soc25_reserve.py"
+        ]
+      },
+      "owner_domain": "SoC/recovery",
+      "path": "scripts/services/temporary_soc25_watchdog.py",
+      "possible_physical_effect": "possible",
+      "purpose": "temporary soc25 watchdog",
+      "purpose_origin": "module-name-fallback",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common",
+        "inverter_control",
+        "notify"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-ev-grid-priority-watchdog.service",
+          "solinteg-ev-grid-trial-watchdog.service",
+          "solinteg-soc25-recovery-retry-deadline.service",
+          "solinteg-soc25-recovery-retry-watchdog.service",
+          "solinteg-soc25-recovery-third-deadline.service",
+          "solinteg-soc25-recovery-third-watchdog.service",
+          "solinteg-soc25-reserve-deadline.service",
+          "solinteg-soc25-reserve-watchdog.service",
+          "solinteg-temp-soc25-adaptive-watchdog.service",
+          "solinteg-temp-soc25-evpaused-watchdog.service",
+          "solinteg-temp-soc25-watchdog.service",
+          "solinteg-watchdog.service"
+        ],
+        "tests": [
+          "test_ev_grid_priority_guard.py",
+          "test_ev_grid_priority_watchdog.py",
+          "test_ev_grid_trial_watchdog.py",
+          "test_modbus_broker_control.py",
+          "test_modbus_broker_host_integration.py",
+          "test_modbus_broker_transactions.py",
+          "test_modbus_broker_watchdog_observer.py",
+          "test_release_inventory.py",
+          "test_rollback_snapshot.py",
+          "test_safety_gap_contracts.py",
+          "test_soc25_recovery_retry.py",
+          "test_soc25_recovery_third.py",
+          "test_soc25_reserve.py",
+          "test_temporary_soc25_adaptive_pilot.py",
+          "test_temporary_soc25_evpaused_pilot.py",
+          "test_watchdog.py"
+        ],
+        "tools": [
+          "preflight_soc25_evpaused.py",
+          "preflight_soc25_reserve.py",
+          "probe_50209_pv_only.py",
+          "probe_hold_freeze.py",
+          "python_reachability.py",
+          "release_inventory.py",
+          "replay_battery_save_solar.py",
+          "start_soc25_evpaused_pilot.py",
+          "start_soc25_recovery_retry.py",
+          "start_soc25_recovery_third.py",
+          "start_soc25_reserve.py"
+        ]
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/watchdog.py",
+      "possible_physical_effect": "possible",
+      "purpose": "Solinteg dispatch-loop watchdog: a small, INDEPENDENT safety net against a dead",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "sha256": "e75efbba70eb47f68bd82ca8bb7c868ec03b4eeebf17418ce84a48386c044897",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": [
+        {
+          "active": "inactive",
+          "name": "solinteg-watchdog.service"
+        }
+      ]
+    },
+    {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "common"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [
+          "solinteg-weather.service",
+          "to-nuc.sh"
+        ],
+        "tests": [
+          "test_telemetry_contract_inventory.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "forecast/weather",
+      "path": "scripts/services/weather_poller.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Ecowitt weather-station poller.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "sha256": "3b365110f8851fad3f0c299bac8695c1d7ad4ae3ca3e380cabbdbe6a96c5fe90",
+          "status": "ok"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    }
+  ],
+  "notes": [
+    "Source-only import reachability is not proof of unused runtime code",
+    "Loaded inactive oneshots can be scheduled by timers or run manually",
+    "All dynamic/indirect, shell and recovery references require independent checking",
+    "No filesystem content, environment values, hostnames or raw argv are published"
+  ],
+  "reachable_count": 42,
+  "schema": "solinteg-python-reachability-v1",
+  "source_module_count": 83
+}
