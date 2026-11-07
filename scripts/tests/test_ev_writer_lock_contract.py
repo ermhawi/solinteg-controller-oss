@@ -1,4 +1,4 @@
-"""Offline-only EV writer ownership inventory; documents a remaining lock gap."""
+"""Offline-only EV writer ownership and shared lock contracts."""
 from __future__ import annotations
 
 import ast
@@ -22,7 +22,7 @@ class EvWriterOwnershipTests(unittest.TestCase):
         self.assertEqual(len(write_lines), 1)
         self.assertLess(sorted(lock_lines)[1], write_lines[0])
 
-    def test_manual_cli_is_separately_gated_but_does_not_take_shared_flock(self):
+    def test_manual_cli_routes_through_guarded_shared_locks(self):
         tree = ast.parse((SERVICES / "evcc_service.py").read_text())
         main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
         source = ast.unparse(main)
@@ -30,11 +30,11 @@ class EvWriterOwnershipTests(unittest.TestCase):
         self.assertIn('args.confirm', source)
         self.assertIn('args.expected_raw', source)
         calls = [n for n in ast.walk(main) if isinstance(n, ast.Call)]
-        self.assertTrue(any(isinstance(n.func, ast.Attribute)
-                            and n.func.attr == "set_limit_raw" for n in calls))
+        self.assertTrue(any(isinstance(n.func, ast.Name)
+                            and n.func.id == "guarded_manual_write" for n in calls))
         self.assertFalse(any(isinstance(n.func, ast.Attribute)
-                             and n.func.attr == "flock" for n in calls),
-                         "Manual CLI bypass is a known risk, not proven safe")
+                             and n.func.attr == "set_limit_raw" for n in calls),
+                         "Manual CLI must not bypass shared owner/reader locks")
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ import common
 from ev_solar_policy import decide_solar
 from ev_price_policy import decide_grid_price, read_ev_session, read_house_price_plan
 from evcc_ascii import EvccAscii, EvccError, RAW_PAUSE, amps_to_raw
+from evcc_manual_lock import guarded_manual_write
 
 log = logging.getLogger("solinteg.evcc")
 
@@ -96,7 +97,7 @@ def main() -> None:
         if not args.confirm or args.expected_raw is None:
             parser.error("manual physical action requires --confirm and --expected-raw")
         raw = RAW_PAUSE if args.pause else amps_to_raw(args.resume_amps)
-        after = client.set_limit_raw(raw, expected_raw=args.expected_raw)
+        after = guarded_manual_write(client, raw, expected_raw=args.expected_raw)
         print(json.dumps({"mode": "manual_test", "requested_raw": raw,
                           "configured_raw": after.configured_raw,
                           "pilot_raw": after.pilot_raw,
