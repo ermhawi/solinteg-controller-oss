@@ -67,6 +67,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: node scripts/tools/verify_ts_reachability.mjs
+      - run: node scripts/tools/verify_optimizer_wear_mutations.mjs
       - run: npm run typecheck
       - run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
       - run: npm run lint
