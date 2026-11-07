@@ -1,0 +1,178 @@
+# Genomförandeplan: kodstruktur, driftsparitet, säkerhet och upprensning
+
+**Start:** 2026-11-07 · **Status:** aktiv plan, implementering ej påbörjad inom denna plan · **Repo:** `ermhawi/solinteg-controller-oss`, permanent branch `Sundsvall` · **Mål:** trygg, testbar och underhållbar energistyrning med spårbar release och utan övergiven driftkod.
+
+Detta är en **checklista för små, oberoende arbetspaket**, inte ett godkännande för automatisk driftsättning, fysiska Modbus-/EVCC-prov, systemd-omstarter eller radering. [Aktuell drift](../current-state.md), [kända risker](../known-issues.md), [systemkarta](../architecture/system-overview.md), [styrflöden](../architecture/control-flows.md) och [repo-/driftgräns](../repository-layout.md) ska läsas före respektive ändring.
+
+## Arbetssätt och Definition of Done
+
+- Bocka en punkt **enbart när dess acceptanskriterium är verifierat**. Anteckna i samma punkt eller en länkad notering: datum, commit/ändrings-ID, verifieringskommando, utfall och om ändringen endast är `source`, `tested`, `installed` eller `physically_verified`. Undvik att markera en hel fas som klar på grund av en passerad delkontroll.
+- En punkt är avsedd att utgöra **ett litet, granskningsbart arbete**. Dela hellre en punkt i `a/b/c` än att samtidigt ändra flera styrkedjor; inga orelaterade refaktoreringar.
+- Varje ändring kräver: dokumentationspreflight; explicit beteende- och säkerhetskontrakt; relevanta enhets-/integrationstester; `git diff --check`; uppdaterad ADR/runbook/known-issues när tillämpligt; exakt filinventering; och återställningsbeskrivning. Behåll samma tillstånd i kod och dokumentation.
+- **Risknivå:** `P0` = säkerhet eller förlust av verifierad driftsparitet; `P1` = felaktig energi-/pris-/EV-reglering; `P2` = förvaltning, observabilitet och hygien. Prioritet betyder inte godkännande att röra en aktiv enhet.
+- **GO/NO-GO:** all fysisk förändring kräver separat uttryckligt godkännande av exakt åtgärd, gällande SoC/fas-/nätvillkor, ägare, rollback, mätvärden, observationsfönster och säkerhetsstopp. Offline-/loopbacktester räcker inte som fysisk kvalificering.
+- Ingen direkt andra TCP:502-klient när brokern är ägare; ingen automatisk EVCC-återstart efter manuellt/okänt stopp; ingen tolkning av ekonomisk 20 %-reserv som verifierat BMS-/firmwaregolv.
+- **Git-hygien:** bara `origin/Sundsvall`, aldrig merge till `main`/upstream eller force-push. Publicera inga verkliga privata IP-adresser, tokens, miljöfiler, hushållsrådata eller fakturor. Hantera pågående ocommittade ändringar innan någon kodrelease; kasta aldrig bort dem för att skapa en ren arbetsyta.
+- Avsluta varje delsteg med kontroll av arbetsträd, öppna arbetsträd/stashes, berörda runtime-resurser, aktiva tjänster, bevarat återställningsunderlag samt nästa blockerare. Privat driftbevis förblir utanför publika Git.
+
+## Baslinje: verifierad kodgranskning 7 november 2026
+
+| Område | Underlag och tolkning |
+| --- | --- |
+| Omfattning | Cirka **374** spårade/ospårade käll- och testfiler, cirka **79 500** kodrader; siffrorna är inventering, inte kvalitetspoäng. |
+| Python | `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`: **1 617 tester, godkända**. |
+| TypeScript | `npm test`: **742 godkända**, **1 överhoppat**; `npm run typecheck`, `npm run build` godkända. |
+| Kvalitetsvarningar | `npm run lint`: **1 unused-import-varning**. Extra `tsc --noEmit --noUnusedLocals --noUnusedParameters`: **2 unused-fynd**. |
+| Nås från webbens entrypoints | **83/83** TS/TSX-produktionsmoduler nåbara enligt statisk importgraf; detta utesluter inte döda kodgrenar. |
+| Python-tjänster | **38 av 79** moduler i `scripts/services` saknar statisk importväg från inventerade aktiva systemd-entrypoints. **Kandidater, inte säkert död kod**: EV-runtime, manuella verktyg, dynamiska importer och reservfunktioner måste kontrolleras. |
+| Källkod kontra drift | Git-`dispatch_loop.py` **2 312 rader** mot installerad **1 960** vid kontroll. Skillnader även i broker, `lib/optimizer.ts`, `lib/plan.ts` och `lib/prices.ts`. Separat EV-runtime matchade granskade centrala EVCC-moduler. |
+| Driftflaggor | Läsande kontroll visade på den installerade dispatchern `SOLINTEG_CONTROL_ARMED=1`, `DISPATCH_ENERGY_PRIORITY=1`, `SOLINTEG_MODBUS_SOURCE=broker_transaction`. Dessa är tidsbundna observationer, inte en publicerbar komplett env-dump. |
+| Git-preflight | **8 modifierade och 4 ospårade befintliga kod-/test-/probe-filer**, 0 staged, 0 stashes, 0 omergade brancher, 1 worktree. De tillhör inte denna plan och får inte skrivas över/städas bort oavsiktligt. |
+
+### Avklarad inventering (ingen kodförändring)
+
+- [x] **B00** – Läsande arkitektur-/drift-/Git-inventering genomförd 2026-11-07. **Bevis:** granskade `systemctl`-entrypoints, SHA-/AST-skillnader och befintliga ADR:er; inga registerskrivningar.
+- [x] **B01** – Testbaslinje insamlad enligt tabellen ovan 2026-11-07. **Bevis:** Python, Vitest, Next-build, TypeScript och ESLint.
+- [x] **B02** – Övergiven-kod-kandidater identifierade med statisk Python-importgraf; inga filer klassificerade som säkra att ta bort.
+- [x] **B03** – Länka en *sanerad* maskinläsbar snapshot till varje kommande implementation: Git-SHA, installerade filhashar, relevanta enhets-/timerstatus, whitelisted flaggnamn/värden, testsammanfattning och återställningsreferens. **Klart när:** två körningar kan diffas utan hemligheter eller fysisk I/O. **2026-11-07, `tested`:** [read-only-runbook och privat snapshot-ID](../operations/release-inventory.md), `scripts/tools/release_inventory.py`, `scripts/tests/test_release_inventory.py`; 12/12 offline-tester, två körningar tidsmässigt `equal` utan hemligheter. Privata filer `2026-11-07-{a,b,compare}.json`; rollback-markör `R08-pending` är **inte** bekräftad backup.
+- [x] **B04** – Klassificera de 12 tidigare ocommittade filerna (energiprioritet, broker och hold-probe) som redan driftsatta / pågående / bara offline. **Klart när:** ägarskap, risk och bevarandeplan finns för varje fil; ingenting har tappats. **Verifierat 2026-11-07:** [per-fil-inventering med sha256/paritet, ägare, P0/P1 och bevarandeplan](preexisting-work-classification-2026-11-07.md); jämfört installerad kod med read-only `sudo -n` och aktiv systemd. Status `source` (inventering), ingen fysisk styrning; Git-preflight blockeras fortfarande av skyddade lokala filer.
+
+## Beroenden och säkerhetsgrindar
+
+```mermaid
+flowchart TD
+    B["B · Baslinje och bevis"] --> R["R · Releasemanifest och paritet"]
+    R --> S["S · Broker, watchdog och säker felväg"]
+    R --> D["D · Dispatchkedja och styrprioritet"]
+    R --> O["O · Optimerare och ekonomisk modell"]
+    R --> E["E · EVCC och webb-API"]
+    S --> V["V · Kontrollerad fysisk kvalificering"]
+    D --> V
+    O --> V
+    E --> V
+    R --> T["T · Telemetri och testkvalitet"]
+    R --> A["A · Kod- och unit-inventering"]
+    T --> V
+    A --> Q["Q · Avveckling av verifierat oanvänd kod"]
+    V --> Z["Z · Slutlig DoD och uppföljning"]
+    Q --> Z
+```
+
+**Kritisk väg:** `B03/B04 → R → S` innan ny felåterställning; `R → D/O/E → V` innan beteendeändring i produktion. `A` kan börja läsande parallellt men faktisk radering sker efter beroendekontroll. Några delsteg kan avslutas utan att deras fas är GO för drift.
+
+## R · Releasemanifest och faktisk driftsparitet (P0)
+
+- [x] **R01** – Bygg ett **endast läsande** verktyg som inventorierar aktiv systemd-unit, `ExecStart`, drop-in-lista, installerade Python-/TS-filhashar och repo-hashar för varje styrkedja. **Klart när:** utdata saknar privat env och visar `equal/different/missing/not-readable` för varje relevant modul. **2026-11-07, `tested`:** [inventeringsverktyg, resultat och tillåtna fält](../operations/release-inventory.md), `scripts/tools/release_inventory.py`; 18 modulpar (11 lika, 7 olika), 11 units, 12/12 offlinetester inklusive EV-importkedjan; avsiktligt endast sanerade `ExecStart`-entrypoints, inga argv/hemligheter.
+- [x] **R02** – Lägg till whitelist för effektiva `armed`-/feature-flaggor, utan att skriva ut hemligheter eller hela `/proc/<pid>/environ`. **Klart när:** källans default och effektivt driftsvärde jämförs med tidpunkt och ursprung (unit/drop-in). **2026-11-07, `tested`:** 7 flaggor från aktiv read-only proc + unit/drop-in/environment-file med ursprung eller `process-unattributed`; källans literala default kontrolleras. [Runbook och maskerings-/origin-tester 12/12](../operations/release-inventory.md); ingen privat env publicerad. Ej driftsättningsändring.
+- [ ] **R03** – Upprätta en **explicit avvikelselista** för site-patchad `dispatch_loop.py`: `decide`, `main`, SoC-recovery, EV/L3, energi-arbiter, `apply_decision`, heartbeat, import-/fasgrindar. **Klart när:** varje olikhet har motiv och `keep/port/remove/prove`, och inga aktiva beteenden tappas.
+- [ ] **R04** – Gör motsvarande semantisk diff för `lib/optimizer.ts`, `lib/plan.ts`, `lib/prices.ts`, brokern och Next-servern. **Klart när:** kända driftfunktioner kan härledas till installerad filversion och test, inte bara Git-HEAD.
+- [x] **R05** – Dokumentera den separata EVCC-runtime under `/opt/solinteg/ev-shadow-runtime` som egen releasenyckel. **Klart när:** alla verkliga aktiva EVCC-entrypoints och deras importer har versions-/hashparitet eller förklarad avvikelse. **2026-11-07, `tested`/read-only:** [EV-releaseinventering](../operations/release-inventory.md), 4 systemd-entrypoints inkl. priscontroller-timer och 8 transitiva lokala Python-importer **12/12 byteidentiska** via SHA-256, source→runtime; `scripts/tools/release_inventory.py` uppdaterat med separat EV-releasenyckel och lokal-importkontrakt i `scripts/tests/test_release_inventory.py` (12/12 godkända). Externa Pythonpaket/dynamiska filer återstår i R06; ingen FC10 exekverad.
+- [ ] **R06** – Definiera **reproducerbar releasekandidat**: exakt filmanifest, beroenden, lagrings-/SQLite-schema, systemd-diff, verifieringsmatris och privat rollback-snapshot. **Klart när:** staging kan återskapa kandidaten utan att skriva till aktiv `/opt/solinteg`.
+- [x] **R07** – Lägg till driftkontroll före/efter release som jämför manifest och tar ställning till avvikelse. **Klart när:** oavsiktlig driftdivergens blockerar GO och ger tydlig rapport; ingen automatisk sync/restart skapas. **2026-11-07, `tested` (ingen live-release):** [read-only `--compare-json`/grind](../operations/release-inventory.md) gav tidsmässig `equal` men `manifest_gate=blocked`, exit 5, på sju oförklarade skillnader och smutsigt Git. Ingen sync, omstart eller fysisk kontroll; fysisk release fortsatt NO-GO.
+- [ ] **R08** – Dokumentera rollback inklusive delvis tillämpat filpaket, DB-kompatibilitet och heartbeat-/brokerägarskap. **Klart när:** selektiv återställning kan torrköras utan levande Modbus/EVCC-skrivning.
+
+## S · Broker, watchdog och säker felhantering (P0)
+
+- [x] **S01** – Skriv en **felmatris** för: död dispatcher, levande men felande dispatcher, saknad/korrupt/färsk heartbeat, nekad/stale brokertelemetri, IPC-timeout, halv FC06-sekvens, nätbortfall, Wi-Fi-omstart, låskonflikt och strömavbrott. **Klart när:** varje fall har detektor, fysisk osäkerhet, tillåten handling, operatörslarm och återhämtning. **2026-11-07, `source`:** [11-falls felmatris, detektor/unknown/åtgärd/larm/återhämtning](../architecture/failure-mode-matrix-2026-11-07.md); validerad mot watchdog-, dispatcher-, brokerkälla och ADR, 5 fokuserade tester. Ingen fysisk felinjektion.
+- [x] **S02** – Reproducera i rena tester att `watchdog.py` avstår när heartbeat saknas/är korrupt och att dispatchern kan fortsätta uppdatera heartbeat efter fel. **Klart när:** testerna beskriver nuvarande begränsning utan att anta att `alive` = `safe`. **2026-11-07, `tested`:** `scripts/tests/test_safety_gap_contracts.py` tre watchdogkontrakt inkl. AST-ordning (heartbeat efter fångat exceptionsblock), färsk heartbeat med `error_revert_failed` och korrupt/ingen heartbeat; 5/5 totalt, ingen live I/O. [Begränsning och risk](../architecture/failure-mode-matrix-2026-11-07.md).
+- [x] **S03** – Separera framtida signaler `process_alive`, `last_decision_ok`, `last_apply_verified`, `telemetry_fresh`, `broker_owned`, `physical_state_unknown`. **Klart när:** kontrakt, TTL och felaktiga övergångar finns som testbara tillstånd; heartbeat-format är bakåtkompatibelt eller migrerat. **2026-11-07, `tested`/source-only:** [ADR med sex separata signaler, TTL, proveniens, tillstånd/övergångar](../architecture/adr-2026-11-07-control-health-contract.md); `scripts/services/control_health_contract.py` + `scripts/tests/test_control_health_contract.py`, 7/7 offline. Äldre heartbeat returnerar `unknown`; ingen ny live-signal eller styrgrind aktiverad.
+- [x] **S04** – Reproducera **behörighetsfelet för `safety_auto`**: säkerhetsrollen listar operationen, men kontrollkörlägets allowlist `READS | TRANSACTIONS` saknar den; verifiera även att produktionsrollmappningen inte tilldelar `safety`. **Klart när:** nekande/avsedd åtkomst visas i fokuserade test, utan att aktivera fysisk fallback. **2026-11-07, `tested`:** `scripts/tests/test_safety_gap_contracts.py`: production-like `runtime_mode=control` nekar safety-auto **före** transport; simulerade safety-/watchdog-cgroups får inte `safety`; definierad framtida tillåtelse till skyddad supervisor är avsikt, inte ännu aktiverad åtkomst. 5/5 godkända. [Felmatris](../architecture/failure-mode-matrix-2026-11-07.md).
+- [x] **S05** – Besluta om ansvar/fencing i ny ADR: normalbroker, skyddad supervisor, watchdog, root-/systemd-stop och eventuell oberoende återställning. **Klart när:** exakt en Modbus-ägare vid varje övergång eller uttrycklig `NO-GO`; ingen blind `Auto` vid okänd SoC. **2026-11-07, `source` (arkitekturbeslut):** [ADR med övergångstabell och explicit NO-GO när single-owner/SoC/EMS saknar bevis](../architecture/adr-2026-11-07-modbus-fencing.md); stöds av 5/5 fokuserade säkerhetskontraktstester och R01/R07-paritet. Inget nytt systemd-/fallbackgodkännande.
+- [ ] **S06** – Implementera minsta nödvändiga offlinekorrigering av roll-/operationskontrakt och säkerhetsspärrar **bakom explicit disabled-by-default-grind**. **Klart när:** behörighetstester godkänner bara definierad supervisor och nekar alla andra cgroups/roller.
+- [ ] **S07** – Kör syntetiska samtidighets-/felinjiceringstester: olika FC06-felsteg, halva transaktioner, återkommande request-id, timeout och återanslutning. **Klart när:** ingen andra skrivare öppnas, ingen blind retry sker och osäkert utfall är `unknown/inhibited`.
+- [ ] **S08** – Verifiera supervisor/fencing med **loopback-syntetisk Modbus**, processdöd, socketägare och `flock`; ingen fysisk TCP:502. **Klart när:** återhämtning, misslyckat återtagande och återstart är deterministiska och loggbara.
+- [ ] **S09** – Utred Solinteg EndSOC/BMS/firmware och separat säkerhetsgolv innan fysisk säkerhetsklassning. **Klart när:** skillnaden mellan 20 % ekonomisk reserv och hårdvaruskydd är dokumenterad; inga overifierade antaganden står i en GO-grind.
+- [ ] **S10** – Definiera och godkänn en bemannad, reversibel fysisk kvalificeringsplan (se V). **Klart när:** skarpa teststeg, icke-överträdbara gränser, alternativ återställning och stoppsignal är granskade; **inget test utfört** av att planen skrivs.
+
+## D · Ren och förutsägbar batteri-dispatch (P1, säkerhetsgrind P0)
+
+- [ ] **D01** – Inventera faktisk **prioritetsordning** och alla kodvägar som kan ändra `action/power_w/solar_skip/expected_soc` i **installerad** dispatcher. **Klart när:** tabell visar källa, villkor, ordning, hård/mjuk regel, telemetrikrav, bieffekter och konflikter.
+- [ ] **D02** – Frys ett körbart **beteendekontrakt** utifrån aktuell drift: återhämtning, EV grid-first, solupptagning, ekonomisk reserv, prisplan, fasskydd och manuell intervention. **Klart när:** vart och ett av exemplen har `Given/When/Then` och avsedd åtgärd.
+- [ ] **D03** – Skapa en konfliktmatris för SoC under/vid/över reserv, PV-över-/underskott, EVCC C2/urkopplad, stale CT, faslaststeg, positiv/negativ spotkostnad, förlorad broker och manuell `Auto`. **Klart när:** tester avslöjar överlappande regulatorers osynliga överstyrning.
+- [ ] **D04** – Definiera ett typat beslutobjekt (`action`, effekt, upphov, policyvinnare, skäl, datakvalitet, skydd/begränsning, readbackkrav). **Klart när:** samma kontrakt kan användas av beslutsloggning och tester utan att anta fysisk verkställighet.
+- [ ] **D05** – Extrahera **en ren prioritetsresolver i taget** från `dispatch_loop.py`, med kompatibilitetsadapter och oförändrad utdata i replay. **Klart när:** golden-master/scenariomatriser ger identiska beslut innan avsiktlig beteendeändring.
+- [ ] **D06** – Granska state-reset, hysteresis och `needs_apply` vid `applied`, `accepted_pending_physical_confirmation`, `skipped`, `inhibited` och misslyckad återställning. **Klart när:** intern solstate aldrig hävdar fysisk reglering utan bekräftelse.
+- [ ] **D07** – Definiera en **enda slutlig konfliktupplösning** men behåll oberoende hårda SoC-/L3-/nätgränser och den befintliga fysiska skrivaren. **Klart när:** varje simulerad iteration ger ett spårbart beslut med tydlig prioritet och ingen osäker bypass.
+- [ ] **D08** – Förankra alla beslut med offline-replay från tidsstämplad data samt mot installerad dispatcher. **Klart när:** mål för EMS/General-fladder, bortkastad PV, oönskad batteriurladdning och inga falska SoC-recoveries är mätbart bättre eller oförändrat; annars NO-GO.
+- [ ] **D09** – Fysisk verifiering av en **separat godkänd release** enligt V, med 24–72 h uppföljning. **Klart när:** verklig SoC, batteri-W, PV, export/import, EV, faser, kommandon och rollback jämförts med förväntan.
+
+## O · Optimerare, prognoser och kostnadsmodell (P1)
+
+- [ ] **O01** – Fastställ exakt produktionsversion och inställningar för `optimizer.ts`, `plan.ts`, `prices.ts`, load-/PV-prognoser och `optimizer_runs`. **Klart när:** samma indata ger samma plan i isolerad replay.
+- [x] **O02** – Rätta **missvisande varning** i `lib/plan.ts` som hävdar `terminal-value-0` även med positivt terminalvärde. **Klart när:** kort horisont fortfarande larmar men beskriver aktiv faktisk policy; regressionstest finns. **2026-11-07, `tested`:** beräkna samma redan använda terminalvärde före horizon-logg, rapportera positivt respektive noll/negativt värde villkorligt; `lib/__tests__/plan.test.ts` hade förväntat rött regressionstest före fix, därefter 25/25 plan+caps godkända. Produktionsversion `lib/plan.ts` skiljer ännu från Git, ingen driftsättning.
+- [x] **O03** – Stäm av SoC-ceiling-kommentaren i `lib/constants.ts` med befintlig `MAX_FORCED_SOC_KWH`-grind i optimeraren. **Klart när:** kommentar, parameter och test beskriver samma beteende för tvångsladdning kontra auto-sol. **2026-11-07, `tested`:** kommentaren matchar `MAX_FORCED_SOC_KWH` och särskiljer naturlig solupptagning; `lib/__tests__/optimizer-caps.test.ts` verifierade tvångsladdning under 80%-grind och auto-sol över grinden, 6/6 godkända. Endast dokumentationsändring i kod.
+- [ ] **O04** – Kör replay med sommar/vinter, 23-/25-timmarsdag, prognoslucka, kort horisont, fallande/stigande pris, batterireserv och EV-laddning. **Klart när:** inga regressionsfel, ingen oavsiktlig tömning på grund av dataluckor, och avvikelsen är kvantifierad.
+- [ ] **O05** – Validera **faktisk nettoekonomi** mot referens utan onödiga battericykler: spot, nätavgift, skatter, verkningsgrad, slitage och verifierad återbetalningsrätt. **Klart när:** jämförelse har samma exogena PV-/last-/prisdata och visar netto kronor, cykler och osäkerhetsintervall.
+- [ ] **O06** – Kontrollera att plan endast publiceras till dispatcher med giltig live-SoC, frisk tidsaxel och versionskompatibelt SQLite-schema. **Klart när:** stale/korrupt/halvskrivna planer nekas utan nya registerkommandon.
+- [ ] **O07** – Håll ännu oprövad fysisk batteri-`soft hold` separat från optimerarens logiska `hold`; hänvisa till [NO-GO-provet](../solinteg-broker-hold-probe-2026-11-05.md). **Klart när:** ingen planeringsflagga kan implicit aktivera ny hårdvarusekvens.
+
+## E · EVCC, Volvo och webbåtkomst (P1)
+
+- [ ] **E01** – Verifiera käll-/installationsparitet och ägarskap för EVCC-observatör, priscontroller, kabeltracker, Volvo-session och två `deadline/economy`-lägen. **Klart när:** varje fysisk FC10 kan härledas till exakt reviderad laddavsikt och installerad kod.
+- [ ] **E02** – Dela `ev_price_controller.run_once` i rena **preflight → beslut → fysisk verkställighet → kvittens/status** utan att ändra den befintliga stoppsemantiken. **Klart när:** samma input ger samma 0/1 FC10 och samma ägarövergång.
+- [ ] **E03** – Täck fel-/race-fall: manuell paus, app-paus, kabel ur/i, ny connection epoch, timeröverlapp, ändrad inställningsrevision, Smart Charging oklart, timeout före/efter FC10 och förlorat ägarregister. **Klart när:** ingen oavsiktlig auto-resume eller dubbel FC10 kan reproduceras.
+- [ ] **E04** – Kontrollera separata EVCC-lås och att ingen annan tjänst samtidigt kan skriva FC10. **Klart när:** en kod- och driftinventering visar exakt tillåten skrivare samt nekad samtidighet.
+- [ ] **E05** – Testa webb-API:er, GitHub OAuth2/reverse proxy, intern åtkomstgräns, Origin/forwarded-host-kontrakt, indata-/bodygränser och webbväljaren. **Klart när:** obehörig extern skrivning nekas i autentiserat E2E-test; UI-sparning utför inga direkta FC10.
+- [ ] **E06** – Kalibrera empirisk laddenergi mot oberoende tillgänglig mätning och avslutade sessioner; behåll observerad/osäker kvalitet synlig. **Klart när:** 80 %-prognosens fel och nät-/soleffekt redovisas med mätosäkerhet, inte som certifierad energispårning.
+
+## T · Telemetri, datakontrakt och övervakning (P1/P2)
+
+- [ ] **T01** – Inventera alla SQLite-/JSON-producenter och konsumenter: `readings`, `optimizer_runs`, `control_actions`, `live.json`, EV-ägarskap/status och kabelspårning. **Klart när:** scheman, tidszoner, TTL, atomiska writes, WAL/busy och korrupt data har ägare.
+- [ ] **T02** – Definiera separata mått för **processtillstånd, beslutsstatus, accepterad registerskrivning, readback och fysisk effekt**. **Klart när:** webb/statuspanel och larm inte likställer ett HTTP 200, `applied` eller färsk heartbeat med faktisk säker laddning.
+- [ ] **T03** – Inventera larmhål för nattlig broker-/Wi-Fi-störning, avsaknad av heartbeat, saknad brokerägare, låg SoC, fast EMS och osäker EV-paus. **Klart när:** varje kritisk feltyp har identifierbar, deduplicerad signal och ansvarig åtgärd.
+- [ ] **T04** – Bryt försiktigt ut läsbara delkontroller ur den drygt 1 000 rader stora `healthcheck.py`, en grupp åt gången med testmässig ekvivalens. **Klart när:** samma historiska händelse ger samma larmfingertoppar och spärrar.
+- [ ] **T05** – Dokumentera den installerade **Wi-Fi-watchdoggens** effektiva läge, timeout, återanslutningsförsök och reboot-eskalering, utan att ändra dem. **Klart när:** runbook och rollback kan användas utan att slå ut fysisk styrning.
+- [ ] **T06** – Kontrollera backup och återläsning av styrkritiska tillstånd och schema, utanför publik Git. **Klart när:** en isolerad återställningsövning kan återge en konkret incident utan verkliga styrkommandon.
+
+## A · Inventera oanvänd kod, historiska verktyg och systemd (P2)
+
+- [ ] **A01** – Kör repeterbar import-/anrops-/entrypoint-inventering över **både** `/opt/solinteg/app` och `/opt/solinteg/ev-shadow-runtime`, aktiva/inaktiva units/timers, shell-`ExecStart`, verktyg och dynamiska importer. **Klart när:** 38 Python-kandidater är individuellt klassificerade; statisk icke-nåbarhet ensam är inte borttagningsbevis.
+- [ ] **A02** – För varje modul fyll i: ägare, syfte, senaste körning om verifierbar, direkta/dynamiska referenser, testberoende, möjlig fysisk effekt, backup och kategori: `live`, `manual`, `recovery-reserve`, `historical` eller `unknown`. **Klart när:** ingen fil har `unknown` och samtidigt ett raderingsförslag.
+- [ ] **A03** – Börja med historiska **SoC25-/temporary-/shadow-experiment** och tidigare broker-readonly-migrering; inventera motsvarande `deploy/*.service/.timer`. **Klart när:** ingen aktiv/inaktiv men avsiktligt reserverad tjänst förväxlas med skräp.
+- [ ] **A04** – Markera manuella offline-/hardware-prober, inklusive förberedd broker-`hold`, som **behåll/frys** tills explicit terminalbeslut, återställningsbevis och fysisk beroendekontroll finns. **Klart när:** oavslutat NO-GO-prov inte av misstag avvecklas eller driftsätts.
+- [ ] **A05** – Genomför riktad TS-granskning: 83/83 nåbara moduler, sök *inuti* nåbara filer efter döda grenar, inaktiva featureflaggor och dubbla modeller. **Klart när:** varje föreslagen borttagning har referensbevis och test.
+- [ ] **A06** – Rensa **högst en begränsad grupp åt gången** av verifierat avvecklade filer från repo (Git-historik behålls); separat godkännande för varje berörd installerad unit eller fil utanför Git. **Klart när:** testsvit, manifest och offline-replay är oförändrade, dokumentationen anger orsak och återställning.
+- [ ] **A07** – Repetera inventeringen efter varje borttagning. **Klart när:** inga nya trasiga importer, aktiva entrypoints, systemd-`ExecStart`, testhänvisningar eller dokumentationslänkar finns.
+
+## K · Statisk analys, testkvalitet och byggbarhet (P2)
+
+- [x] **K01** – Ta bort den oanvända importen i `app/api/ev/settings/route.ts` med ett minimalt testat diff. **Klart när:** ESLint är utan varning för berörd kod och API-beteendet identiskt. **2026-11-07, `tested`:** borttaget endast `readEvOverview` från import; `npm run lint`, strikt `tsc --noEmit --noUnusedLocals --noUnusedParameters`, `npm test` godkända. Inget exekverbart API-beteende ändrat.
+- [x] **K02** – Hantera unused-`s` i `scripts/tools/replay-deferral.ts` utan att ändra analysresultat. **Klart när:** strikt `tsc --noUnusedLocals --noUnusedParameters` passerar. **2026-11-07, `tested`:** callback-argument `s` blev `_` utan resultatändring; strikt `tsc` och `npm run lint` passerade. Offlineanalysverktyget är inte installerad drift.
+- [ ] **K03** – Inför **gradvis** Python-lint/format-/säkerhetsskanning (t.ex. Ruff med tydligt begränsad regeluppsättning), i rapportläge först. **Klart när:** baslinjen är känd och inga oförutsedda massformateringar blockerar säkerhetsfixar.
+- [ ] **K04** – Skilj rena enhetstester, SQLite-integration, syntetisk Modbus/EVCC och **manuella fysiska** tester med namn och explicita gates. **Klart när:** vanliga CI-kommandon aldrig kan nå riktig inverter, EVCC eller privat runtime.
+- [ ] **K05** – Lägg till riktad kodtäckning/property-/mutationstest för brokerbehörighet, fel-/watchdogmatris, prispaus, dispatchkonflikter och DP-kostnadsfunktioner. **Klart när:** muterade riskvillkor orsakar testfel; antal tester ensamt är inte acceptansmått.
+- [ ] **K06** – Lägg in en **icke-driftsättande** kvalitetsgrind i CI: Python, Vitest, TypeScript, ESLint, Next-build, docs strict, schema-/kontrakttest och release-manifestvalidering. **Klart när:** röd grind hindrar releaseförberedelse men aldrig startar/stänger fysisk tjänst.
+- [ ] **K07** – Minska kända högkomplexitetsnoder endast med golden-master: `dispatch_loop.py`, `lib/optimizer.ts`, `lib/oracle.ts`, `healthcheck.py`, `PriceChart.tsx`. **Klart när:** modulgränser och ansvar förbättrats mätbart utan orelaterade beteendeändringar.
+
+## V · Fysisk kvalificering och kontrollerad release (P0-gate)
+
+**Den här fasen är helt NO-GO tills specifik release har godkänts.** En lyckad testsamling eller samma Git-commit som någon gång tidigare var driftsatt räcker inte.
+
+- [ ] **V01** – Upprätta testmatris och risk-/rollbackägare per fysisk release (broker/failsafe, dispatch, EV, optimerare hålls åtskilda). **Klart när:** exakt godkännande, före-värden och stopvillkor dokumenterats.
+- [ ] **V02** – Gör **read-only preflight**: fysisk SoC, växelriktarläge, aktuell batteri-W, CT-/nät-/L3-kvalitet, EVCC-kabel/Smart Charging, väder/PV, brokerägarprocess, senaste lyckade transaktion och schemalagda timers. **Klart när:** alla villkor uppfyllda; okänt ⇒ NO-GO.
+- [ ] **V03** – Säkerställ signerad/hashad och verifierad återgång till **just installerad** kod och privata inställningar; ingen ersättning av site-dispatcher med Git-filen som helhet. **Klart när:** rollback kan utföras utan att förlora en aktiv säkerhetsgrind.
+- [ ] **V04** – Utför enbart **särskilt godkänd** smal release och observera systemd, poller, plan, FC03/FC06-/FC10-kvittenser, SoC, batteri-W, PV, import/export, faser och larm. **Klart när:** ingen oönskad strömväg eller oklar kontrollägare; fel ⇒ följ rollback.
+- [ ] **V05** – Följ upp 24–72 h med jämförelse mot baseline och kontrafaktisk energikostnad. **Klart när:** driftstabilitet, ekonomiskt netto, reserver, fasgränser och EV-sessioner har verifierad eller uttryckligen okänd slutsats.
+- [ ] **V06** – Dokumentera resultat som `installed` respektive `physically_verified` samt avvisade hypoteser. **Klart när:** ADR, known-issues, runtime-manifest, återställningsinstruktioner och denna checklista överensstämmer.
+
+## Z · Slutkontroll och fortlöpande förbättring
+
+- [ ] **Z01** – Kör hela regressionen mot den **verkliga releasekandidaten** och CI; beskriv kvarvarande risk och undantag. **Klart när:** rött endast för dokumenterade och accepterade icke-säkerhetsblockerare; säkerhetskritiska fel ⇒ NO-GO.
+- [ ] **Z02** – Stäm av `Git source ↔ installed files ↔ effective flags ↔ runtime observations` med samma manifest-ID. **Klart när:** inga oförklarade skillnader i kritisk styrkod.
+- [ ] **Z03** – Utför Git-hygien: endast uppgiftsrelaterade, sanerade commits till `origin/Sundsvall`; inga orelaterade ändringar bortkastade och inga extra worktrees/stashes. **Klart när:** projektets `git_hygiene.py --mode done` passerar, eller blockerare redovisas.
+- [ ] **Z04** – Städa endast **bekräftat ägda och inaktiva** tillfälliga processer, testartefakter och systemd-resurser; bevara krypterade återställningsbevis och terminala statusfiler. **Klart när:** ingen aktiv styr- eller återställningsförmåga påverkats.
+- [ ] **Z05** – Genomför ny läsande kod-/driftgranskning och uppdatera riskregistret. **Klart när:** varje P0/P1-fynd antingen är verifierat åtgärdat eller uttryckligen accepterat med ansvar, kompensatorisk kontroll och återbesöksvillkor.
+
+## Uppföljningslogg
+
+Använd korta noteringar efter varje avslutat steg. Detaljerade privata mätningar lagras **utanför publika Git**.
+
+| Datum | ID | Evidens/commit | Status: source / tested / installed / physically_verified | Kvarvarande risk och nästa ID |
+| --- | --- | --- | --- | --- |
+| 2026-11-07 | B00–B02 | Kodgranskning av `Sundsvall` och läsande runtime, testbaslinje enligt ovan | Audit completed, **ej** fix/release | Bevara tidigare arbete |
+| 2026-11-07 | B03, B04, R01, R02, R05, R07 | `d7c3869`, `scripts/tools/release_inventory.py`, [runbook](../operations/release-inventory.md), [12-fils bevarandeplan](preexisting-work-classification-2026-11-07.md); 12/12 isolerade tester, read-only paritet | `tested` (B04 `source`), **inte release** | 7 installerade avvikelser; R03–R04, R06, R08 |
+| 2026-11-07 | O02, O03, K01, K02 | `38f027f`; rött test före O02-fix; 25/25 riktade Vitest-tester; strict TypeScript, ESLint och full webbsuite | `tested`, källkod, **ej installerad** | O01/O04/O05/EV-kvalificering återstår |
+| 2026-11-07 | S01–S05 | `ee2b281`; [felmatris](../architecture/failure-mode-matrix-2026-11-07.md), [health-ADR](../architecture/adr-2026-11-07-control-health-contract.md), [fencing-ADR](../architecture/adr-2026-11-07-modbus-fencing.md); 5+7 isolerade tester | `tested`/`source` (NO-GO för fysisk fallback) | S06–S09 och fysisk V kvalificering |
+| 2026-11-07 | Full regression | 1 641/1 641 Python-enhetstester, 743 Vitest passerade/1 hoppat över, typecheck, ESLint, Next-build, Zensical strict och `git diff --check` godkända | `tested`, endast utvecklingskällkod | R07 manifestet är BLOCKED på 7 repo-/installationsavvikelser |
+
+**Aktuell uppföljning:** **Totalt 76 | Klara 18 | Återstår 58.** Arbetet fortsätter med R03/R04 (semantisk käll-/driftklassning), R06/R08 (återställningsparitet), O07/A04 (behåll fysiska prober av), T/K (läsande kvalitetsgrindar). **P0:** befintlig broker-/dispatch-diff och äldre watchdog får inte driftsättas över varandra; S06–S08 enbart offline efter bevarad källbaslinje. Ändra aldrig aktiv /opt-kod, systemd, Modbus eller EVCC utan ett separat explicit GO.
