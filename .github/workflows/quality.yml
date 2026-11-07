@@ -1,0 +1,83 @@
+# Non-deploying source and test gate. NEVER targets the user's private /opt runtime.
+name: Source quality (no deployment)
+
+on:
+  push:
+    branches: [Sundsvall]
+  pull_request:
+    branches: [Sundsvall]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-safety:
+    name: Python, schema, safety contracts
+    runs-on: ubuntu-24.04
+    env:
+      SOLINTEG_CONTROL_ARMED: "0"
+      SOLINTEG_HOST: "127.0.0.1"
+      EVCC_CONTROL_ARMED: "0"
+      EVCC_PRICE_CONTROL_ARMED: "0"
+      EVCC_MANUAL_TEST: "0"
+      EVCC_START_APPROVED: "0"
+      DISPATCH_FREEZE_HOLDS: "0"
+      DISPATCH_RESERVE_HOLD_VERIFIED: "0"
+      SOLINTEG_HOLD_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fail closed against private runtime and physical writes
+        run: python3 scripts/tools/ci_safety_preflight.py
+      - name: Python syntax
+        run: python3 -m compileall -q scripts/services scripts/tools scripts/tests
+      - name: Source-only release manifest and EV import contract
+        run: python3 scripts/tools/release_inventory.py --validate-source-manifest
+      - name: Unit, SQLite integration and fake Modbus/EVCC
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+
+  web:
+    name: Vitest, strict TypeScript, ESLint, Next build
+    runs-on: ubuntu-24.04
+    env:
+      SOLINTEG_CONTROL_ARMED: "0"
+      SOLINTEG_HOST: "127.0.0.1"
+      EVCC_CONTROL_ARMED: "0"
+      EVCC_PRICE_CONTROL_ARMED: "0"
+      EVCC_MANUAL_TEST: "0"
+      EVCC_START_APPROVED: "0"
+      DISPATCH_FREEZE_HOLDS: "0"
+      DISPATCH_RESERVE_HOLD_VERIFIED: "0"
+      SOLINTEG_HOLD_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail closed against private runtime and physical writes
+        run: python3 scripts/tools/ci_safety_preflight.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+      - run: npm run lint
+      - run: npm run build
+
+  docs:
+    name: Strict docs, no publish or deployment
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --disable-pip-version-check -r requirements-docs.txt
+      - run: zensical build --strict
