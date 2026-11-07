@@ -16,11 +16,19 @@ class EvWriterOwnershipTests(unittest.TestCase):
         calls = [n for n in ast.walk(run) if isinstance(n, ast.Call)]
         lock_lines = [n.lineno for n in calls if isinstance(n.func, ast.Attribute)
                       and n.func.attr == "flock"]
-        write_lines = [n.lineno for n in calls if isinstance(n.func, ast.Attribute)
-                       and n.func.attr == "set_limit_raw"]
+        execute_lines = [n.lineno for n in calls if isinstance(n.func, ast.Name)
+                         and n.func.id == "execute_locked_fc10"]
+        writer = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                      and n.name == "execute_locked_fc10")
+        writer_calls = [n for n in ast.walk(writer) if isinstance(n, ast.Call)]
+        writes = [n for n in writer_calls if isinstance(n.func, ast.Attribute)
+                  and n.func.attr == "set_limit_raw"]
         self.assertGreaterEqual(len(lock_lines), 2)
-        self.assertEqual(len(write_lines), 1)
-        self.assertLess(sorted(lock_lines)[1], write_lines[0])
+        self.assertEqual(len(execute_lines), 1)
+        self.assertEqual(len(writes), 1)
+        self.assertFalse(any(isinstance(n.func, ast.Attribute)
+                             and n.func.attr == "set_limit_raw" for n in calls))
+        self.assertLess(sorted(lock_lines)[1], execute_lines[0])
 
     def test_manual_cli_routes_through_guarded_shared_locks(self):
         tree = ast.parse((SERVICES / "evcc_service.py").read_text())

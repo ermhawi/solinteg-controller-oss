@@ -154,6 +154,70 @@ def missing_session_reason(*, now: datetime, settings_path: Path,
     return "no calibrated fresh EV session"
 
 
+def cable_matches_locked_preflight(cable: dict, latest: dict | None,
+                                  evcc: dict) -> bool:
+    """Pure final cable/CP check; caller holds both EVCC serialization locks."""
+    if not isinstance(cable, dict) or not isinstance(latest, dict) or not isinstance(evcc, dict):
+        return False
+    for key in ("connection_epoch", "coverage_epoch", "tracking_id"):
+        if key not in cable or latest.get(key) != cable[key]:
+            return False
+    return latest.get("observed_state") == evcc.get("state")
+
+
+def intent_matches_locked_preflight(settings: dict, session: dict) -> bool:
+    """Pure mission revision check; any malformed or changed intent inhibits."""
+    if not isinstance(settings, dict) or not isinstance(session, dict):
+        return False
+    return all(
+        skey in settings and tkey in session and settings[skey] == session[tkey]
+        for skey, tkey in (
+            ("revision", "settings_revision"),
+            ("charge_mode", "charge_mode"),
+            ("departure_local_time", "departure_local_time"),
+            ("max_buy_ore_per_kwh", "max_buy_ore_per_kwh"),
+        )
+    )
+
+
+def execute_locked_fc10(*, command: EvPriceAction, owner: dict | None,
+                        owner_path: Path, session: dict, cable: dict,
+                        now: datetime, host: str) -> dict:
+    """Exactly one physical FC10, with durable ownership and readback.
+
+    Called ONLY after price-owner and EVCC reader locks, revalidated cable
+    and revision, and pure choose_action. No retry after unknown ACK.
+    """
+    if command.action == "pause":
+        next_owner = ownership.new_owner(
+            session=session, cable=cable, now=now, owner_id=str(uuid4()))
+        ownership.write_owner(owner_path, next_owner)
+    elif command.action == "resume":
+        # If the FC10 outcome is uncertain or a process crashes,
+        # 'releasing' is never eligible for another auto-resume.
+        next_owner = {**owner, "state": "releasing"}
+        ownership.write_owner(owner_path, next_owner)
+    else:
+        raise ValueError("only explicit pause or resume may execute FC10")
+    client = EvccAscii(host, port=int(os.environ.get("EVCC_PORT", "4196")),
+                       scheduled_control=True)
+    after = client.set_limit_raw(
+        command.target_raw, expected_raw=command.expected_raw, scheduled=True)
+    if (after.configured_raw != command.target_raw
+            or (command.action == "pause" and observed_evcc_mode(
+                after.state, after.configured_raw,
+                after.pilot_raw, after.currents_a) != "paused_connected")
+            or (command.action == "resume"
+                and after.pilot_raw != command.target_raw)):
+        raise EvccUncertainWrite("EVCC readback mismatched")
+    ownership.write_owner(
+        owner_path, {**next_owner,
+                     "verified_fc10_pause": True,
+                     "state": "owned" if command.action == "pause" else "released"})
+    return {"state": command.action, "writes": 1,
+            "configured_raw": after.configured_raw, "reason": command.reason}
+
+
 def run_once(*, now: datetime | None = None) -> dict:
     """One decision, one FC10 at most; durable owner changes precede writes."""
     now = now or datetime.now(timezone.utc)
@@ -292,11 +356,7 @@ def run_once(*, now: datetime | None = None) -> dict:
                             Path(cable_path), now=now)
                     except cable_tracker.CableObservationError:
                         latest = None
-                    if (latest is None
-                            or latest["connection_epoch"] != cable["connection_epoch"]
-                            or latest["coverage_epoch"] != cable["coverage_epoch"]
-                            or latest["tracking_id"] != cable["tracking_id"]
-                            or latest["observed_state"] != evcc["state"]):
+                    if not cable_matches_locked_preflight(cable, latest, evcc):
                         revoke("EVCC cable observation changed before FC10")
                         return {"state": "inhibited", "writes": 0,
                                 "reason": "cable state changed during FC10 preflight"}
@@ -309,38 +369,13 @@ def run_once(*, now: datetime | None = None) -> dict:
                         except (OSError, ValueError):
                             return {"state": "inhibited", "writes": 0,
                                     "reason": "EV settings became unreadable before FC10"}
-                        if (current_settings.get("revision") != session.get("settings_revision")
-                                or current_settings["charge_mode"] != session["charge_mode"]
-                                or current_settings["departure_local_time"] != session["departure_local_time"]
-                                or current_settings["max_buy_ore_per_kwh"] != session["max_buy_ore_per_kwh"]):
+                        if not intent_matches_locked_preflight(current_settings, session):
                             return {"state": "inhibited", "writes": 0,
                                     "reason": "EV charging preference changed before FC10"}
-                    if command.action == "pause":
-                        next_owner = ownership.new_owner(
-                            session=session, cable=latest, now=now, owner_id=str(uuid4()))
-                        ownership.write_owner(owner_path, next_owner)
-                    else:
-                        # If the FC10 outcome is uncertain or a process crashes,
-                        # 'releasing' is never eligible for another auto-resume.
-                        next_owner = {**owner, "state": "releasing"}
-                        ownership.write_owner(owner_path, next_owner)
-                    client = EvccAscii(host, port=int(os.environ.get("EVCC_PORT", "4196")),
-                                       scheduled_control=True)
-                    after = client.set_limit_raw(
-                        command.target_raw, expected_raw=command.expected_raw, scheduled=True)
-                    if (after.configured_raw != command.target_raw
-                            or (command.action == "pause" and observed_evcc_mode(
-                                after.state, after.configured_raw,
-                                after.pilot_raw, after.currents_a) != "paused_connected")
-                            or (command.action == "resume"
-                                and after.pilot_raw != command.target_raw)):
-                        raise EvccUncertainWrite("EVCC readback mismatched")
-                    ownership.write_owner(
-                        owner_path, {**next_owner,
-                                     "verified_fc10_pause": True,
-                                     "state": "owned" if command.action == "pause" else "released"})
-                    return {"state": command.action, "writes": 1,
-                            "configured_raw": after.configured_raw, "reason": command.reason}
+                    return execute_locked_fc10(
+                        command=command, owner=owner, owner_path=owner_path,
+                        session=session, cable=latest, now=now, host=host,
+                    )
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         finally:

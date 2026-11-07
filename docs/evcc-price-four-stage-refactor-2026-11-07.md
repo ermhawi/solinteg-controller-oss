@@ -1,0 +1,18 @@
+# E02 · EV-priscontroller: avgränsad preflight, beslut, FC10 och kvittens
+
+**2026-11-07 – `tested/source`, ingen fysisk eller installerad ändring.** Den aktiva `solinteg-ev-price-controller.timer` och installerade `ev_price_controller.py` har inte ändrats. Omstruktureringen gäller **enbart källträdet** och behåller den tidigare rättighetsgränsen för manuell EVCC-styrning, kabeltracking, Smart Charging, pris- och fasbudget.
+
+## Resultat: fyra separata ansvar
+
+| Steg | API och ansvar | Säkerhetskontrakt / golden-master |
+| --- | --- | --- |
+| **Preflight** | `run_once` samlar session, Smart Charging, priskurva, färsk kabel/FC03, inverter-L3 och pause-owner under det befintliga **ägarlåset**, och hämtar om kabel+reviderad webbladdavsikt under **både** owner-/reader-`flock`. Två rena hjälpare `cable_matches_locked_preflight`, `intent_matches_locked_preflight` kontrollerar jämställda, oförändrade snapshots. | En okänd/ändrad kabel-epok, tracker-ID, CP-state, `settings.revision`, `deadline/economy`, avresetid eller prisgräns ger `inhibited, writes=0`. Ofullständiga indata ger `False`, aldrig fiktiv källa till samtycke. |
+| **Beslut** | Befintliga rena `choose_action` och `decide_grid_price`, **oförändrade**. | Samma indata ger samma `EvPriceAction` (pause/resume/no_change/inhibited), samma priströskel och 6 A-gräns. Testet kräver att `choose_action` inte har några FC10-kall. |
+| **Fysisk verkställighet** | Ny `execute_locked_fc10` ansvarar **ensamt** för beständig `pending/releasing` före **en** `EvccAscii.set_limit_raw`, separat strikt FC03/readback och därefter `owned/released`. Den anropas bara efter båda låsen och revaliderad avsikt. | **Exakt en** scheduled FC10 per beslut och inga retries på okänt utfall. Om readback/transport misslyckas överlever `pending` eller `releasing` för operatorstyrd reconciliation; någon annan mission får inte ärva den. |
+| **Kvittens/status** | Returvärdet från `execute_locked_fc10` är samma `{state,writes,configured_raw,reason}`; separat befintlig `publish_controller_status` från `main()` för sanerat webb-API. | En `state=pause` med `writes=1` är en verifierad **register-/pilotreadback i fake**, inte fysisk batteri-/säkringsgaranti. Larm-/statuspostens privata owner-ID publiceras inte. |
+
+Den tidigare `run_once` har **ingen direkt `set_limit_raw` längre**. Den enda scheduled FC10 ligger i den nya namngivna execute-funktionen. De ändrade kodstyckena är flyttade utan ändrad ordning på `write_owner`, FC10, readback och `write_owner`. Övriga komplexa preflight-kontroller och `publish_controller_status`-implementationen är intakta; detta är en liten, återupptagningsbar funktionsextraktion, inte omskrivning av tillståndsmaskinen.
+
+**Tester:** `scripts/tests/test_ev_price_executor_stages.py` **6/6** (ren kabel/preferensgrind, AST-kontrakt för ensam FC10-exekverare, full `pause→resume` 1+1 FC10, manual B2 stopp 0 skrivningar och osäkert FC10 => durable `pending`). Dessutom befintliga `test_ev_price_controller.py` **12/12**, `test_ev_price_pause_owner.py` **26/26** och `test_ev_price_revision_races.py` **6/6** = **50/50 fokuserade**. Tester använder endast TempDirectory, FakeEvcc och synkrona stubbar. Ingen kontakt med verklig laddbox, bil eller växelriktare.
+
+**Kvarstående NO-GO:** En installerad EVCC-control-service har fortfarande käll-/installationsparitetskrav i **E01**, faktisk anslutning/återstart kräver **V02–V06**, och det lokala `flock`-kontraktet hindrar inte externa Modbus-TCP-klienter. En fysisk automatisk start efter manuell paus är **aldrig** godkänd av denna strukturella förbättring. Driftsättning kräver explicit release/rollback-GO.
