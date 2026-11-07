@@ -5,6 +5,7 @@ import type { DispatchCardData, DispatchTone, GaugeTone, DecisionOutcome } from 
 import { gaugeFillPct, gaugeTone } from '@/lib/dispatch-card';
 import { DASHBOARD_POLL_MS } from './poll-cadence';
 import { apiPath } from '@/lib/base-path';
+import ControlEvidencePanel from './ControlEvidencePanel';
 
 const BADGE_TONE_STYLE: Record<DispatchTone, { bg: string; color: string }> = {
   AKTIV: { bg: 'color-mix(in srgb, var(--color-buy) 16%, transparent)', color: 'var(--color-buy)' },
@@ -244,6 +245,7 @@ export default function DispatchCard({ initialData }: { initialData: DispatchCar
       {/* expanded detail (Layer 2) */}
       {expanded && (
         <div className="flex flex-col" style={{ gap: 12 }}>
+          <ControlEvidencePanel />
           <div className="flex" style={{ gap: 8 }}>
             <PriceChip label="Köp" value={current.buyOre} color="var(--color-buy)" />
             <PriceChip label="Sälj" value={current.sellOre} color="var(--color-sell)" />

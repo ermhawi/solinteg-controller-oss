@@ -39,7 +39,7 @@ export default function LiveStatus({ today, updatedTime }: { today: string; upda
   }, []);
 
   return (
-    <div className="flex items-center gap-2 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+    <div className="flex items-center gap-2 text-xs font-medium" title="Färsk telemetri, inte verifierat styr- eller säkerhetsläge" style={{ color: 'var(--text-muted)' }}>
       <span className="relative h-[7px] w-[7px]">
         <span
           className="absolute inset-0 rounded-full"
