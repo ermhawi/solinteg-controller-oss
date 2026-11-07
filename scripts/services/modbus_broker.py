@@ -135,6 +135,7 @@ class Broker:
         runtime_mode: str = "offline",
         transactions_enabled: bool = False,
         safety_supervisor_enabled: bool = False,
+        strict_transactions_timeout_latch: bool = False,
     ):
         if not callable(transport_factory):
             raise TypeError("transport_factory required")
@@ -149,6 +150,9 @@ class Broker:
         if safety_supervisor_enabled and (runtime_mode != "control" or not armed
                                           or not transactions_enabled):
             raise PermissionError("safety supervisor requires armed transaction runtime")
+        if strict_transactions_timeout_latch and (runtime_mode != "control" or not armed
+                                                  or not transactions_enabled):
+            raise PermissionError("strict timeout fencing requires armed transaction runtime")
         if min_write_interval_s < 0 or max_sample_s <= 0 or battery_kwh <= 0:
             raise ValueError("invalid timing or battery capacity")
         if charge_sign not in (None, "neg_charge", "pos_charge"):
@@ -157,6 +161,8 @@ class Broker:
         self._runtime_mode = runtime_mode
         self._transactions_enabled = bool(transactions_enabled)
         self._safety_supervisor_enabled = safety_supervisor_enabled is True
+        self._strict_transactions_timeout_latch = strict_transactions_timeout_latch is True
+        self._last_fence_reason: str | None = None
         self._transaction_worker = None
         self._transport = None
         self._armed = bool(armed)
@@ -202,6 +208,8 @@ class Broker:
                 "read_only": self._runtime_mode == "readonly",
                 "control_runtime": self._runtime_mode == "control",
                 "transactions_enabled": self._transactions_enabled,
+                "strict_transaction_fencing": self._strict_transactions_timeout_latch,
+                "last_fence_reason": self._last_fence_reason,
             }
 
     def submit(
@@ -286,7 +294,9 @@ class Broker:
                 if key != old_key:
                     raise BrokerError("request_id reused for different operation")
             else:
-                if operation in CONTROLS and self._safety_latched:
+                if self._safety_latched and (operation in CONTROLS or
+                                             (self._strict_transactions_timeout_latch
+                                              and operation in TRANSACTIONS)):
                     raise Fenced("safety latch prevents new control")
                 if control and operation not in SAFETY and len(self._requests) >= 1024:
                     # Never queue a command before reserving its idempotency key.
@@ -321,6 +331,9 @@ class Broker:
                     self._generation += 1
                     if operation != RAW_WRITE and operation not in TRANSACTIONS:
                         self._safety_latched = True
+                    elif operation in TRANSACTIONS and self._strict_transactions_timeout_latch:
+                        self._safety_latched = True
+                        self._last_fence_reason = "ambiguous_transaction_timeout"
             raise TimeoutError("broker request result unknown; control fenced") from exc
 
     def _fenced(self, epoch: int) -> None:
@@ -583,6 +596,13 @@ class Broker:
                     result = self._apply(operation, watts, epoch)
                 future.set_result(result)
             except Exception as exc:  # noqa: BLE001 - broker returns explicit failure
+                if self._strict_transactions_timeout_latch and operation in TRANSACTIONS:
+                    with self._lock:
+                        if self._generation == epoch:
+                            self._generation += 1
+                        self._safety_latched = True
+                        if self._last_fence_reason is None:
+                            self._last_fence_reason = "transaction_failed"
                 future.set_exception(exc)
             finally:
                 self._tasks.task_done()

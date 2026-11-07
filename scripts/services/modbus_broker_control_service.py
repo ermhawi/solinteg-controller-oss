@@ -90,6 +90,9 @@ def build_control_broker(environ, *, client_factory=None) -> Broker:
     supervisor_opt_in = environ.get(SAFETY_ENABLED_ENV, "0")
     if supervisor_opt_in not in ("0", "1"):
         raise ValueError("broker safety supervisor must be explicitly 0 or 1")
+    strict_timeout_opt_in = environ.get("SOLINTEG_BROKER_STRICT_TRANSACTION_TIMEOUT_LATCH", "0")
+    if strict_timeout_opt_in not in ("0", "1"):
+        raise ValueError("strict transaction timeout latch must be explicitly 0 or 1")
 
     return Broker(
         lambda: ControlModbusTransport(
@@ -98,6 +101,7 @@ def build_control_broker(environ, *, client_factory=None) -> Broker:
         armed=True, runtime_mode="control",
         transactions_enabled=transaction_opt_in == "1",
         safety_supervisor_enabled=supervisor_opt_in == "1",
+        strict_transactions_timeout_latch=strict_timeout_opt_in == "1",
         battery_kwh=capacity, max_sample_s=span,
         charge_sign=environ["SOLINTEG_50207_SIGN"],
         rejection_sink=lambda event: log.warning(
