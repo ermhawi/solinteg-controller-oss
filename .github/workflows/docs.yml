@@ -24,7 +24,11 @@ jobs:
       - name: Build documentation
         run: |
           python3 -m pip install --disable-pip-version-check -r requirements-docs.txt
-          zensical build
+          zensical build --strict
+      - name: Check Mermaid pages
+        run: |
+          test "$(grep -o '<pre class="mermaid">' site/architecture/system-overview/index.html | wc -l)" -eq 2
+          test "$(grep -o '<pre class="mermaid">' site/architecture/control-flows/index.html | wc -l)" -eq 3
       - uses: actions/upload-artifact@v4
         with:
           name: documentation-site

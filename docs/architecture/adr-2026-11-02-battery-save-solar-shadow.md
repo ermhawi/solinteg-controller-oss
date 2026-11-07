@@ -1,6 +1,12 @@
 # ADR 2026-11-02: solöverskott under tvingat batterisparläge
 
-**Status:** Implementerat endast som offline-/read-only-skuggbedömning. **Ej driftsatt; fysisk aktivering NO-GO.**
+**Status:** Den separata skuggmodellen i detta dokument är fortfarande endast
+read-only och **inte driftsatt som fysisk EMS-`solar_charge`**.
+**Senare ändring 2026-11-05:** En annan, centralt samordnad sol-/EMS-prioritetsregel
+har driftsatts selektivt i ordinarie dispatcher med General/EMS-växling;
+se [den nya ADR:n](adr-2026-11-05-energy-priority-arbiter.md). Denna
+skuggmodells tidigare fysiska NO-GO avser fortfarande dess särskilda
+EMS-solbörvärde, inte den nya releasevägen.
 
 ## Bakgrund och avgränsning
 

@@ -4,24 +4,48 @@ docs_dir = "docs"
 site_dir = "site"
 nav = [
   { "Start" = "index.md" },
-  { "Repository" = "repository-layout.md" },
-  { "Arkiv och städning" = "solinteg-archive-and-retired-artifacts-2026-11-01.md" },
-  { "Modbus-broker (plan)" = "plans/modbus-broker-2026-11-01.md" },
-  { "Modbus-broker (offline 0–2)" = "modbus-broker-offline-2026-11-01.md" },
-  { "Modbus-broker (read-only etapp 3)" = "modbus-broker-readonly-stage3-2026-11-02.md" },
-  { "ADR: Modbus-broker (föreslagen)" = "architecture/adr-2026-11-01-single-owner-modbus-broker.md" },
-  { "EV-laddning" = [
-    "ev-grid-priority-permanent-2026-10-29.md",
-    "soc25-handoff-shadow-2026-11-01.md",
-    "temporary-soc25-evpaused-pilot-2026-11-01.md",
-    "soc25-reserve-no-ev-2026-11-01.md",
-    "soc25-recovery-retry-2026-11-01.md",
-    "soc25-recovery-third-2026-11-01.md",
-    "temporary-soc25-plan-bypass-2026-11-01.md",
-    "evcc-readonly-rollout-2026-10-28.md",
+  { "Drift och risker" = [
+    "current-state.md",
+    "known-issues.md",
+    "operations/verification.md",
+    "repository-layout.md",
+    "solinteg-archive-and-retired-artifacts-2026-11-01.md",
+  ] },
+  { "Husbatteri och EMS" = [
+    "architecture/adr-2026-11-05-energy-priority-arbiter.md",
+    "architecture/adr-2026-11-02-ems-general-failsafe.md",
+    "architecture/adr-2026-11-02-economic-reserve-recovery.md",
+    "solinteg-native-endsoc-review-2026-11-05.md",
+    "solinteg-broker-hold-probe-2026-11-05.md",
+  ] },
+  { "Modbus-broker" = [
+    "modbus-broker-transactions-release-2026-11-04.md",
+    "modbus-broker-control-stage-2026-11-04.md",
+    "modbus-broker-watchdog-dell-2026-11-03.md",
+    "modbus-broker-emergency-policy-offline-2026-11-03.md",
+  ] },
+  { "EVCC och Volvo" = [
+    "architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md",
+    "architecture/adr-2026-11-04-ev-price-empirical-live.md",
+    "architecture/adr-2026-11-05-ev-web-live-mode-selection.md",
+    "architecture/adr-2026-11-05-ev-unplug-end-and-price-status.md",
+    "evcc-cable-tracking-2026-11-04.md",
+    "ev-ac-soc-empirical-2026-11-04.md",
     "ev-cost-ledger.md",
   ] },
   { "Elprisprognos" = "xc40-price-forecast.md" },
+  { "Arkitektur och ADR" = [
+    "architecture/system-overview.md",
+    "architecture/control-flows.md",
+    "architecture/index.md",
+  ] },
+  { "Arkiv" = "archive/index.md" },
+  { "Dokumentationsutveckling" = "development.md" },
+]
+
+[project.markdown_extensions]
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
 ]
 
 [project.theme]

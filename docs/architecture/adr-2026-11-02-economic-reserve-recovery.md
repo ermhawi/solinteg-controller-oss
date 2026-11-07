@@ -6,6 +6,14 @@ dispatcher, site-inställningen för säkerhetsåterhämtning och kompilerat
 webbbygge ändrades. Den installerade dispatchern har även äldre
 platsanpassningar som inte ersatts med hela Git-filen.
 
+**Senare uppföljning 2026-11-05:** Den tidigare 100 W-gränsen för byte
+mellan General och EMS visade faktisk pendling och förlorad solupptagning.
+Den nya [energi-prioritets-ADR:n](adr-2026-11-05-energy-priority-arbiter.md)
+beskriver den centrala hysteresisregleringen. **Sedan 2026-11-05 kl.
+11:28:46 CET är den selektivt installerad och aktiverad på Dell**. Den
+äldre ekonomi-/SoC-återhämtningsregeln och dess säkerhetsprioritet är
+oförändrade; se live-releaseavsnittet i den nya ADR:n.
+
 ## Bakgrund och observerad regression
 
 Den 20 oktober var prisoptimeringen fungerande. A/B-återspelning på 13 historiska

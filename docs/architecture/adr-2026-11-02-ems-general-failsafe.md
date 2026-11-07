@@ -1,6 +1,11 @@
 # ADR 2026-11-02: EMS, General, skydd och Dell-bortfall
 
-**Status:** Dokumenterad riskbedömning. **Ingen ny funktion driftsatt; fysisk EMS-/solhandoff NO-GO.**
+**Status:** Historisk riskbedömning från 2026-11-02. **Uppdatering 2026-11-05:**
+En selektiv, användargodkänd General/EMS-solhandoff har nu aktiverats
+med central hysteresisreglering, utan oberoende ny fallbackfunktion.
+Se [live-release-ADR](adr-2026-11-05-energy-priority-arbiter.md).
+Tillverkarens EMS-timeout och fysisk native EndSOC-prioritet är fortsatt
+**overifierade** och tidigare riskbedömning gäller oförändrat för dem.
 **Omfattning:** Sundsvalls Solinteg MHT-10K-25, Sunwoda (3 × 5 kWh) och styrning på Dell. Baslinje 2026-11-02; ingen garanti för andra enheter eller firmware.
 
 ## Beslut i korthet

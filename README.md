@@ -1,5 +1,7 @@
 # solinteg-controller
 
+> **Sundsvall-installationens aktuella dokumentation:** [driftstatus](docs/current-state.md), [kända brister](docs/known-issues.md), [arkitekturbeslut](docs/architecture/index.md) och [historiska prov i arkivet](docs/archive/index.md). Källkods-repot och den platsanpassade produktionen är separata; en Git-commit driftsätter inget automatiskt.
+
 A day-ahead battery dispatch optimizer for home solar+battery systems on the Swedish electricity
 market — built for and running on a Solinteg hybrid inverter, planning against real Nord Pool
 spot prices, a solar production forecast, and a weather-aware household load model.

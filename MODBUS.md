@@ -1,5 +1,7 @@
 # Solinteg Modbus reference (read + control)
 
+> **Aktuellt läge (kontrollerat 2026-11-07):** Normal Modbus-trafik går genom den aktiva [kontrollbrokern med hela styrtransaktioner](docs/modbus-broker-transactions-release-2026-11-04.md). Detta eliminerar inte den [gamla watchdoggens felvägsrisker](docs/architecture/adr-2026-11-04-broker-legacy-failure-scope.md). De äldre offline/read-only-stegen nedan är **historik**, inte ett aktuellt förbud mot brokerdrift. Se [driftöversikten](docs/current-state.md).
+
 **Broker source implemented, read-only cutover NOT deployed (2026-11-02):** [single-owner migration plan](docs/plans/modbus-broker-2026-11-01.md), [offline baseline and tests](docs/modbus-broker-offline-2026-11-01.md), [staged read-only adapter/poller with NO-GO safety gates](docs/modbus-broker-readonly-stage3-2026-11-02.md), and [proposed production ADR](docs/architecture/adr-2026-11-01-single-owner-modbus-broker.md). Historical stage-3 state only: the read-only broker was not deployed. **The full normal broker was deployed later on 2026-11-04**; see below.
 
 **2026-11-04:** [Gemensam serialiserad broker för pollerns FC03 och dispatcherns FC03/FC06](docs/modbus-broker-control-stage-2026-11-04.md) är **driftsatt på Dell sedan 2026-11-04 kl. 05:45 CET** med en normal TCP-session och bevarad gammal watchdog. [ADR](docs/architecture/adr-2026-11-04-broker-legacy-failure-scope.md): befintlig watchdog/failure-kod behålls; bristande absolut TCP-exklusivitet vid fel dokumenteras som känd brist. Kontrollbroker och read-only-broker är alternativa tjänster, aldrig samtidiga.
@@ -27,12 +29,12 @@ still a list of things to confirm on **your** hardware, and that script is there
   see below). Empirically (2026-07-02, see `dispatch_loop.py`'s CONNECTION MODEL docstring): a
   **brief, on-demand** second connection — opened, used, closed within a second or two — ran
   undisturbed alongside the poller's persistent one across five separate connect/write/close
-  cycles from other scripts, including two that held a connection for 16+ minutes each. Current
-  callers relying on this: `modbus_poller.py` (persistent), `dispatch_loop.py` and
-  `watchdog.py` (both brief/on-demand, at most once a minute each). Keeping those connections
-  brief and infrequent minimizes overlap regardless, rather than treating that finding as
-  airtight — it is not a documented guarantee from the vendor, just a repeated empirical result
-  on this exact dongle/firmware.
+  cycles from other scripts, including two that held a connection for 16+ minutes each. **Historical
+  direct-client model only (2026-07):** normal poller and dispatcher traffic was moved to the
+  single-owner broker on 2026-11-04. The independent legacy watchdog still has a direct
+  fallback path in failure cases; it must not be mistaken for a fully fenced, guaranteed
+  exclusive connection. See the [broker failure-scope ADR](docs/architecture/adr-2026-11-04-broker-legacy-failure-scope.md).
+  The old coexistence measurements are empirical, not a vendor guarantee.
 - **Sundsvall 2026-11-04 (separate MHT-10K-25 site):** a poller FC03 request
   twice returned an unexpected `WriteSingleRegisterResponse` for `50207`, with
   raw values matching the dispatcher's contemporaneous charge/discharge
@@ -61,7 +63,7 @@ still a list of things to confirm on **your** hardware, and that script is there
   GROUP BY excess_s ORDER BY excess_s;
   ```
 
-  - **A mode at 4-8 s → the cloud.** Not your dongle, not your cabling. Nothing local fixes it.
+  - **A mode at 4–8 s → consistent with previously measured cloud-upload stalls**, but not proof of the cause for a new incident. Compare broker logs, Wi-Fi and inverter-cloud timing before attributing it.
   - **A mode at exactly one `POLL_INTERVAL` → whole skipped cycles** (the read failed, the next
     succeeded). Cross-check your poller's log for failed polls.
   - **A long flat tail, with ping jitter to match → your network path.**

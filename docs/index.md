@@ -1,68 +1,61 @@
 # Solinteg – teknisk dokumentation
 
-**Status:** Se varje länkad guide; planerade funktioner är inte automatiskt driftsatta.
+**Utgå från faktisk drift, inte dokumentdatum eller Git-commit.** Den här startsidan skiljer aktiva system, öppna risker, planerad funktion och historiska experiment. Senaste samlade läsgranskning: **2026-11-07**.
 
-## Läs vidare
+## Börja här
 
-- [Projektöversikt och användning](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/README.md)
-- [Repositorylayout](repository-layout.md)
-- [Plan: Modbus-broker, ensam TCP-ägare och säker migrering](plans/modbus-broker-2026-11-01.md)
-- [Modbus-broker etapp 0–2: offlineimplementation och baslinje](modbus-broker-offline-2026-11-01.md)
-- [Modbus-broker etapp 3: read-only-kod och grindar inför driftsättning](modbus-broker-readonly-stage3-2026-11-02.md)
-- [Broker gemensam FC03/FC06 – driftsatt normalväg och rollback](modbus-broker-control-stage-2026-11-04.md)
-- [Driftsatt: hela styrtransaktioner i brokern – liveverifiering, rollback och uppföljning](modbus-broker-transactions-release-2026-11-04.md)
-- [ADR: flytta odelade registersekvenser till broker-worker, behåll failure-scenariot](architecture/adr-2026-11-04-broker-complete-transactions.md)
-- [ADR: behåll befintlig watchdog och dokumentera felvägens begränsningar](architecture/adr-2026-11-04-broker-legacy-failure-scope.md)
-- [Broker-watchdog: observationspilot på Dell, utan Modbus-skrivning](modbus-broker-watchdog-dell-2026-11-03.md)
-- [Nödfallback: SoC-/BMS-grind, syntetisk root/fencing-kedja, endast offline](modbus-broker-emergency-policy-offline-2026-11-03.md)
-- [Sundsvall: skrivskyddad inventering av SoC-skydd, firmwareläge och fallback-verifieringsmatris](solinteg-fallback-readonly-inventory-2026-11-03.md)
-- [ASUS daglig routeromstart: rotorsak till nätavbrott, avaktiverat schema, rollback](solinteg-network-incident-2026-11-03.md)
-- [Nattverifiering 4 november: inget 03:00-avbrott, kvarstående Modbus-svarskorsning](solinteg-modbus-overnight-2026-11-04.md)
-- [Frågor till Solinteg om EMS-/SoC-skydd och säker återställning](solinteg-vendor-ems-questions-2026-11-03.md)
-- [Föreslagen ADR: en Modbus-broker med oberoende nödfallback](architecture/adr-2026-11-01-single-owner-modbus-broker.md)
-- [ADR: Dell först för broker-observatör, flytt till Pi senare](architecture/adr-2026-11-03-dell-broker-observer.md)
-- [Föreslagen ADR: stale brokertelemetri och SoC-medveten dispatch (enbart offline)](architecture/adr-2026-11-02-stale-telemetry-soc.md)
-- [Arkiv och avveckling av gamla drifts-/testartefakter](solinteg-archive-and-retired-artifacts-2026-11-01.md)
-- [ADR: krypterat USB-arkiv och bortstädning efter prover](architecture/adr-2026-11-01-solinteg-usb-archive.md)
-- [EV-laddning och prioritering](ev-grid-priority-permanent-2026-10-29.md)
-- [Aktuell EV/L3-status: dokumentation mot kod och drift, test och GO/NO-GO](ev-l3-code-drift-review-2026-11-04.md)
-- [Driftsatt: EV/L3 nätprioritet i live-dispatch, separat bil i Systemstatus och avvecklade shadow-tjänster](architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md)
-- [Bilens billiga prisfönster i Elpriser och förberedelserna för EVCC-prisstyrning](architecture/adr-2026-11-04-ev-price-plan-and-chart.md)
-- [Driftsatt: EVCC:s automatiska prisstyrning med användargodkänd empirisk energimodell och dokumenterade brister](architecture/adr-2026-11-04-ev-price-empirical-live.md)
-- [Driftsatt: välj EVCC-laddläge och svensk avresetid i webben, med revisionsfäktning och spärr vid prispaus](architecture/adr-2026-11-05-ev-web-live-mode-selection.md)
-- [Avslutade EVCC-laddsessioner: frys Volvo-SoC vid bekräftad urkoppling och redovisa särskilda inhibit-orsaker](architecture/adr-2026-11-05-ev-unplug-end-and-price-status.md)
-- [Driftsatt: GitHub OAuth2 utifrån, betrodd intern åtkomst utan extra adminnyckel och nätfilter på port 3007](architecture/adr-2026-11-05-solinteg-github-oauth-internal-access.md)
-- [EVCC kabel urkopplad/återansluten: persistent epoch och pausägarskap](evcc-cable-tracking-2026-11-04.md)
-- [EVCC/Volvo AC-kWh per SoC-punkt: genomförd empirisk provkalibrering, ej oberoende mätning](ev-ac-soc-empirical-2026-11-04.md)
-- [Vardag/helg-separerad huslast och avräkning av verifierad EVCC-last i prognosen](architecture/adr-2026-11-04-weekday-ev-load-profile.md)
-- [Historisk ADR: EVCC Ict2 som primär lastmätning och tidigare shadowmodell](architecture/adr-2026-11-04-evcc-ict2-metered-priority.md)
-- [Tillfälligt husbatteriprov 20–25 %](temporary-soc25-pilot-2026-10-31.md)
-- [Adaptivt 1,5 kW-prov till 25 %](temporary-soc25-adaptive-pilot-2026-10-31.md)
-- [Separat EV-pauserat 25 %-prov med watchdog](temporary-soc25-evpaused-pilot-2026-11-01.md)
-- [25 %-reserv utan inkopplad Volvo – tidsbegränsat prov](soc25-reserve-no-ev-2026-11-01.md)
-- [Fristående 26→28 %-återhämtningsprov med rättad watchdog](soc25-recovery-retry-2026-11-01.md)
-- [Tredje fristående 25–26→28 %-laddprov](soc25-recovery-third-2026-11-01.md)
-- [ADR: tredje prov med egen identitet och verifierad återställning](architecture/adr-2026-11-01-soc25-recovery-third.md)
-- [ADR: nytt 26→28 %-prov utan återanvändning av gammal status](architecture/adr-2026-11-01-soc25-recovery-retry.md)
-- [Tillfällig planändring: använd batteriet fram till återhämtningsprovet](temporary-soc25-plan-bypass-2026-11-01.md)
-- [ADR: tidsbegränsat undantag från batterisparläge](architecture/adr-2026-11-01-temp-soc25-plan-bypass.md)
-- [ADR: 25 %-återhämtning utan inkopplad bil](architecture/adr-2026-11-01-soc25-reserve-no-ev.md)
-- [ADR: EV-pauserad återhämtning med strikt förkontroll](architecture/adr-2026-11-01-soc25-evpaused-pilot.md)
-- [Föreslaget 25–26 % återhämtningsskydd (enbart skuggmodell)](soc25-handoff-shadow-2026-11-01.md)
-- [ADR: 25–26 % skuggmodell, utan fysisk aktivering](architecture/adr-2026-11-01-soc25-handoff-shadow.md)
-- [Beslut: fasberoende tillfällig återhämtningsladdning](architecture/adr-2026-10-31-adaptive-soc25-recovery.md)
-- [Beslut: tidsbegränsat fysiskt SoC-återhämtningsprov](architecture/adr-2026-10-31-temporary-soc25-recovery.md)
-- [Beslut: solmedveten EV/L3-shadow](architecture/adr-2026-10-31-ev-solar-shadow.md)
-- [ADR: solöverskott under batterisparläge, skrivskyddad skuggmodell](architecture/adr-2026-11-02-battery-save-solar-shadow.md)
-- [ADR: EMS kontra General, skydd, watchdog och bortfall av Dell](architecture/adr-2026-11-02-ems-general-failsafe.md)
-- [ADR: återställd prisstyrd mjuk 20 %-reserv och separat SoC-skydd](architecture/adr-2026-11-02-economic-reserve-recovery.md)
-- [EVCC – read-only rollout](evcc-readonly-rollout-2026-10-28.md)
-- [Elprisprognoser](xc40-price-forecast.md)
-- [Energikostnadsjournal](ev-cost-ledger.md)
-- [Modbus](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/MODBUS.md)
-- [Driftsinstruktioner](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/deploy/README.md)
-- [Domänkunskap](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/DOMAIN.md)
+- [Aktuellt driftläge: Dell, broker, batteri, EVCC och webb](current-state.md)
+- [Läsande driftverifiering med kontroller och begränsningar](operations/verification.md)
+- [Kända brister, osäkerheter och verifieringsluckor](known-issues.md)
+- [Systemarkitektur med Mermaid-diagram](architecture/system-overview.md)
+- [Styrflöden: batteri, EVCC-pris och brokerfel](architecture/control-flows.md)
+- [Arkitekturbeslut och deras status](architecture/index.md)
+- [Historiskt arkiv – avbrutna, ersatta och tillfälliga prov](archive/index.md)
+- [Bygga, kontrollera och förhandsgranska dokumentationen](development.md)
+- [Drift- och installationsrunbook](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/deploy/README.md) – omfattar även äldre releasenoteringar; kontrollera ovanstående nuläge först
+- [Git, utveckling kontra produktion och permanent `Sundsvall`-branch](repository-layout.md)
 
-## Dokumentationsstandard
+## Aktiv arkitektur och uppföljning
 
-Projektet följer [engineering-standards v1.3.0](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/policy.md), med obligatorisk [dokumentationspreflight](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/documentation-hygiene.md), [Git-hygien](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/git-hygiene.md) och [artefaktstädning](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/artifact-hygiene.md). Före utveckling ska arkitektur/design, kända brister och planernas status jämföras med aktuell kod, konfiguration och tester. Före Definition of Done uppdateras berörda dokument, kända brister och planstatus med verifierat resultat. Git/Markdown är källan till sanningen; se [lokal arkiv- och städrutin](solinteg-archive-and-retired-artifacts-2026-11-01.md). En commit på `Sundsvall` innebär inte driftsättning.
+### Husbatteri, sol och säkerhet
+
+- [Central prioritering: SoC-återhämtning, solupptagning, EMS och ekonomi](architecture/adr-2026-11-05-energy-priority-arbiter.md) – driftsättning dokumenterad, fysisk långtidsuppföljning kvarstår
+- [EMS BattCtrl kontra General och watchdog-failsafe](architecture/adr-2026-11-02-ems-general-failsafe.md)
+- [Ekonomisk reserv och SoC-återhämtning](architecture/adr-2026-11-02-economic-reserve-recovery.md)
+- [Native On-grid EndSOC 20 %: ej verifierat i EMS](solinteg-native-endsoc-review-2026-11-05.md)
+- [Frågor till Solinteg om firmware, EMS och skydd](solinteg-vendor-ems-questions-2026-11-03.md)
+- [Soft-hold-hårdvaruprov – endast förberett, inte aktiverat](solinteg-broker-hold-probe-2026-11-05.md)
+
+### Modbus och driftssäkerhet
+
+- [Broker: hela FC03-/FC06-transaktioner i normaldrift](modbus-broker-transactions-release-2026-11-04.md)
+- [Broker-baslinje och selektiv rollback, äldre release](modbus-broker-control-stage-2026-11-04.md)
+- [Broker-watchdog och observer](modbus-broker-watchdog-dell-2026-11-03.md)
+- [Nödfallback – endast offlinepolicy, inte garanterad i drift](modbus-broker-emergency-policy-offline-2026-11-03.md)
+- [Stale-data-/SoC-frågor och fysiska skydd: läsande inventering](solinteg-fallback-readonly-inventory-2026-11-03.md)
+- [Äldre migrationsplan med öppna uppföljningspunkter](plans/modbus-broker-2026-11-01.md)
+- [Modbus-registerreferens](https://github.com/ermhawi/solinteg-controller-oss/blob/Sundsvall/MODBUS.md)
+
+### Volvo/EVCC och energikostnad
+
+- [L3-nätprioritet och bilen i Systemstatus](architecture/adr-2026-11-04-ev-l3-live-grid-first-and-ui.md)
+- [Driftsatt EVCC-priscontroller med accepterad empirisk energimodell](architecture/adr-2026-11-04-ev-price-empirical-live.md)
+- [Välj `deadline`/`economy` och avresetid i webben](architecture/adr-2026-11-05-ev-web-live-mode-selection.md)
+- [Avslutade sessioner och verifierad kabelurkoppling](architecture/adr-2026-11-05-ev-unplug-end-and-price-status.md)
+- [EVCC-kabelspårning och pausägarskap](evcc-cable-tracking-2026-11-04.md)
+- [Empirisk AC-kWh per Volvo SoC, ej oberoende mätning](ev-ac-soc-empirical-2026-11-04.md)
+- [Vardag/helg och avräkning av EV-lasten](architecture/adr-2026-11-04-weekday-ev-load-profile.md)
+- [Energikostnadsjournal – read-only utvecklingsläge](ev-cost-ledger.md)
+- [Elpris- och solprognoser](xc40-price-forecast.md)
+- [GitHub OAuth2 utifrån, intern nätgräns](architecture/adr-2026-11-05-solinteg-github-oauth-internal-access.md)
+
+## Incidenter, bevis och arkiv
+
+- [ASUS/routeravbrott 3 november: orsak och åtgärd](solinteg-network-incident-2026-11-03.md)
+- [Nattverifiering 4 november: kvarvarande protokollsymtom](solinteg-modbus-overnight-2026-11-04.md)
+- [Avveckling, krypterad bevisarkivering och reversibilitet](solinteg-archive-and-retired-artifacts-2026-11-01.md)
+- [Historiska EV/shadow-, SoC25- och brokerförsök](archive/index.md)
+
+## Dokumentations- och Git-hygien
+
+Följ [engineering-standards v1.3.0](https://github.com/ermhawi/engineering-standards/blob/v1.3.0/docs/policy.md): före ändringar läs relevant arkitektur, begränsningar, planstatus och aktiv drift. Efter ändringar håll denna översikt och [kända brister](known-issues.md) uppdaterade. Märk tydligt **föreslagen**, **implementerad i källkod**, **driftsatt** och **verifierad fysiskt** som olika tillstånd. Historiska ADR:er och experiment får bevaras men får inte framstå som dagens instruktion. `Sundsvall` mergas aldrig till `main`; inga ändringar i detta Git-repo driftsätts automatiskt.

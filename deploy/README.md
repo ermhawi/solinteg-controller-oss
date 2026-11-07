@@ -1,5 +1,7 @@
 # Local server deployment (NUC7i3BNB, Ubuntu Server 24.04 LTS)
 
+> **Aktuell drift kontra historiska instruktioner (2026-11-07):** Denna långa runbook innehåller äldre pilot-, shadow- och releaseanteckningar som inte längre beskriver dagens installation. Läs först [aktuell drift](../docs/current-state.md), [kända brister](../docs/known-issues.md) och [historiskt arkiv](../docs/archive/index.md). Särskilt gäller äldre EVCC-`NO-GO` och `inte installerad` **inte** den priscontroller som driftsattes 2026-11-04. NUC/port 3000 nedan är en historisk referensinstallation; Dell-webben använder port 3007. Utför inga äldre återställnings- eller installationskommandon utan att först verifiera faktisk installerad kod, systemd-drop-ins och fysisk säkerhet.
+
 **EVCC:s två laddlägen på webbsidan, driftsatt på Dell 2026-11-05:**
 `/solinteg/ev` låter behörig användare välja `deadline`
 (mål 80 % vid svensk avresetid, prisoptimering om möjligt)
@@ -584,6 +586,8 @@ enable active mode without a separately approved physical test. Roll back
 this guard by setting `DISPATCH_L3_CHARGE_GUARD_MODE=0` and restarting dispatch.
 No behavior change is made by merely syncing code to Git.
 
+**Historik, ej aktiv runbook:** Följande tillfälliga SoC25-prov och deras watchdog-/drop-in-kommandon avser enstaka försök under oktober–november och har [arkiverats](../docs/archive/index.md). Återanvänd aldrig deras statusfiler, startsekvenser eller rollback utan ny verifiering och nytt godkännande.
+
 **One-off 1.5 kW adaptive 25% recovery trial (separately approved):**
 See [adaptive runbook](../docs/temporary-soc25-adaptive-pilot-2026-10-31.md)
 and [ADR](../docs/architecture/adr-2026-10-31-adaptive-soc25-recovery.md).
@@ -699,6 +703,8 @@ Original plan JSON is SHA-journaled and restored on SoC <=26.5%,
 charger A1 evidence loss, safety failure or at **21:45 CET**, with an
 independent calendar stop timer. All other plan fields and future slots
 are untouched. Check real inverter output before claiming discharge.
+
+**Historik/avvecklat 2026-11-04:** Den separata EV/L3-shadowobservatören nedan är krypterat arkiverad och dess installerade tjänster avvecklade; de gamla kontroll- och återstartskommandona gäller **inte** dagens drift. Se [avvecklingsunderlag](../docs/solinteg-archive-and-retired-artifacts-2026-11-01.md).
 
 **Separate solar-aware EV/L3 observer (read-only, installed 2026-10-31):**
 `scripts/services/ev_grid_priority_shadow_observer.py` is deliberately

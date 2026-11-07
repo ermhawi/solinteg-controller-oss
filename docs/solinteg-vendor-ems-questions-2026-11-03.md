@@ -56,7 +56,18 @@ serviceadress för Sverige. Källa:
    inverter's built-in On-grid EndSOC to the desired
    reserve, and are there grid-charging, warranty or
    BMS side effects? Please specify any prerequisites.
-6. What is the recommended **read-only** way to obtain
+6. The manufacturer *Hybrid Inverter MODBUS RTU Protocol* v00.02
+   lists scale **1000** for register `52503`, while our current
+   MHT-10K-25 code and historical readback treat `52503=100`
+   as 10.0% (0.1% steps). What is the **correct raw encoding,
+   scaling and range for exactly our model/ARM/DSP/BMS firmware**?
+   We will not write `52503` based on an unverified conversion.
+7. If on-grid EndSOC is raised from the current 10% to 20%,
+   does this cut off a continuing positive `50207` discharge
+   while `50000=0x0303` stays selected, including after
+   third-party Modbus commands stop? Does solar charging
+   remain possible, and when/how does discharge resume?
+8. What is the recommended **read-only** way to obtain
    exact ARM/DSP, datalogger and battery BMS firmware
    versions? We prefer the OLED `FM Version` page
    or the monitoring system's `firmwareVersion` field,
