@@ -17,6 +17,7 @@
 ## Öppna förslag och osäkra antaganden
 
 - [Hälsokontrakt: liveness, beslut, readback och fysisk osäkerhet](adr-2026-11-07-control-health-contract.md) – endast offline, ingen produktionssignal.
+- [Immutabelt dispatch-beslutsbevis och källa-only loggkontrakt](adr-2026-11-07-dispatch-decision-contract.md) – avsett för D05-integration, ännu inte installerad.
 - [Modbus-fencing, ansvar och NO-GO för automatisk fallback](adr-2026-11-07-modbus-fencing.md) – framtida beslut, inte aktiverad supervisor.
 - [Felmatris för watchdog, broker, nät och strömavbrott](failure-mode-matrix-2026-11-07.md) – kända brister och tillåten respons, utan fysisk provning.
 - [Stale brokertelemetri och SoC](adr-2026-11-02-stale-telemetry-soc.md) – ursprungligt offlineförslag; jämför med senare brokerrelease innan åtgärd.
