@@ -10,6 +10,7 @@ import type { DispatchSlot } from './optimizer';
 import { readLiveInverterData, socKwhOrDefault } from './inverter';
 import type { InverterLiveData } from './inverter';
 import { trimIncompleteTerminalDays } from './horizon';
+import { assessPublishableHorizon } from './horizon-safety';
 import {
   logPriceSnapshot,
   logOptimizerRun,
@@ -283,9 +284,19 @@ export async function producePlan(): Promise<PlanResult> {
       // dispatcher. The executor separately limits high-power grid charging
       // against fresh L3 CT readings, or falls back to 300 W when unverified.
       // Do not truncate at midnight: that changes TODAY's economic decisions.
-      dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, options);
-      logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
-      controlPlanEndTime = socIsLive ? dispatchSchedule.at(-1)?.startTime ?? null : null;
+      const horizonGate = assessPublishableHorizon(
+        optimizerSlots.length, process.env.SOLINTEG_MIN_PLAN_HORIZON_HOURS,
+      );
+      if (!horizonGate.publishable) {
+        // Do not publish a new, potentially deep-discharging plan from a
+        // collapsed forecast. This gate is opt-in and OFF by default; an
+        // existing plan already in SQLite is NOT revoked by this code.
+        console.error(`plan publication inhibited: horizon ${horizonGate.reason}`);
+      } else {
+        dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, options);
+        logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
+        controlPlanEndTime = socIsLive ? dispatchSchedule.at(-1)?.startTime ?? null : null;
+      }
     } catch (err) {
       // non-fatal — chart renders without dispatch overlay — but logged so a failure here
       // (e.g. optimizeDispatch throwing) isn't as invisible as the price_snapshots gap was.

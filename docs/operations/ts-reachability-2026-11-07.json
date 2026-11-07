@@ -1,6 +1,6 @@
 {
   "schema": "solinteg-ts-static-review-v1",
-  "source_modules": 86,
+  "source_modules": 87,
   "entrypoints": [
     "app/api/control-evidence/route.ts",
     "app/api/dispatch/route.ts",
@@ -81,6 +81,7 @@
     "lib/ev-state.ts",
     "lib/evcc-car-flow.ts",
     "lib/forecast.ts",
+    "lib/horizon-safety.ts",
     "lib/horizon.ts",
     "lib/inverter-api-status.ts",
     "lib/inverter.ts",
@@ -273,19 +274,25 @@
     "DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH": [
       {
         "file": "lib/plan.ts",
-        "line": 263
+        "line": 264
       }
     ],
     "SOLINTEG_HOLD_ENABLED": [
       {
         "file": "lib/plan.ts",
-        "line": 272
+        "line": 273
       }
     ],
     "SOLINTEG_CONTROL_ARMED": [
       {
         "file": "lib/plan.ts",
-        "line": 273
+        "line": 274
+      }
+    ],
+    "SOLINTEG_MIN_PLAN_HORIZON_HOURS": [
+      {
+        "file": "lib/plan.ts",
+        "line": 288
       }
     ],
     "SOLAR_FORECAST_CACHE_PATH": [

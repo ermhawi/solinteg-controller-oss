@@ -232,6 +232,32 @@ describe('producePlan — happy path wiring', () => {
   });
 });
 
+describe('producePlan — opt-in minimum horizon publication guard', () => {
+  it('does not publish or optimize a two-hour forecast under an explicit 12h minimum', async () => {
+    vi.stubEnv('SOLINTEG_MIN_PLAN_HORIZON_HOURS', '12');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await producePlan();
+      expect(result.dispatchSchedule).toBeNull();
+      expect(result.controlPlanEndTime).toBeNull();
+      expect(optimizeDispatch).not.toHaveBeenCalled();
+      expect(logOptimizerRun).not.toHaveBeenCalled();
+      expect(logPriceSnapshot).toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith('plan publication inhibited: horizon short');
+    } finally {
+      error.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('preserves default-off planning of the same short horizon', async () => {
+    const result = await producePlan();
+    expect(result.dispatchSchedule).toBe(DISPATCH_FIXTURE);
+    expect(optimizeDispatch).toHaveBeenCalled();
+    expect(logOptimizerRun).toHaveBeenCalled();
+  });
+});
+
 describe('producePlan — short horizon diagnostics', () => {
   it('reports the active positive terminal energy value instead of asserting terminal-value-0', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
