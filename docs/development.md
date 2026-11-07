@@ -37,6 +37,12 @@ Zensicals [officiella Mermaid-integration](https://zensical.org/docs/authoring/d
 
 **Verifiering:** ett lyckat `build --strict` ska följas av kontroll att genererade sidor har `mermaid`-element och att diagrammen fungerar i webbläsaren. Den aktuella Zensical-teman placerar SVG i ett **stängt Shadow DOM** under `.mermaid`: `querySelector('.mermaid svg')` returnerar därför tomt även när diagrammet är korrekt renderat. Kontrollera det faktiskt ritade diagrammet, inte bara dess öppna DOM. Enbart giltig Markdown bevisar inte ett sant systembeteende.
 
+## Kontroll av källkvalitet och fysisk testisolering
+
+- [Python Ruff-baslinje, endast rapportläge](python-static-quality-2026-11-07.md) – reproducerbara regelval och 144 fynd utan massformatteringar.
+- [CI och testklassificering](test-boundary-and-ci-2026-11-07.md) – GitHub-hostad, avväpnad kvalitetsgrind; ingen fysisk verifiering.
+- [Manuella och fysiska prober i BEHÅLL/FRYS](operations/probe-quarantine-2026-11-07.md) – även förberedd broker-hold fortsatt NO-GO.
+
 ## Rutiner för dokumentationsändringar
 
 1. Kontrollera aktuella tjänster, källkod och [dokumenterade osäkerheter](known-issues.md). Skilj `föreslagen`, `implementerad`, `driftsatt` och `fysiskt verifierad`.

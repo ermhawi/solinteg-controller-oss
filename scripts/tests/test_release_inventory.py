@@ -21,6 +21,39 @@ spec.loader.exec_module(inventory)
 
 
 class InventoryTests(unittest.TestCase):
+    def test_source_manifest_validation_is_safe_and_complete(self):
+        report = inventory.validate_source_manifest(ROOT)
+        self.assertEqual(report["status"], "pass", report)
+        self.assertEqual(report["module_count"], 24)
+        self.assertEqual(report["errors"], [])
+
+    def test_manifest_validation_rejects_missing_unsafe_and_duplicate_paths(self):
+        bad = {
+            "inverter": ("scripts/services/missing_control.py", "../private/file.env",
+                         "scripts/services/watchdog.py"),
+            "evcc": ("scripts/services/watchdog.py",),
+        }
+        report = inventory.validate_source_manifest(ROOT, modules=bad)
+        self.assertEqual(report["status"], "blocked")
+        self.assertTrue(
+            {"missing-source", "unsafe-source-path", "duplicate-source-path"}
+            <= {e["code"] for e in report["errors"]}
+        )
+        self.assertNotIn("../private/file.env", json.dumps(report))
+
+    def test_manifest_validation_fails_closed_on_new_local_ev_import(self):
+        with tempfile.TemporaryDirectory() as d:
+            site = Path(d)
+            services = site / "scripts/services"
+            services.mkdir(parents=True)
+            (services / "ev.py").write_text("import helper\n")
+            (services / "helper.py").write_text("pass\n")
+            result = inventory.validate_source_manifest(
+                site, modules={"evcc": ("scripts/services/ev.py",)}, units=())
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn({"code": "unlisted-ev-import", "path": "scripts/services/helper.py"},
+                      result["errors"])
+
     def test_ev_manifest_covers_active_entrypoints_and_all_local_imports(self):
         service_dir = ROOT / "scripts" / "services"
         included = {Path(path).name for path in inventory.MODULES["evcc"]}

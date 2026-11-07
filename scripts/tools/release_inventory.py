@@ -8,6 +8,7 @@ Output never contains raw systemd arguments, environment or absolute site paths.
 from __future__ import annotations
 
 import argparse
+import ast
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -326,6 +327,65 @@ def compare_snapshots(previous: dict, current: dict) -> dict:
             "unreconciled_modules": unreconciled}
 
 
+def validate_source_manifest(repo: Path, *, modules: dict | None = None,
+                             units: tuple[str, ...] | None = None) -> dict:
+    """Source-only CI check. No systemd, /proc, /opt or network interactions."""
+    manifest = MODULES if modules is None else modules
+    unit_names = UNITS if units is None else units
+    errors = []
+    seen: set[str] = set()
+    safe_paths: set[str] = set()
+    for group, paths in manifest.items():
+        for relative in paths:
+            if not isinstance(relative, str) or not re.fullmatch(r"[A-Za-z0-9_./-]+", relative):
+                errors.append({"code": "unsafe-source-path", "path": "redacted"})
+                continue
+            path = Path(relative)
+            if path.is_absolute() or ".." in path.parts or not relative.startswith((
+                    "scripts/services/", "scripts/tools/", "lib/", "app/")):
+                errors.append({"code": "unsafe-source-path", "path": "redacted"})
+                continue
+            if relative in seen:
+                errors.append({"code": "duplicate-source-path", "path": relative})
+            seen.add(relative)
+            if not (repo / relative).is_file():
+                errors.append({"code": "missing-source", "path": relative})
+                continue
+            safe_paths.add(relative)
+
+    ev_sources = set(manifest.get("evcc", ()))
+    for relative in sorted(ev_sources & safe_paths):
+        if not relative.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse((repo / relative).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, SyntaxError):
+            errors.append({"code": "unparseable-ev-module", "path": relative})
+            continue
+        imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module.split(".")[0])
+        for name in sorted(imports):
+            imported = "scripts/services/" + name + ".py"
+            if (repo / imported).is_file() and imported not in ev_sources:
+                error = {"code": "unlisted-ev-import", "path": imported}
+                if error not in errors:
+                    errors.append(error)
+
+    for unit in unit_names:
+        if not isinstance(unit, str) or not SAFE_NAME.fullmatch(unit) or not unit.endswith((
+                ".service", ".timer")):
+            errors.append({"code": "invalid-unit-name", "path": "redacted"})
+    return {"schema": "solinteg-source-manifest-validation-v1",
+            "status": "blocked" if errors else "pass",
+            "module_count": sum(len(paths) for paths in manifest.values()),
+            "unit_count": len(unit_names),
+            "errors": errors}
+
+
 def read_test_summary(path: Path) -> dict:
     """Only counters from an optional local JSON result, never raw logs."""
     obj = json.loads(path.read_text(encoding="utf-8"))
@@ -351,9 +411,15 @@ def main() -> int:
     parser.add_argument("--ev-runtime", type=Path, default=Path("/opt/solinteg/ev-shadow-runtime"))
     parser.add_argument("--rollback-ref", help="Opaque rollback evidence ID, never a filesystem path")
     parser.add_argument("--test-summary", type=Path, help="JSON with whitelisted test counters")
+    parser.add_argument("--validate-source-manifest", action="store_true",
+                        help="Offline source/schema/import validation; reads no private runtime state")
     parser.add_argument("--compare-json", type=Path,
                         help="Compare live read-only evidence to a prior JSON snapshot; fails closed")
     args = parser.parse_args()
+    if args.validate_source_manifest:
+        result = validate_source_manifest(args.repo)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["status"] == "pass" else 6
     if args.rollback_ref and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", args.rollback_ref):
         parser.error("rollback reference must be an opaque alphanumeric ID")
     tests = read_test_summary(args.test_summary) if args.test_summary else None
