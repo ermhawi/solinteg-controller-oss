@@ -21,6 +21,8 @@ from modbus_broker import Broker
 from modbus_broker_control_transport import ControlModbusTransport
 from modbus_broker_ipc import BrokerIpcServer
 from modbus_broker_lease import broker_ownership_lease
+from modbus_broker_safety_policy import (SAFETY_ENABLED_ENV, SUPERVISOR_UNIT,
+                                         approve_supervisor_role)
 
 log = logging.getLogger(__name__)
 DEFAULT_SOCKET = "/run/solinteg-broker/broker.sock"
@@ -51,6 +53,8 @@ def role_for_systemd_peer(pid: int, uid: int, _gid: int) -> str | None:
     for line in cgroups.splitlines():
         path = line.rsplit(":", 1)[-1]
         unit = path.rsplit("/", 1)[-1]
+        if unit == SUPERVISOR_UNIT:
+            return "safety" if approve_supervisor_role(unit, os.environ) else None
         if unit in units:
             return units[unit]
     return None
@@ -83,6 +87,9 @@ def build_control_broker(environ, *, client_factory=None) -> Broker:
     transaction_opt_in = environ.get("SOLINTEG_BROKER_TRANSACTIONS_ENABLED", "0")
     if transaction_opt_in not in ("0", "1"):
         raise ValueError("broker transaction mode must be explicitly 0 or 1")
+    supervisor_opt_in = environ.get(SAFETY_ENABLED_ENV, "0")
+    if supervisor_opt_in not in ("0", "1"):
+        raise ValueError("broker safety supervisor must be explicitly 0 or 1")
 
     return Broker(
         lambda: ControlModbusTransport(
@@ -90,6 +97,7 @@ def build_control_broker(environ, *, client_factory=None) -> Broker:
         ),
         armed=True, runtime_mode="control",
         transactions_enabled=transaction_opt_in == "1",
+        safety_supervisor_enabled=supervisor_opt_in == "1",
         battery_kwh=capacity, max_sample_s=span,
         charge_sign=environ["SOLINTEG_50207_SIGN"],
         rejection_sink=lambda event: log.warning(

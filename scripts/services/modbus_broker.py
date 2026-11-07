@@ -17,6 +17,7 @@ import uuid
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 
 from modbus_broker_readonly_transport import READ_BLOCKS
+from modbus_broker_safety_policy import validate_safety_auto_preflight
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -133,6 +134,7 @@ class Broker:
         rejection_sink: Callable[[dict], None] | None = None,
         runtime_mode: str = "offline",
         transactions_enabled: bool = False,
+        safety_supervisor_enabled: bool = False,
     ):
         if not callable(transport_factory):
             raise TypeError("transport_factory required")
@@ -144,6 +146,9 @@ class Broker:
             raise PermissionError("read-only mode cannot be armed for control")
         if transactions_enabled and (runtime_mode != "control" or not armed):
             raise PermissionError("complete transactions require armed control runtime")
+        if safety_supervisor_enabled and (runtime_mode != "control" or not armed
+                                          or not transactions_enabled):
+            raise PermissionError("safety supervisor requires armed transaction runtime")
         if min_write_interval_s < 0 or max_sample_s <= 0 or battery_kwh <= 0:
             raise ValueError("invalid timing or battery capacity")
         if charge_sign not in (None, "neg_charge", "pos_charge"):
@@ -151,6 +156,7 @@ class Broker:
         self._factory = transport_factory
         self._runtime_mode = runtime_mode
         self._transactions_enabled = bool(transactions_enabled)
+        self._safety_supervisor_enabled = safety_supervisor_enabled is True
         self._transaction_worker = None
         self._transport = None
         self._armed = bool(armed)
@@ -208,7 +214,8 @@ class Broker:
         if operation not in ROLES.get(role, frozenset()):
             raise PermissionError("operation is not authorized for peer role")
         if self._runtime_mode == "control":
-            allowed = READS | (TRANSACTIONS if self._transactions_enabled else {RAW_WRITE})
+            allowed = (READS | (TRANSACTIONS if self._transactions_enabled else {RAW_WRITE})
+                       | (SAFETY if self._safety_supervisor_enabled else set()))
             if operation not in allowed:
                 raise PermissionError("control runtime operation is not enabled")
         if type(timeout_s) not in (float, int) or not math.isfinite(timeout_s) or not 0 < timeout_s <= 120:
@@ -468,6 +475,12 @@ class Broker:
     def _apply(self, operation: str, watts: int | None, epoch: int) -> dict:
         self._fenced(epoch)
         if operation in {"auto", "safety_auto"}:
+            if operation == "safety_auto" and self._safety_supervisor_enabled:
+                state = validate_safety_auto_preflight(
+                    self._snapshot(), broker_owns_control=self._owns_control)
+                if state == "already_general":
+                    return {"status": "already_general", "action": operation}
+                self._fenced(epoch)  # no FC06 after an ambiguous timed-out preflight
             if operation == "auto" and not self._owns_control:
                 # Preserve an operator-selected mode; matching dispatch_loop's
                 # idle->idle no-op. Safety watchdog remains able to force Auto.
