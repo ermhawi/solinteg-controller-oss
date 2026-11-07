@@ -275,7 +275,8 @@ import common  # sibling module (scripts/services/) — script dir is sys.path[0
 from l3_battery_policy import observe_l3, suggest_battery_target
 from modbus_broker_stale_policy import assess_stale_dispatch
 from ev_grid_priority_guard import guard_dispatch as guard_ev_grid_priority
-from ev_l3_live_dispatch import coordinate as coordinate_ev_grid_live
+from ev_l3_live_dispatch import coordinate as coordinate_ev_grid_live, EVCC_PATH as EVCC_READONLY_PATH
+from energy_priority_policy import SolarState, resolve as resolve_energy_priority_policy
 from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
@@ -299,6 +300,8 @@ log = logging.getLogger("solinteg.dispatch")
 DB_PATH = os.environ.get("TELEMETRY_DB_PATH", "/opt/solinteg/telemetry.db")
 LOOP_INTERVAL_S = int(os.environ.get("DISPATCH_LOOP_INTERVAL_S", "60"))
 REASSERT_S = int(os.environ.get("DISPATCH_REASSERT_S", "300"))
+# Offline-only until telemetry replay and the site-specific dispatcher patch are approved.
+ENERGY_PRIORITY_ENABLED = os.environ.get("DISPATCH_ENERGY_PRIORITY", "0") == "1"
 STOCKHOLM = ZoneInfo("Europe/Stockholm")
 UTC = ZoneInfo("UTC")
 SLOT_HOURS = 0.25
@@ -1628,6 +1631,92 @@ def prioritize_soc_recovery(action: str, power_w: int, expected_soc_kwh, solar_s
 
 
 
+def _recent_energy_readings(con: sqlite3.Connection, now: datetime) -> list[dict]:
+    """Read independent poller samples; never connect directly to the inverter."""
+    cutoff = (now - timedelta(seconds=180)).isoformat()
+    rows = con.execute(
+        """SELECT timestamp, pv_w, house_load_w, grid_w, battery_w,
+                  soc_pct, work_mode_raw
+           FROM readings WHERE timestamp >= ? AND timestamp <= ?
+           ORDER BY timestamp DESC LIMIT 8""",
+        (cutoff, now.isoformat()),
+    ).fetchall()
+    fields = ("timestamp", "pv_w", "house_load_w", "grid_w",
+              "battery_w", "soc_pct", "work_mode_raw")
+    return [dict(zip(fields, row)) for row in reversed(rows)]
+
+
+def _energy_ev_charging(now: datetime) -> bool | None:
+    """Only fresh EVCC proof of NON-charging allows low-SoC General handoff."""
+    evcc = common.read_json(str(EVCC_READONLY_PATH))
+    if (not isinstance(evcc, dict) or evcc.get("read_ok") is not True
+            or evcc.get("source") != "waveshare_evcc_fc03_readonly"):
+        return None
+    try:
+        stamp = datetime.fromisoformat(evcc["timestamp"].replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            return None
+        age_s = (now - stamp).total_seconds()
+        if not -5 <= age_s <= 75:
+            return None
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if evcc.get("state") == "C2" and evcc.get("charging_detected") is True:
+        return True
+    if (evcc.get("state") in ("A1", "B2")
+            and evcc.get("charging_detected") is not True):
+        # EVCC reports null (not false) for charging_detected in a real A1.
+        # An impossible measured current must invalidate the non-charging proof.
+        measured = evcc.get("measured_current_a")
+        if measured is None or (type(measured) in (int, float)
+                                and 0 <= measured < 0.5):
+            return False
+    return None
+
+
+def arbitrate_energy_priority(con: sqlite3.Connection, action: str, power_w: int,
+                              expected_soc_kwh, solar_skip: bool, detail: str,
+                              numbers: dict, now: datetime, state: SolarState):
+    """Resolve ONE final economic action after recovery and EV proposals.
+
+    Enabled explicitly for an offline-qualified installation only. Existing
+    L3/phase guards still constrain this final candidate before any broker write.
+    """
+    if not ENERGY_PRIORITY_ENABLED:
+        return action, power_w, expected_soc_kwh, solar_skip, detail, numbers, state
+    try:
+        readings = _recent_energy_readings(con, now)
+    except sqlite3.Error as exc:
+        log.warning("Energy priority: poller history unavailable (%s)", exc)
+        readings = []
+    soc_pct = readings[-1]["soc_pct"] if readings else None
+    choice = resolve_energy_priority_policy(
+        action, power_w, now=now, readings=readings, state=state,
+        soc_pct=soc_pct, reserve_pct=PLANNER_RESERVE_PCT,
+        save_w=BATTERY_SAVE_W,
+        recovery=numbers.get("soc_recovery") is True,
+        ev_charging=_energy_ev_charging(now), solar_skip=solar_skip,
+    )
+    numbers["energy_priority_winner"] = choice.winner
+    numbers["energy_priority_reason"] = choice.reason
+    numbers["energy_priority_sample_count"] = choice.sample_count
+    numbers["energy_priority_solar_state"] = choice.state.capturing
+    numbers["energy_priority_solar_surplus_w"] = choice.solar_surplus_w
+    numbers["energy_priority_drain_wh"] = round(choice.state.discharged_wh, 1)
+    if (choice.action, choice.power_w) != (action, power_w):
+        detail = (f"Energy priority {choice.winner}: {action} {power_w} W -> "
+                  f"{choice.action} {choice.power_w} W; {detail}")
+        # The plan's SoC trajectory no longer matches an overridden actuator.
+        expected_soc_kwh = None
+        # A prior solar-funding veto must not turn the safe EMS save into Auto.
+        solar_skip = False
+        if choice.winner in ("economic_reserve", "ev_grid_priority",
+                             "unverified_ev", "unverified_solar"):
+            numbers["energy_priority_save_w"] = choice.power_w
+    return (choice.action, choice.power_w, expected_soc_kwh, solar_skip,
+            detail, numbers, choice.state)
+
+
 def apply_target(inv: Inverter, action: str, power_w: int) -> None:
     """Apply one dispatch decision. See the ACTION CONTRACT note beside FORCED_ACTIONS.
 
@@ -2068,6 +2157,7 @@ def main() -> None:
     decide_failure_reverted = False
     last_broker_sample = None
     broker_fault_latched = False
+    energy_priority_state = SolarState()
     stop = {"flag": False}
 
     def _request_shutdown(*_args):
@@ -2095,6 +2185,7 @@ def main() -> None:
             if decide_failure_reverted:
                 decide_failure_reverted = False
                 last_target = None
+                energy_priority_state = SolarState()
             action, power_w, expected_soc_kwh, solar_skip, detail, numbers = prioritize_soc_recovery(
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
             # Battery-only L3 coordination sits AFTER the SoC recovery decision so a
@@ -2123,6 +2214,12 @@ def main() -> None:
                     live_path=Path(LIVE_JSON_PATH), read_json=common.read_json)
             except Exception as exc:  # noqa: BLE001 — preserve the original dispatch on bad EV telemetry
                 log.warning("EV/L3 live coordination unavailable (%s) — original dispatch retained", exc)
+            # One economic arbitration after SoC recovery, EV and planner proposals.
+            # The phase/import guard remains a HARD cap after this decision.
+            (action, power_w, expected_soc_kwh, solar_skip, detail, numbers,
+             next_energy_priority_state) = arbitrate_energy_priority(
+                con, action, power_w, expected_soc_kwh, solar_skip,
+                detail, numbers, iteration_now, energy_priority_state)
             # Independent charge-side guard runs last, so it can cap a high charge
             # recommended by either the optimizer or L3 battery coordination.
             # Missing/old phase data never means spare L3 capacity.
@@ -2152,6 +2249,8 @@ def main() -> None:
                 outcome, loop_in_auto = apply_decision(
                     con, slot_time, action, power_w, expected_soc_kwh, solar_skipped_now,
                     detail, numbers, loop_in_auto, broker_sample=last_broker_sample)
+                if outcome != "applied":
+                    next_energy_priority_state = SolarState()
                 if outcome == "inhibited_broker_telemetry":
                     broker_fault_latched = True
                     broker_policy = "inhibit"
@@ -2161,6 +2260,7 @@ def main() -> None:
                     # Only record a target confirmed as applied; broker inhibits are never applied.
                     last_target = next_last_target(outcome, target)
                     last_write_monotonic = time.monotonic()
+            energy_priority_state = next_energy_priority_state
             if not broker_fault_latched:
                 monitor_soc_recovery_enforcement(con, iteration_now, target, last_target,
                                                  last_write_monotonic, numbers)
@@ -2169,10 +2269,12 @@ def main() -> None:
             # Latch until an operator/supervisor has reviewed the physical state.
             broker_fault_latched = True
             broker_policy = "inhibit"
+            energy_priority_state = SolarState()
             last_target = None
             loop_in_auto = False
             record_broker_inhibit(con, slot_time, action, power_w, str(exc), numbers)
         except Exception as exc:  # noqa: BLE001
+            energy_priority_state = SolarState()
             if BROKER_STALE_GUARD_ENABLED:
                 broker_fault_latched = True
                 broker_policy = "inhibit"
