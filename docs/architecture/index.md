@@ -16,6 +16,9 @@
 
 ## Öppna förslag och osäkra antaganden
 
+- [Hälsokontrakt: liveness, beslut, readback och fysisk osäkerhet](adr-2026-11-07-control-health-contract.md) – endast offline, ingen produktionssignal.
+- [Modbus-fencing, ansvar och NO-GO för automatisk fallback](adr-2026-11-07-modbus-fencing.md) – framtida beslut, inte aktiverad supervisor.
+- [Felmatris för watchdog, broker, nät och strömavbrott](failure-mode-matrix-2026-11-07.md) – kända brister och tillåten respons, utan fysisk provning.
 - [Stale brokertelemetri och SoC](adr-2026-11-02-stale-telemetry-soc.md) – ursprungligt offlineförslag; jämför med senare brokerrelease innan åtgärd.
 - [Solöverskott under batterisparläge](adr-2026-11-02-battery-save-solar-shadow.md) – innehåller historisk shadowanalys samt senare ändringar; läs ihop med central arbiter.
 - [Single-owner-broker med oberoende fallback](adr-2026-11-01-single-owner-modbus-broker.md) – ursprungligt föreslaget målläge, **inte** ett påstående om att ny fallback finns driftsatt.
