@@ -50,19 +50,22 @@ class PriorityConflictMatrixTests(unittest.TestCase):
                 self.assertEqual((d.winner, d.action, d.power_w),
                                  (winner, action, power))
 
-    def test_ev_unknown_never_claims_ev_off(self):
+    def test_ev_unknown_uses_economic_save_without_claiming_ev_off(self):
         for original in ("discharge", "idle"):
             with self.subTest(original=original):
                 d = decision(original, 500 if original == "discharge" else 0,
                              soc=16, ev=None)
                 self.assertEqual(d.winner, "unverified_ev")
-                self.assertEqual(d.action, original)
+                self.assertEqual((d.action, d.power_w), ("discharge", 50))
 
-    def test_ev_charging_prevents_battery_to_ev(self):
-        d = decision("discharge", 650, soc=55, ev=True)
-        self.assertEqual(d.winner, "ev_grid_first")
-        self.assertEqual(d.action, "idle")
-        self.assertEqual(d.power_w, 0)
+    def test_ev_charging_soft_save_only_applies_below_economic_reserve(self):
+        below = decision("discharge", 650, soc=16, ev=True)
+        self.assertEqual(below.winner, "ev_grid_priority")
+        self.assertEqual((below.action, below.power_w), ("discharge", 50))
+        above = decision("discharge", 650, soc=55, ev=True)
+        self.assertEqual(above.winner, "economic_plan")
+        self.assertEqual((above.action, above.power_w), ("discharge", 650))
+        # The higher-level dispatcher must independently guard battery-to-car.
 
     def test_solar_capture_prioritizes_battery_over_export(self):
         d = decision("discharge", 650, soc=16, ev=False)
@@ -72,7 +75,7 @@ class PriorityConflictMatrixTests(unittest.TestCase):
 
     def test_solar_capture_above_reserve_does_not_invent_rule(self):
         d = decision("discharge", 650, soc=50, ev=False)
-        self.assertEqual(d.winner, "planned_discharge")
+        self.assertEqual(d.winner, "economic_plan")
         self.assertEqual(d.action, "discharge")
 
     def test_missing_or_stale_pv_samples_retains_plan(self):
@@ -80,13 +83,13 @@ class PriorityConflictMatrixTests(unittest.TestCase):
             d = resolve("discharge", 350, now=NOW, readings=[],
                         state=SolarState(), soc_pct=16, reserve_pct=20,
                         save_w=50, recovery=False, ev_charging=False)
-            self.assertEqual(d.winner, "solar_unverified")
-            self.assertEqual(d.action, "discharge")
+            self.assertEqual(d.winner, "unverified_solar")
+            self.assertEqual((d.action, d.power_w), ("discharge", 50))
         with self.subTest("no-net-export"):
             d = decision("discharge", 350, soc=16, pv=600, house=900,
                          battery=0, grid=0)
-            self.assertEqual(d.winner, "planned_discharge")
-            self.assertEqual(d.action, "discharge")
+            self.assertEqual(d.winner, "economic_reserve")
+            self.assertEqual((d.action, d.power_w), ("discharge", 50))
 
     def test_save_mode_does_not_force_unnecessary_battery_cycle(self):
         d = decision("discharge", 50, soc=16, ev=False)
