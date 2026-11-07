@@ -61,6 +61,7 @@ vi.mock('../inverter', () => ({
 vi.mock('../telemetry', () => ({
   logPriceSnapshot: vi.fn(),
   logOptimizerRun: vi.fn(),
+  optimizerRunsSchemaCompatible: vi.fn(),
   logSolarForecasts: vi.fn(),
   readTrailingLoadProfile: vi.fn(),
   readTodayFlowRows: vi.fn(() => []),
@@ -73,7 +74,7 @@ import { readFreshSolarForecast, saveSolarForecast } from '../solar-forecast-cac
 import { buildSolarProfiles, buildOptimizerSlots } from '../pipeline';
 import { optimizeDispatch, terminalEnergyValueOre } from '../optimizer';
 import { readLiveInverterData, socKwhOrDefault } from '../inverter';
-import { logPriceSnapshot, logOptimizerRun, readTrailingLoadProfile } from '../telemetry';
+import { logPriceSnapshot, logOptimizerRun, optimizerRunsSchemaCompatible, readTrailingLoadProfile } from '../telemetry';
 import {
   LOAD_FORECAST_MARGIN,
   DEFERRAL_RATE_ORE_PER_KWH_HOUR,
@@ -159,6 +160,7 @@ beforeEach(() => {
   vi.mocked(readTrailingLoadProfile).mockReset().mockReturnValue(LIVE_LOAD);
   vi.mocked(logPriceSnapshot).mockReset();
   vi.mocked(logOptimizerRun).mockReset();
+  vi.mocked(optimizerRunsSchemaCompatible).mockReset().mockReturnValue(true);
 });
 
 describe('producePlan — happy path wiring', () => {
@@ -255,6 +257,72 @@ describe('producePlan — opt-in minimum horizon publication guard', () => {
     expect(result.dispatchSchedule).toBe(DISPATCH_FIXTURE);
     expect(optimizeDispatch).toHaveBeenCalled();
     expect(logOptimizerRun).toHaveBeenCalled();
+  });
+});
+
+describe('producePlan — strict publication safety preflight (O06)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  function enableValidSingleSlot() {
+    vi.stubEnv('SOLINTEG_STRICT_PLAN_PUBLICATION', '1');
+    vi.mocked(buildOptimizerSlots).mockReturnValue([ALL_SLOTS[1]]);
+    vi.mocked(readLiveInverterData).mockResolvedValue({
+      ...INVERTER_DATA, timestamp: new Date().toISOString(), soc_pct: 50, soc_kwh: 7.5,
+    } as Awaited<ReturnType<typeof readLiveInverterData>>);
+  }
+
+  it('requires fresh trusted SoC before publishing, not just an optimizer result', async () => {
+    enableValidSingleSlot();
+    vi.mocked(readLiveInverterData).mockResolvedValue(null);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await producePlan();
+      expect(result.dispatchSchedule).toBeNull();
+      expect(result.controlPlanEndTime).toBeNull();
+      expect(logOptimizerRun).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith('plan publication inhibited: strict missing-live-soc');
+    } finally { error.mockRestore(); }
+  });
+
+  it('rejects missing or incompatible SQLite schema before a write', async () => {
+    enableValidSingleSlot();
+    vi.mocked(optimizerRunsSchemaCompatible).mockReturnValue(false);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await producePlan();
+      expect(result.dispatchSchedule).toBeNull();
+      expect(logOptimizerRun).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith('plan publication inhibited: strict incompatible-schema');
+    } finally { error.mockRestore(); }
+  });
+
+  it('rejects a corrupt DP output or a gap in the price time axis', async () => {
+    enableValidSingleSlot();
+    vi.mocked(optimizeDispatch).mockReturnValue([]);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await producePlan()).dispatchSchedule).toBeNull();
+      expect(logOptimizerRun).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith('plan publication inhibited: strict invalid-dispatch');
+    } finally { error.mockRestore(); }
+  });
+
+  it('publishes only matching input/output with verified fresh SoC and schema', async () => {
+    enableValidSingleSlot();
+    const result = await producePlan();
+    expect(result.dispatchSchedule).toBe(DISPATCH_FIXTURE);
+    expect(result.controlPlanEndTime).toBe(DISPATCH_FIXTURE[0].startTime);
+    expect(optimizerRunsSchemaCompatible).toHaveBeenCalledOnce();
+    expect(logOptimizerRun).toHaveBeenCalledOnce();
+    expect(logOptimizerRun).toHaveBeenCalledWith(
+      PRICE_DATA.today, PRICE_DATA.hasTomorrow, 7.5, [ALL_SLOTS[1]], DISPATCH_FIXTURE, true,
+    );
+  });
+
+  it('does not read schema when the feature is disabled', async () => {
+    await producePlan();
+    expect(optimizerRunsSchemaCompatible).not.toHaveBeenCalled();
+    expect(logOptimizerRun).toHaveBeenCalledOnce();
   });
 });
 

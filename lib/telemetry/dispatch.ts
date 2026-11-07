@@ -242,6 +242,23 @@ function roundForLog(_key: string, value: unknown): unknown {
  *  but when the DP still snaps it to the same grid level the resulting plan — everything the
  *  dispatch loop and the forecast-vs-actual analyses consume — is unchanged, and keeping the
  *  previous row in charge is exactly equivalent. */
+/** O06 strict publication gate: missing/old SQLite schema is never a silent GO.
+ * Queries metadata only; this is NOT a guarantee that the INSERT succeeds. */
+export function optimizerRunsSchemaCompatible(): boolean {
+  try {
+    const handle = getDb();
+    if (!handle) return false;
+    const columns = handle.prepare('PRAGMA table_info(optimizer_runs)').all() as
+      { name: string; type: string; notnull: number; pk: number }[];
+    const fields = new Map(columns.map(c => [c.name, c]));
+    return ['logged_at', 'price_date', 'has_tomorrow', 'start_soc_kwh', 'inputs_json', 'dispatch_json']
+      .every(name => fields.has(name) && fields.get(name)?.notnull === 1) &&
+      fields.get('id')?.pk === 1;
+  } catch {
+    return false;
+  }
+}
+
 export function logOptimizerRun(
   priceDate: string,
   hasTomorrow: boolean,

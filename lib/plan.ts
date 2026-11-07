@@ -11,10 +11,12 @@ import { readLiveInverterData, socKwhOrDefault } from './inverter';
 import type { InverterLiveData } from './inverter';
 import { trimIncompleteTerminalDays } from './horizon';
 import { assessPublishableHorizon } from './horizon-safety';
+import { assessPlanPublication } from './plan-publication-safety';
 import {
   logPriceSnapshot,
   logOptimizerRun,
   logSolarForecasts,
+  optimizerRunsSchemaCompatible,
   readTodayFlowRows,
   readTrailingLoadProfile,
 } from './telemetry';
@@ -293,9 +295,26 @@ export async function producePlan(): Promise<PlanResult> {
         // existing plan already in SQLite is NOT revoked by this code.
         console.error(`plan publication inhibited: horizon ${horizonGate.reason}`);
       } else {
-        dispatchSchedule = optimizeDispatch(optimizerSlots, startSoc, options);
-        logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
-        controlPlanEndTime = socIsLive ? dispatchSchedule.at(-1)?.startTime ?? null : null;
+        const proposedSchedule = optimizeDispatch(optimizerSlots, startSoc, options);
+        const configured = process.env.SOLINTEG_STRICT_PLAN_PUBLICATION;
+        const strictGate = assessPlanPublication({
+          configured,
+          nowMs: now.getTime(),
+          live: inverterData,
+          inputs: optimizerSlots,
+          dispatch: proposedSchedule,
+          // Avoid even a metadata DB read unless the strict source gate is enabled.
+          schemaCompatible: configured === '1' ? optimizerRunsSchemaCompatible() : false,
+        });
+        if (!strictGate.publishable) {
+          // An old optimizer_runs row is NOT revoked by this code; the dispatcher
+          // needs its own freshness/lease protection before physical qualification.
+          console.error(`plan publication inhibited: strict ${strictGate.reason}`);
+        } else {
+          dispatchSchedule = proposedSchedule;
+          logOptimizerRun(data.today, data.hasTomorrow, startSoc, optimizerSlots, dispatchSchedule, socIsLive);
+          controlPlanEndTime = socIsLive ? dispatchSchedule.at(-1)?.startTime ?? null : null;
+        }
       }
     } catch (err) {
       // non-fatal — chart renders without dispatch overlay — but logged so a failure here
