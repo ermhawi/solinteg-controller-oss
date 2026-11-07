@@ -1,0 +1,168 @@
+{
+  "schema": "solinteg-physical-qualification-plan-v1",
+  "status": "PREPARED-NO-GO",
+  "safety_constraints": {
+    "approval_required_for_each_release": true,
+    "approval_granted": false,
+    "physical_test_authorized": false,
+    "automatic_rollback_authorized": false,
+    "parallel_releases_forbidden": true,
+    "effective_native_endsoc_unverified": true,
+    "release_gate": "R07 BLOCKED",
+    "rollback_evidence": "24-source-file snapshot only, not a full installation backup"
+  },
+  "evidence_fields_required_before_go": [
+    "operator_identity",
+    "rollback_owner_identity",
+    "explicit_go_approval_reference",
+    "utc_start",
+    "utc_end",
+    "git_sha",
+    "installed_source_hashes",
+    "effective_whitelisted_flags",
+    "unit_dropin_hashes",
+    "full_installation_backup_hash",
+    "configuration_backup_hash",
+    "sqlite_consistent_backup_hash",
+    "rollback_restore_test_reference",
+    "fresh_broker_ownership",
+    "fresh_telemetry",
+    "observed_soc",
+    "observed_battery_w",
+    "observed_pv_w",
+    "observed_grid_w",
+    "observed_phase_l1_l2_l3",
+    "evcc_cable_epoch",
+    "evcc_manual_pause_state",
+    "inverter_ems_general_state",
+    "native_soc_verification"
+  ],
+  "release_groups": [
+    {
+      "id": "broker-failsafe",
+      "owner_role": "Solinteg runtime/Modbus operator",
+      "rollback_role": "independent recovery operator",
+      "scope": "single owner and fenced UDS-to-TCP only",
+      "preconditions": [
+        "R07 source-to-runtime parity reviewed",
+        "S06/S07/S08 offline and loopback gates green",
+        "unknown SoC or vendor EndSOC => no automatic Auto",
+        "single physical TCP owner independently verified",
+        "specific systemd and rollback units archived"
+      ],
+      "observable": [
+        "broker session owner and lease",
+        "one TCP owner, generation and request id",
+        "FC03 quality / mode before and after",
+        "per-register FC06 acknowledgement and independent power"
+      ],
+      "stop_conditions": [
+        "second TCP writer detected",
+        "FC06 response ambiguous",
+        "stale SoC/CT data",
+        "broker owner unknown",
+        "unverified mode readback",
+        "unexpected battery discharge"
+      ],
+      "rollback": [
+        "stop further experiments; do not blind-retry FC06",
+        "retain root-owned incident evidence",
+        "operator-controlled restore of exact per-file hashes only",
+        "fresh ownership/FC03/battery-W verification after restore"
+      ]
+    },
+    {
+      "id": "dispatch-policy",
+      "owner_role": "energy-control operator",
+      "rollback_role": "Solinteg runtime operator",
+      "scope": "target selection only; never bundled with broker migration",
+      "preconditions": [
+        "R03 thirteen site-specific differences reconciled",
+        "golden master vs installed dispatcher for SoC/EV/L3",
+        "independent phase and SoC data fresh",
+        "existing site dispatcher backup and custom drop-ins preserved"
+      ],
+      "observable": [
+        "planned target and actual control outcome",
+        "SoC and battery-W vs forecast",
+        "PV vs grid export",
+        "L1/L2/L3 CT",
+        "recovery latch, inhibited decisions"
+      ],
+      "stop_conditions": [
+        "SoC approaches verified minimum",
+        "unknown/manual EV pause",
+        "unexpected battery-to-car path",
+        "L3 capacity exceeded or unknown",
+        "EMS-General oscillation without settling"
+      ],
+      "rollback": [
+        "no new target when physical state unknown",
+        "revert only approved dispatcher overlay",
+        "validate current action/readback and reserve guards",
+        "no full Git tree replacement"
+      ]
+    },
+    {
+      "id": "optimizer-and-web",
+      "owner_role": "planning operator",
+      "rollback_role": "web/runtime operator",
+      "scope": "plan computation and API, no physical change bundled",
+      "preconditions": [
+        "production optimizer patches diffed and regression replayed",
+        "time-axis and 23h/25h days verified",
+        "same SQLite schema and DB backup",
+        "no stale live SoC published as current"
+      ],
+      "observable": [
+        "optimizer_runs hash and plan horizon",
+        "cost/cycle baseline",
+        "plan publish revisions and schema",
+        "web HTTP and OAuth2 control boundary"
+      ],
+      "stop_conditions": [
+        "published incomplete or corrupt plan",
+        "unbounded SoC drift from model",
+        "new plan induces unintended deep-discharge",
+        "API access control regressions"
+      ],
+      "rollback": [
+        "revert only verified optimizer and build assets",
+        "validate plan publisher/dispatcher version compatibility",
+        "preserve SQLite and old plan snapshots"
+      ]
+    },
+    {
+      "id": "evcc",
+      "owner_role": "EV charging operator",
+      "rollback_role": "EVCC owner-state operator",
+      "scope": "EVCC FC10 pause/resume only, separately from inverter broker",
+      "preconditions": [
+        "E03 manual pause, cable epoch and revision tests green",
+        "E04 single owner plus shared manual/scheduled locks green",
+        "Volvo smart charging status unambiguous",
+        "current cable connection and actual amp limit verified",
+        "6A limit and 80% target model independently reviewed"
+      ],
+      "observable": [
+        "FC03 before/after any FC10",
+        "owned/revoked pause ledger",
+        "cable epoch and setting revision",
+        "car SoC and actual phase current"
+      ],
+      "stop_conditions": [
+        "manual pause or unplug",
+        "unknown cable owner/revision",
+        "FC10 timeout/readback mismatch",
+        "auto-resume after external stop",
+        "uncertain battery-to-car power source"
+      ],
+      "rollback": [
+        "never auto-resume manually stopped charging",
+        "revoke price pause owner, preserve state tombstone",
+        "operator verifies current EVCC amps and cable session",
+        "restore exact approved EV runtime only"
+      ]
+    }
+  ]
+}
