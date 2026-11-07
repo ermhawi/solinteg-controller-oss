@@ -1,5 +1,5 @@
 import { EvSettingsConflict, EvSettingsUnsafe, evSettingsLiveConfigured,
-  evSettingsWriteEnabled, readEvOverview, saveEvSettings } from '@/lib/ev-state';
+  evSettingsWriteEnabled, saveEvSettings } from '@/lib/ev-state';
 import { parseEvSettings } from '@/lib/ev-settings';
 
 // The public /solinteg route and its APIs require GitHub OAuth2 at Traefik.

@@ -232,6 +232,21 @@ describe('producePlan — happy path wiring', () => {
   });
 });
 
+describe('producePlan — short horizon diagnostics', () => {
+  it('reports the active positive terminal energy value instead of asserting terminal-value-0', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      await producePlan();
+      const text = info.mock.calls.map((args) => args.join(' ')).join('\n');
+      expect(terminalEnergyValueOre(ALL_SLOTS) * TERMINAL_VALUE_FACTOR).toBeGreaterThan(0);
+      expect(text).toContain('SHORT: positive terminal energy value active');
+      expect(text).not.toContain('terminal-value-0 will drain the battery');
+    } finally {
+      info.mockRestore();
+    }
+  });
+});
+
 describe('producePlan — hold-mode gating', () => {
   afterEach(() => {
     vi.unstubAllEnvs();

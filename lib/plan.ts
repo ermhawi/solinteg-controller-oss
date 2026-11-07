@@ -215,19 +215,22 @@ export async function producePlan(): Promise<PlanResult> {
       // without planning against an arbitrary partial fourth day.
       const optimizerSlots = trimIncompleteTerminalDays(allSlots.slice(nowSlotIdx), data.today);
 
-      // The DP has zero terminal value, so the horizon's LENGTH is itself a policy input: a plan
-      // that only reaches tonight will deliberately spend the battery down to the floor by
-      // midnight (OPTIMIZER-AUDIT.md P0-3). A collapsed horizon used to be invisible — one missing
-      // forecast slot, a PlaneraElen outage or a DST day and the plan silently changed character.
-      // Log it every time, at info level, so the journal answers "how far ahead was it planning?"
-      // without re-deriving it from the published slots.
+      // The horizon's LENGTH affects the DP even when the terminal energy value is positive.
+      // With a disabled/zero terminal value, a short horizon can spend the battery toward its
+      // floor (OPTIMIZER-AUDIT.md P0-3). A missing forecast slot, outage or DST boundary may
+      // truncate the horizon, so log the effective terminal policy alongside its duration.
       const horizonHours = (optimizerSlots.length * 15) / 60;
+      const terminalValueOrePerKwh = terminalEnergyValueOre(optimizerSlots) * TERMINAL_VALUE_FACTOR;
       const horizonEnd = optimizerSlots[optimizerSlots.length - 1]?.startTime ?? 'none';
       console.info(
         `plan horizon: ${optimizerSlots.length} slots (${horizonHours.toFixed(1)} h) ` +
           `from ${optimizerSlots[0]?.startTime ?? 'none'} to ${horizonEnd}, ` +
           `hasTomorrow=${data.hasTomorrow}` +
-          (horizonHours < 24 ? ' — SHORT: terminal-value-0 will drain the battery at its end' : ''),
+          (horizonHours < 24
+            ? (terminalValueOrePerKwh > 0
+              ? ' — SHORT: positive terminal energy value active; truncated horizon may alter dispatch'
+              : ' — SHORT: zero terminal energy value; battery may drain toward reserve')
+            : ''),
       );
 
       // loadFactor: plan against pessimistic load (LOAD_FORECAST_MARGIN) so the trajectory
@@ -257,7 +260,6 @@ export async function producePlan(): Promise<PlanResult> {
       // the horizon collapses to today. Derived from this plan's own cheapest import, so it moves
       // with the prices instead of being a tuned constant; SOLINTEG_TERMINAL_VALUE_FACTOR=0 is the
       // kill switch. Live plans only, like the knobs above.
-      const terminalValueOrePerKwh = terminalEnergyValueOre(optimizerSlots) * TERMINAL_VALUE_FACTOR;
       const recoveryHeadroom = Number(process.env.DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH ?? '0.5');
       const options = {
         loadFactor: LOAD_FORECAST_MARGIN,

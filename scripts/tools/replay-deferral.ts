@@ -187,7 +187,7 @@ function analyse(run: Run): Analysed {
   const maxDsoc = lenOk
     ? Math.max(...kept.map((s, i) => Math.abs(s.socAfter - run.stored[i].socAfter)))
     : NaN;
-  const diffIdx = lenOk ? kept.map((s, i) => i).filter((i) => kept[i].action !== run.stored[i].action) : [];
+  const diffIdx = lenOk ? kept.map((_, i) => i).filter((i) => kept[i].action !== run.stored[i].action) : [];
   const maxDsocOnDiff = diffIdx.length
     ? Math.max(...diffIdx.map((i) => Math.abs(kept[i].socAfter - run.stored[i].socAfter)))
     : 0;

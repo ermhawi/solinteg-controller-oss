@@ -440,12 +440,13 @@ export const TERMINAL_VALUE_FACTOR = numEnv('SOLINTEG_TERMINAL_VALUE_FACTOR', 1)
  */
 export const LIVE_LOAD_PROFILE_DAYS = numEnv('SOLINTEG_LIVE_LOAD_DAYS', 14);
 
-// SoC ceiling: enforced entirely inside inverter_control.py's force_charge (refuses to charge
-// past it rather than silently capping) — the DP optimizer does NOT model this today, it plans
-// as if the full BATTERY_KWH were reachable. Exported here for documentation/future use (e.g. a
-// dashboard "distance to safety ceiling" indicator), not yet wired into optimizer.ts/oracle.ts.
-// Making the DP itself ceiling-aware would be a real behavior change — out of scope for this
-// config-consolidation pass, which only touches how values are SOURCED, not what they do.
+// SoC ceiling: inverter_control.py's force_charge refuses forced charging past it.
+// The optimizer ALSO models it via MAX_FORCED_SOC_KWH: a planned FORCED charge cannot
+// exceed the ceiling, but natural solar self-use/auto-charge can still pass it.
+// This is not a BMS hard floor/ceiling, and the DP must not cap passive solar SoC.
+// See lib/optimizer.ts naturalFloor and optimizer-caps.test.ts (forced vs. solar).
+// The hindsight oracle remains a separate policy and should not silently inherit
+// the live forced-charge constraint without explicit scenario verification.
 const SOC_CEILING_PCT = numEnv('SOLINTEG_SOC_CEILING_PCT', 98);
 export const BATTERY_MAX_SOC_KWH = BATTERY_KWH * (SOC_CEILING_PCT / 100);
 
