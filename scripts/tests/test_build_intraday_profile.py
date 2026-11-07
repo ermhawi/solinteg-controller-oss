@@ -64,10 +64,10 @@ def local_day(date_str, watts):
 
 
 class TelemetrySharesTests(unittest.TestCase):
-    def build(self, buckets, months={7}):
+    def build(self, buckets, months=None):
         path = make_db(buckets)
         self.addCleanup(path.unlink)
-        return bip.telemetry_shares(path, months)
+        return bip.telemetry_shares(path, {7} if months is None else months)
 
     def test_utc_buckets_are_reported_in_stockholm_local_hours(self):
         """July is CEST (UTC+2): the 14:00 UTC bucket must land on local hour 16.
