@@ -277,6 +277,7 @@ from modbus_broker_stale_policy import assess_stale_dispatch
 from ev_grid_priority_guard import guard_dispatch as guard_ev_grid_priority
 from ev_l3_live_dispatch import coordinate as coordinate_ev_grid_live, EVCC_PATH as EVCC_READONLY_PATH
 from energy_priority_policy import SolarState, resolve as resolve_energy_priority_policy
+from dispatch_solar_feedback import observe_post_apply_general, reconcile_solar_state
 from l3_charge_guard import observe_l3_house_w, cap_grid_charge_w
 from inverter_control import (
     ARMED,
@@ -1700,7 +1701,10 @@ def arbitrate_energy_priority(con: sqlite3.Connection, action: str, power_w: int
     numbers["energy_priority_winner"] = choice.winner
     numbers["energy_priority_reason"] = choice.reason
     numbers["energy_priority_sample_count"] = choice.sample_count
+    # This is policy intent, not physical mode or proof of battery charge.
     numbers["energy_priority_solar_state"] = choice.state.capturing
+    numbers["energy_priority_solar_state_quality"] = "proposed_not_physical"
+    numbers["energy_priority_physical_confirmation"] = "unknown"
     numbers["energy_priority_solar_surplus_w"] = choice.solar_surplus_w
     numbers["energy_priority_drain_wh"] = round(choice.state.discharged_wh, 1)
     if (choice.action, choice.power_w) != (action, power_w):
@@ -2158,6 +2162,7 @@ def main() -> None:
     last_broker_sample = None
     broker_fault_latched = False
     energy_priority_state = SolarState()
+    solar_idle_ack_at = None  # UTC of last accepted General request, not a BMS proof
     stop = {"flag": False}
 
     def _request_shutdown(*_args):
@@ -2186,6 +2191,7 @@ def main() -> None:
                 decide_failure_reverted = False
                 last_target = None
                 energy_priority_state = SolarState()
+                solar_idle_ack_at = None
             action, power_w, expected_soc_kwh, solar_skip, detail, numbers = prioritize_soc_recovery(
                 action, power_w, expected_soc_kwh, solar_skip, detail, numbers, iteration_now)
             # Battery-only L3 coordination sits AFTER the SoC recovery decision so a
@@ -2243,12 +2249,39 @@ def main() -> None:
                     expected_sample=last_broker_sample)
             target = (slot_time, effective_action, effective_power)
             due_for_reassert = (time.monotonic() - last_write_monotonic) >= REASSERT_S
+            # Only a previous accepted General request plus independent later
+            # samples can prove the mode. Record battery charging separately.
+            # Compute BEFORE logging so control_actions never invents proof.
+            ack_idle = (ENERGY_PRIORITY_ENABLED and solar_idle_ack_at is not None
+                        and last_target == target and effective_action == "idle"
+                        and not broker_fault_latched)
+            observation = "unknown"
+            if ack_idle:
+                try:
+                    evidence_now = datetime.now(UTC)
+                    observation = observe_post_apply_general(
+                        _recent_energy_readings(con, evidence_now),
+                        applied_at=solar_idle_ack_at, now=evidence_now)
+                except Exception as exc:  # noqa: BLE001 - observational failure must not trigger Auto
+                    # Read-only evidence may fail without causing an Auto write.
+                    log.warning("Solar capture feedback unavailable (%s)", exc)
+            if ENERGY_PRIORITY_ENABLED:
+                numbers["energy_priority_physical_confirmation"] = observation
+            apply_outcome = None
             if needs_apply(target, last_target, effective_action, effective_power, due_for_reassert,
                            soc_recovery=bool(numbers.get("soc_recovery")),
                            ev_grid_priority_charge=numbers.get("ev_grid_live_priority_charge") is True):
+                was_in_auto = loop_in_auto
                 outcome, loop_in_auto = apply_decision(
                     con, slot_time, action, power_w, expected_soc_kwh, solar_skipped_now,
                     detail, numbers, loop_in_auto, broker_sample=last_broker_sample)
+                apply_outcome = outcome
+                if ENERGY_PRIORITY_ENABLED:
+                    if (outcome == "applied" and effective_action == "idle"
+                            and not was_in_auto and ARMED):
+                        solar_idle_ack_at = datetime.now(UTC)
+                    elif outcome != "applied" or effective_action != "idle":
+                        solar_idle_ack_at = None
                 if outcome != "applied":
                     next_energy_priority_state = SolarState()
                 if outcome == "inhibited_broker_telemetry":
@@ -2260,7 +2293,14 @@ def main() -> None:
                     # Only record a target confirmed as applied; broker inhibits are never applied.
                     last_target = next_last_target(outcome, target)
                     last_write_monotonic = time.monotonic()
-            energy_priority_state = next_energy_priority_state
+            if ENERGY_PRIORITY_ENABLED:
+                feedback = reconcile_solar_state(
+                    energy_priority_state, next_energy_priority_state,
+                    requested_action=effective_action, outcome=apply_outcome,
+                    acknowledged_idle=ack_idle, observation=observation)
+                energy_priority_state = feedback.state
+            else:
+                energy_priority_state = next_energy_priority_state
             if not broker_fault_latched:
                 monitor_soc_recovery_enforcement(con, iteration_now, target, last_target,
                                                  last_write_monotonic, numbers)
@@ -2270,11 +2310,13 @@ def main() -> None:
             broker_fault_latched = True
             broker_policy = "inhibit"
             energy_priority_state = SolarState()
+            solar_idle_ack_at = None
             last_target = None
             loop_in_auto = False
             record_broker_inhibit(con, slot_time, action, power_w, str(exc), numbers)
         except Exception as exc:  # noqa: BLE001
             energy_priority_state = SolarState()
+            solar_idle_ack_at = None
             if BROKER_STALE_GUARD_ENABLED:
                 broker_fault_latched = True
                 broker_policy = "inhibit"

@@ -217,3 +217,7 @@ is not yet verified. Native EndSOC/EMS timeout uncertainty remains.
 4. Hysteresis and physical response must be validated by a supervised
    release and at least 24h observation before considering the work
    production-complete.
+
+## Källuppföljning 2026-11-07 (D06, ej installerad)
+
+Den senast committade käll-dispatchern skiljer på `SolarState` som policyförslag och fysisk återkoppling. [D06:s post-ACK-feedback och resetmatris](../operations/dispatch-solar-feedback-2026-11-07.md) kräver två färska, konsekventa inverter-/batterimätningar **efter** en accepterad General-begäran innan intern `capturing=True` får kvarstå; `observed_general` vid tillfälligt underskott är inte `observed_charging`. Inhiberad, skippad, misslyckad eller enbart pending-skrivning ger `unknown`. Det här ändrar **inte** live-installationens 2026-11-05-konfiguration eller tidigare godkännande och ersätter inte dess separata rollback och fysiska utvärdering.
