@@ -1,0 +1,326 @@
+{
+  "schema": "solinteg-ts-static-review-v1",
+  "source_modules": 86,
+  "entrypoints": [
+    "app/api/control-evidence/route.ts",
+    "app/api/dispatch/route.ts",
+    "app/api/ev/cost/driving/route.ts",
+    "app/api/ev/cost/summary/route.ts",
+    "app/api/ev/route.ts",
+    "app/api/ev/settings/route.ts",
+    "app/api/inverter/route.ts",
+    "app/api/oracle/route.ts",
+    "app/api/plan/route.ts",
+    "app/api/prices/route.ts",
+    "app/api/replan/route.ts",
+    "app/api/solar/route.ts",
+    "app/api/weather-fallback-check/route.ts",
+    "app/api/weather/route.ts",
+    "app/ev/page.tsx",
+    "app/layout.tsx",
+    "app/loading.tsx",
+    "app/page.tsx"
+  ],
+  "reachable_modules": [
+    "app/api/control-evidence/route.ts",
+    "app/api/dispatch/route.ts",
+    "app/api/ev/cost/driving/route.ts",
+    "app/api/ev/cost/summary/route.ts",
+    "app/api/ev/route.ts",
+    "app/api/ev/settings/route.ts",
+    "app/api/inverter/route.ts",
+    "app/api/oracle/route.ts",
+    "app/api/plan/route.ts",
+    "app/api/prices/route.ts",
+    "app/api/replan/route.ts",
+    "app/api/solar/route.ts",
+    "app/api/weather-fallback-check/route.ts",
+    "app/api/weather/route.ts",
+    "app/components/AppShell.tsx",
+    "app/components/AutoRefresh.tsx",
+    "app/components/ControlEvidencePanel.tsx",
+    "app/components/DispatchCard.tsx",
+    "app/components/EarningsCard.tsx",
+    "app/components/EnergySavingsCard.tsx",
+    "app/components/EvChargingPlanner.tsx",
+    "app/components/FlowConnector.tsx",
+    "app/components/LiveInverterPanel.tsx",
+    "app/components/LiveStatus.tsx",
+    "app/components/MobileOverview.tsx",
+    "app/components/OracleCard.tsx",
+    "app/components/PowerFlowCard.tsx",
+    "app/components/PriceChart.tsx",
+    "app/components/WeatherCard.tsx",
+    "app/components/poll-cadence.ts",
+    "app/components/price-chart/ChartAxes.tsx",
+    "app/components/price-chart/ChartBands.tsx",
+    "app/components/price-chart/ChartLegend.tsx",
+    "app/components/price-chart/ChartTooltip.tsx",
+    "app/components/price-chart/frame.ts",
+    "app/components/useChartData.ts",
+    "app/components/useResponsiveLayout.ts",
+    "app/ev/page.tsx",
+    "app/layout.tsx",
+    "app/loading.tsx",
+    "app/page.tsx",
+    "lib/actual-flows.ts",
+    "lib/base-path.ts",
+    "lib/chart-slot-keys.ts",
+    "lib/chart-utils.ts",
+    "lib/constants.ts",
+    "lib/consumption-data.ts",
+    "lib/control-evidence.ts",
+    "lib/dispatch-card.ts",
+    "lib/economics.ts",
+    "lib/ev-cost.ts",
+    "lib/ev-load-hourly.ts",
+    "lib/ev-price-windows.ts",
+    "lib/ev-settings.ts",
+    "lib/ev-soc-plan.ts",
+    "lib/ev-soc-state.ts",
+    "lib/ev-state.ts",
+    "lib/evcc-car-flow.ts",
+    "lib/forecast.ts",
+    "lib/horizon.ts",
+    "lib/inverter-api-status.ts",
+    "lib/inverter.ts",
+    "lib/irradiance-data.ts",
+    "lib/load.ts",
+    "lib/metno-thredds.ts",
+    "lib/mobile-chart.ts",
+    "lib/mobile-flow-geometry.ts",
+    "lib/optimizer.ts",
+    "lib/oracle-card.ts",
+    "lib/oracle.ts",
+    "lib/pipeline.ts",
+    "lib/plan-slot-time.ts",
+    "lib/plan.ts",
+    "lib/power-flow.ts",
+    "lib/prices.ts",
+    "lib/slot-utils.ts",
+    "lib/solar-forecast-cache.ts",
+    "lib/solar-nowcast.ts",
+    "lib/solar.ts",
+    "lib/telemetry/core.ts",
+    "lib/telemetry/dispatch.ts",
+    "lib/telemetry/index.ts",
+    "lib/telemetry/oracle.ts",
+    "lib/telemetry/readings.ts",
+    "lib/weather-card.ts",
+    "lib/weather-series.ts"
+  ],
+  "unreachable_modules": [],
+  "unresolved_local_imports": [],
+  "computed_dynamic_imports": [],
+  "explicit_constant_conditions": [],
+  "feature_flags": {
+    "TELEMETRY_DB_PATH": [
+      {
+        "file": "app/api/oracle/route.ts",
+        "line": 211
+      },
+      {
+        "file": "app/api/plan/route.ts",
+        "line": 30
+      },
+      {
+        "file": "app/api/weather/route.ts",
+        "line": 38
+      },
+      {
+        "file": "lib/telemetry/core.ts",
+        "line": 20
+      }
+    ],
+    "NEXT_PUBLIC_BASE_PATH": [
+      {
+        "file": "lib/base-path.ts",
+        "line": 6
+      }
+    ],
+    "PRICE_ZONE": [
+      {
+        "file": "lib/constants.ts",
+        "line": 70
+      }
+    ],
+    "SOLINTEG_SOLAR_RISK_SURVIVAL": [
+      {
+        "file": "lib/constants.ts",
+        "line": 313
+      }
+    ],
+    "SOLINTEG_DEFERRAL_UNTIL_NEEDED": [
+      {
+        "file": "lib/constants.ts",
+        "line": 329
+      }
+    ],
+    "SOLINTEG_REFUND_CREDIT": [
+      {
+        "file": "lib/constants.ts",
+        "line": 358
+      }
+    ],
+    "SOLAR_FORECAST_MODEL": [
+      {
+        "file": "lib/constants.ts",
+        "line": 516
+      }
+    ],
+    "EV_COST_READ_TOKEN": [
+      {
+        "file": "lib/ev-cost.ts",
+        "line": 123
+      },
+      {
+        "file": "lib/ev-cost.ts",
+        "line": 132
+      }
+    ],
+    "EV_COST_REPORT_PATH": [
+      {
+        "file": "lib/ev-cost.ts",
+        "line": 124
+      },
+      {
+        "file": "lib/ev-cost.ts",
+        "line": 138
+      }
+    ],
+    "EV_LOAD_HOURLY_PATH": [
+      {
+        "file": "lib/ev-load-hourly.ts",
+        "line": 48
+      }
+    ],
+    "EV_SOC_TIMELINE_PATH": [
+      {
+        "file": "lib/ev-soc-state.ts",
+        "line": 113
+      }
+    ],
+    "EV_SOC_STATUS_PATH": [
+      {
+        "file": "lib/ev-soc-state.ts",
+        "line": 115
+      }
+    ],
+    "EV_SETTINGS_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 9
+      }
+    ],
+    "EV_LIVE_SETTINGS_ENABLED": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 40
+      }
+    ],
+    "EV_SETTINGS_WRITES_ENABLED": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 46
+      }
+    ],
+    "EV_PRICE_STATUS_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 55
+      }
+    ],
+    "EV_LAST_CHARGE_SESSION_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 80
+      }
+    ],
+    "EV_STATUS_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 114
+      }
+    ],
+    "EV_SHADOW_PLAN_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 145
+      }
+    ],
+    "EVCC_SHADOW_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 148
+      }
+    ],
+    "EVCC_READONLY_PATH": [
+      {
+        "file": "lib/ev-state.ts",
+        "line": 201
+      },
+      {
+        "file": "lib/inverter.ts",
+        "line": 9
+      }
+    ],
+    "INVERTER_DATA_PATH": [
+      {
+        "file": "lib/inverter.ts",
+        "line": 7
+      }
+    ],
+    "DISPATCH_SOC_FLOOR_GUARD_HEADROOM_KWH": [
+      {
+        "file": "lib/plan.ts",
+        "line": 263
+      }
+    ],
+    "SOLINTEG_HOLD_ENABLED": [
+      {
+        "file": "lib/plan.ts",
+        "line": 272
+      }
+    ],
+    "SOLINTEG_CONTROL_ARMED": [
+      {
+        "file": "lib/plan.ts",
+        "line": 273
+      }
+    ],
+    "SOLAR_FORECAST_CACHE_PATH": [
+      {
+        "file": "lib/solar-forecast-cache.ts",
+        "line": 31
+      }
+    ],
+    "SOLAR_FORECAST_CACHE_MAX_AGE_H": [
+      {
+        "file": "lib/solar-forecast-cache.ts",
+        "line": 40
+      }
+    ]
+  },
+  "candidate_model_collisions": [
+    {
+      "name": "EvChargeMode",
+      "entries": [
+        {
+          "file": "lib/ev-settings.ts",
+          "line": 2
+        },
+        {
+          "file": "lib/ev-soc-state.ts",
+          "line": 3
+        }
+      ]
+    }
+  ],
+  "audit_limitations": [
+    "Static web reachability does not prove dead execution branches",
+    "Computed imports, webpack/Next virtual entrypoints and external scripts require explicit review",
+    "Environment feature flags are named but their effective values are intentionally never read",
+    "Model-name collisions are not proof of equivalent types",
+    "No module, branch, flag or type is proposed for deletion"
+  ]
+}

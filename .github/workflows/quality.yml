@@ -66,6 +66,7 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npm test
+      - run: node scripts/tools/verify_ts_reachability.mjs
       - run: npm run typecheck
       - run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
       - run: npm run lint
