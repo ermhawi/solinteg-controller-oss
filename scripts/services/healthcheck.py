@@ -109,6 +109,7 @@ from zoneinfo import ZoneInfo
 # Sibling modules (scripts/services/) — script dir is sys.path[0].
 import common
 import notify
+import healthcheck_freshness
 
 log = logging.getLogger("solinteg.healthcheck")
 
@@ -218,35 +219,17 @@ def safe_row(con: sqlite3.Connection, sql: str, params=()):
 
 
 def check_poller_stale(con: sqlite3.Connection, now: datetime):
-    latest = safe_scalar(con, "SELECT MAX(timestamp) FROM readings")
-    if latest is None:
-        return ("poller_no_data", notify.PRIORITY_HIGH, "Solinteg: no inverter readings yet",
-                "The readings table is empty — has solinteg-poller ever run successfully?")
-    age = (now - datetime.fromisoformat(latest)).total_seconds()
-    if age > POLLER_STALE_S:
-        return ("poller_stale", notify.PRIORITY_HIGH, "Solinteg: inverter poller looks dead",
-                f"Last reading was {age:.0f}s ago (expected every 30s). "
-                f"Check solinteg-poller on the NUC.")
-    return None
+    return healthcheck_freshness.poller_stale(
+        con, now, query=safe_scalar,
+        high_priority=notify.PRIORITY_HIGH, stale_seconds=POLLER_STALE_S,
+    )
 
 
 def check_weather_stale(con: sqlite3.Connection, now: datetime):
-    # No station on this install -> nothing to be stale. Returning None rather than never
-    # registering the check keeps the resolve sweep able to clear a previously-raised issue if
-    # someone turns the station off after it had been reporting.
-    if WEATHER_STALE_S <= 0:
-        return None
-    latest = safe_scalar(con, "SELECT MAX(timestamp) FROM weather")
-    if latest is None:
-        return ("weather_no_data", notify.PRIORITY_LOW, "Solinteg: no weather data yet",
-                "The weather table is empty — has solinteg-weather ever run successfully?")
-    age = (now - datetime.fromisoformat(latest)).total_seconds()
-    if age > WEATHER_STALE_S:
-        return ("weather_stale", notify.PRIORITY_LOW, "Solinteg: weather data is stale",
-                f"Last weather reading was {age:.0f}s ago. Non-urgent — the solar forecast "
-                f"just falls back to climatology until this recovers. Check solinteg-weather "
-                f"and the Ecowitt station/cloud API.")
-    return None
+    return healthcheck_freshness.weather_stale(
+        con, now, query=safe_scalar,
+        low_priority=notify.PRIORITY_LOW, stale_seconds=WEATHER_STALE_S,
+    )
 
 
 def check_solar_source_degraded(con: sqlite3.Connection, now: datetime):

@@ -1,11 +1,11 @@
 {
-  "candidate_count": 41,
+  "candidate_count": 42,
   "category_counts": {
     "historical": 6,
-    "live": 42,
+    "live": 43,
     "manual": 6,
     "recovery-reserve": 19,
-    "unknown": 10
+    "unknown": 11
   },
   "deletion_candidates": [],
   "loaded_systemd_service_count": 22,
@@ -289,6 +289,40 @@
       "systemd_units": []
     },
     {
+      "category": "unknown",
+      "deletion_proposed": false,
+      "direct_imports": [
+        "energy_priority_policy"
+      ],
+      "dynamic_imported_by": [],
+      "imported_by": [],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [
+          "test_dispatch_decision_contract.py"
+        ],
+        "tools": []
+      },
+      "owner_domain": "inverter/broker",
+      "path": "scripts/services/dispatch_decision_contract.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "D04: immutable decision evidence, not a physical execution acknowledgement.",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": false,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "tracked",
+      "systemd_units": []
+    },
+    {
       "category": "live",
       "deletion_proposed": false,
       "direct_imports": [
@@ -374,6 +408,7 @@
       "direct_imports": [],
       "dynamic_imported_by": [],
       "imported_by": [
+        "dispatch_decision_contract",
         "dispatch_loop"
       ],
       "last_execution": "not_verified",
@@ -381,9 +416,11 @@
       "manual_or_test_references": {
         "deploy": [],
         "tests": [
+          "test_dispatch_decision_contract.py",
           "test_energy_priority_conflicts.py",
           "test_energy_priority_policy.py",
-          "test_energy_priority_pure.py"
+          "test_energy_priority_pure.py",
+          "test_safety_mutation_contracts.py"
         ],
         "tools": [
           "release_inventory.py",
@@ -643,7 +680,7 @@
       "source_git_backup": "tracked",
       "systemd_units": [
         {
-          "active": "failed",
+          "active": "inactive",
           "name": "solinteg-ev-cost-capture.service"
         }
       ]
@@ -1686,7 +1723,8 @@
       "manual_or_test_references": {
         "deploy": [],
         "tests": [
-          "test_evcc_manual_lock.py"
+          "test_evcc_manual_lock.py",
+          "test_safety_mutation_contracts.py"
         ],
         "tools": []
       },
@@ -1857,6 +1895,7 @@
       "deletion_proposed": false,
       "direct_imports": [
         "common",
+        "healthcheck_freshness",
         "notify"
       ],
       "dynamic_imported_by": [],
@@ -1896,6 +1935,38 @@
           "name": "solinteg-healthcheck.service"
         }
       ]
+    },
+    {
+      "category": "live",
+      "deletion_proposed": false,
+      "direct_imports": [],
+      "dynamic_imported_by": [],
+      "imported_by": [
+        "healthcheck"
+      ],
+      "last_execution": "not_verified",
+      "literal_dynamic_imports": [],
+      "manual_or_test_references": {
+        "deploy": [],
+        "tests": [],
+        "tools": []
+      },
+      "owner_domain": "operations",
+      "path": "scripts/services/healthcheck_freshness.py",
+      "possible_physical_effect": "not_established",
+      "purpose": "Pure-ish, read-only freshness checks extracted from healthcheck.py (T04).",
+      "purpose_origin": "source-docstring",
+      "reachable_from_loaded_units": true,
+      "runtime": {
+        "app": {
+          "status": "missing"
+        },
+        "ev": {
+          "status": "missing"
+        }
+      },
+      "source_git_backup": "not_tracked",
+      "systemd_units": []
     },
     {
       "category": "live",
@@ -2070,7 +2141,8 @@
           "test_modbus_broker_control.py",
           "test_modbus_broker_readonly.py",
           "test_modbus_broker_transactions.py",
-          "test_safety_gap_contracts.py"
+          "test_safety_gap_contracts.py",
+          "test_safety_mutation_contracts.py"
         ],
         "tools": [
           "release_inventory.py"
@@ -2789,6 +2861,7 @@
           "test_healthcheck_checks.py",
           "test_notify.py",
           "test_safety_gap_contracts.py",
+          "test_safety_mutation_contracts.py",
           "test_watchdog.py"
         ],
         "tools": [
@@ -3432,6 +3505,7 @@
           "test_release_inventory.py",
           "test_rollback_snapshot.py",
           "test_safety_gap_contracts.py",
+          "test_safety_mutation_contracts.py",
           "test_soc25_recovery_retry.py",
           "test_soc25_recovery_third.py",
           "test_soc25_reserve.py",
@@ -3521,7 +3595,7 @@
     "All dynamic/indirect, shell and recovery references require independent checking",
     "No filesystem content, environment values, hostnames or raw argv are published"
   ],
-  "reachable_count": 42,
+  "reachable_count": 43,
   "schema": "solinteg-python-reachability-v1",
-  "source_module_count": 83
+  "source_module_count": 85
 }
